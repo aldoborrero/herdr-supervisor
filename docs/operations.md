@@ -489,6 +489,29 @@ The pane wrapper now remains alive around the native runtime and holds a private
 
 `stop_attempt` takes `attempt` and `expected_epoch`. It retires the worker credential and increments the epoch before emitting the stop command. Run cancellation applies the same fence to every active attempt. The wrapper observes the durable local fence, sends TERM to its owned child group and escalates to KILL after two seconds if the child remains alive. It also stops on the execution deadline without needing a live controller, or on a TERM/HUP sent to the wrapper. The controller service cancels expired runs. A received cancellation never counts as an exit receipt.
 
+If a node stays offline beyond a cancellation's 24-hour delivery validity, `renew_cancellation` queues a new delivery of that exact cancellation. It requires `attempt`, its current `expected_epoch`, and the `expired_command` UUID. The owner or that run's supervisor may submit it through the ordinary apply CLI/API/MCP. The original outbox row and signed bytes remain intact; the operation receipt links old and new command IDs. Reusing the operation ID returns that historical receipt, while a different operation cannot queue another renewal while a matching delivery remains valid. For example, save this mutation to a private JSON file:
+
+```json
+{
+  "method": "renew_cancellation",
+  "params": {
+    "attempt": "ATTEMPT_UUID",
+    "expected_epoch": 2,
+    "expired_command": "EXPIRED_COMMAND_UUID"
+  }
+}
+```
+
+```sh
+herdr-supervisor control --state /private/controller-state apply \
+  --credential /private/run-supervisor.token \
+  --operation renew-stop-1 --request /private/renew-stop.json
+```
+
+Attempt pages expose the latest cancellation's command UUID, transport state and expiry in `cancellation_delivery`, without its body or credentials. In the Threads panel, **s retry stop** offers a confirmed renewal for an expired delivery on a cancelling attempt. A still-valid delivery has no repeat-stop action, and stale views disable it. Confirmation captures the displayed attempt/epoch/command; the controller rechecks all three and competing renewals transactionally. The coordinator receives the same recovery instructions in its context.
+
+This remains a stop request. It does not change the attempt epoch, extend the run deadline, reauthorize a worker, prove process exit or release capacity. The node applies a previously unseen cancellation, or accepts identical same-epoch cancellation history without changing an already stopped job. Same-epoch content conflicts or missing history fail. The node still needs a current same-key/epoch grant and both endpoints must support this recovery behavior; an older node may reject a renewed cancellation it already applied. Recovery of expired execution/memory commands and invalid stored originals remains separate. Lost stop-event receipts use `recover-event` as described above.
+
 Only the wrapper signals its own unreaped child. After a wrapper crash, the node does **not** signal a stored numeric PID or infer exit from an absent pane.
 
 ### Inspect retained worker checkouts

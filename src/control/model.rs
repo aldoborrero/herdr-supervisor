@@ -439,6 +439,11 @@ pub enum Mutation {
         attempt: String,
         expected_epoch: u64,
     },
+    RenewCancellation {
+        attempt: String,
+        expected_epoch: u64,
+        expired_command: String,
+    },
     CompleteRun {
         run: String,
         expected_revision: u64,

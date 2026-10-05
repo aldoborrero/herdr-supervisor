@@ -4068,6 +4068,74 @@ mod tests {
     }
 
     #[test]
+    fn cancellation_recovery_popup_confirms_captured_delivery_and_disables_stale_or_current_stops()
+    {
+        use crate::managed_refresh::View;
+        use serde_json::json;
+        let world = crate::scenarios::World::new();
+        world.project("demo", "a.sock");
+        world
+            .runner
+            .on("managed apply", crate::runner::fake::ok("queued"));
+        let ctx = world.ctx();
+        let mut popup = Popup::new(&ctx, Some("demo".into()), String::new());
+        let context = json!({"run":{"id":"run","state":"cancelling"},"attempts":[{"id":"attempt","epoch":7,"state":"cancelling","cancellation_delivery":{"command":"original","state":"broker_stored","expires_at":1}}]});
+        popup.rows =
+            crate::managed::panel_view("demo", Section::Threads, View::Current(context.clone()));
+        popup.selected = popup.rows.iter().position(|r| !r.header).unwrap();
+        assert!(popup.current().unwrap().text.contains("retry stop"));
+        popup.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+        assert!(matches!(popup.mode, Mode::Confirm { .. }));
+        assert_eq!(world.runner.count("managed apply"), 0);
+        let mut newer = context.clone();
+        newer["attempts"][0]["epoch"] = json!(8);
+        popup.rows = crate::managed::panel_view("demo", Section::Threads, View::Current(newer));
+        popup.key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        let calls = world.runner.calls.borrow();
+        let sent = calls
+            .iter()
+            .find(|c| c.args.iter().any(|a| a == "--request-json"))
+            .unwrap();
+        let index = sent
+            .args
+            .iter()
+            .position(|a| a == "--request-json")
+            .unwrap();
+        let command: serde_json::Value = serde_json::from_str(&sent.args[index + 1]).unwrap();
+        assert_eq!(
+            command,
+            json!({"method":"renew_cancellation","params":{"attempt":"attempt","expected_epoch":7,"expired_command":"original"}})
+        );
+        drop(calls);
+        let no_actions =
+            |rows: Vec<Row>| {
+                assert!(rows.iter().all(
+                    |r| !matches!(&r.kind,RowKind::Managed{actions,..} if !actions.is_empty())
+                ))
+            };
+        no_actions(crate::managed::panel_view(
+            "demo",
+            Section::Threads,
+            View::Stale(context.clone(), "offline".into()),
+        ));
+        let mut current = context.clone();
+        current["attempts"][0]["cancellation_delivery"]["expires_at"] =
+            json!(jiff::Timestamp::now().as_second() + 3600);
+        no_actions(crate::managed::panel_view(
+            "demo",
+            Section::Threads,
+            View::Current(current),
+        ));
+        let mut stopped = context;
+        stopped["attempts"][0]["state"] = json!("stopped");
+        no_actions(crate::managed::panel_view(
+            "demo",
+            Section::Threads,
+            View::Current(stopped),
+        ));
+    }
+
+    #[test]
     fn managed_keys_confirm_and_submit_captured_epoch_without_legacy_actions() {
         let world = crate::scenarios::World::new();
         world.project("demo", "a.sock");

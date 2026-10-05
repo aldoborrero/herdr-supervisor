@@ -68,6 +68,10 @@ same ID and identical content. Read current revisions before new decisions.
    interrupted/rejected task, `retry_task` takes task, expected_revision and an
    optional revised contract. It requires prior processes stopped. A reviewer
    that exited without submitting may be replaced with `request_review`.
+   If a cancelling attempt's `cancellation_delivery.expires_at` has passed, use
+   `renew_cancellation` with attempt, current expected_epoch and expired_command
+   from that delivery's command UUID. Keep the same operation ID on retries.
+   This renews delivery only: it neither proves exit nor releases capacity.
 1. Curate proposed memory with `approve_memory` (proposal, expected_revision of
    its topic) or `withdraw_memory` (run, topic, expected_revision). Preserve
    evidence and uncertainty; do not promote an unverified claim as fact.

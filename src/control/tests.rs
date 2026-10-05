@@ -1984,3 +1984,6 @@ mod operator_reads_tests;
 
 #[path = "record_tests.rs"]
 mod record_tests;
+
+#[path = "cancellation_recovery_tests.rs"]
+mod cancellation_recovery_tests;

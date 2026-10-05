@@ -271,6 +271,10 @@ impl NodeStore {
                     attempt.node == self.node_id && attempt.state == "cancelling",
                     "foreign cancellation"
                 );
+                if super::cancellation_recovery::already_applied(&tx, &attempt, body, &r.id)? {
+                    tx.commit()?;
+                    return Ok(());
+                }
                 let current: Option<u64> = tx
                     .query_row("SELECT epoch FROM jobs WHERE id=?1", [&attempt.id], |r| {
                         r.get(0)

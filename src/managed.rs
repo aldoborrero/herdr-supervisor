@@ -931,7 +931,26 @@ fn panel_rows(
                         && a["resource"].is_object()
                         && a["native_session"].is_string()
                 );
-                let actions = if a["state"] != "stopped" {
+                let delivery = &a["cancellation_delivery"];
+                let actions = if a["state"] == "cancelling" {
+                    if delivery["command"].is_string()
+                        && delivery["expires_at"]
+                            .as_i64()
+                            .is_some_and(|t| t <= jiff::Timestamp::now().as_second())
+                        && delivery["state"]
+                            .as_str()
+                            .is_some_and(|s| ["pending", "expired", "broker_stored"].contains(&s))
+                    {
+                        vec![action(
+                            's',
+                            "retry stop",
+                            json!({"method":"renew_cancellation","params":{"attempt":a["id"],"expected_epoch":a["epoch"],"expired_command":delivery["command"]}}),
+                            true,
+                        )?]
+                    } else {
+                        vec![]
+                    }
+                } else if a["state"] != "stopped" {
                     vec![action(
                         's',
                         "stop",

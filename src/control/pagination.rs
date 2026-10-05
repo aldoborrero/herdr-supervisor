@@ -81,7 +81,7 @@ impl Collection {
     pub(super) fn source(self) -> String {
         match self {
             Self::Tasks => "SELECT t.rowid AS key,json_set(t.doc,'$.dependencies',json((SELECT json_group_array(d.predecessor) FROM dependencies d WHERE d.task=t.id))) AS doc FROM tasks t WHERE t.run=?1".into(),
-            Self::Attempts => "SELECT a.rowid AS key,json_set(a.doc,'$.profile_snapshot',json(p.profile)) AS doc FROM attempts a LEFT JOIN attempt_profiles p ON p.attempt=a.id WHERE a.run=?1".into(),
+            Self::Attempts => "SELECT a.rowid AS key,json_set(a.doc,'$.profile_snapshot',json(p.profile),'$.cancellation_delivery',json((SELECT json_object('command',o.id,'state',o.state,'expires_at',o.expires_at) FROM outbox o WHERE o.target=a.node AND o.kind='cancel' AND json_extract(o.payload,'$.attempt.id')=a.id AND json_extract(o.payload,'$.attempt.epoch')=a.epoch ORDER BY o.rowid DESC LIMIT 1))) AS doc FROM attempts a LEFT JOIN attempt_profiles p ON p.attempt=a.id WHERE a.run=?1".into(),
             Self::Results => "SELECT r.rowid AS key,r.doc FROM results r JOIN tasks t ON t.id=r.task WHERE t.run=?1".into(),
             Self::Integrations => "SELECT rowid AS key,doc FROM integrations WHERE run=?1".into(),
             Self::Checks => "SELECT c.rowid AS key,c.doc FROM check_runs c JOIN integrations i ON i.id=c.integration WHERE i.run=?1".into(),

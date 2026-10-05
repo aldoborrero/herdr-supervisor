@@ -213,6 +213,7 @@ impl Store {
             command => {
                 let (table, id) = match command {
                     Mutation::StopAttempt { attempt, .. }
+                    | Mutation::RenewCancellation { attempt, .. }
                     | Mutation::RequestVerification { attempt, .. } => ("attempts", attempt),
                     Mutation::RetryTask { task, .. }
                     | Mutation::Dispatch { task, .. }
@@ -758,6 +759,7 @@ fn add_dependency(c: &Connection, task: &Task, predecessor: &str) -> Result<()> 
 
 pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) -> Result<Value> {
     match command {
+        Mutation::RenewCancellation { .. } => super::cancellation_recovery::renew(tx, p, command),
         Mutation::SetNodeDrain { .. } | Mutation::RevokeNode { .. } => {
             super::node_lifecycle::change(tx, p, command)
         }

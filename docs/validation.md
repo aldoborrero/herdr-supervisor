@@ -4,6 +4,22 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
+### Expired cancellation delivery
+
+The run-scoped `renew_cancellation` decision retains an expired outbox intent, verifies its current attempt/epoch/node and original signed bytes when present, and queues a new cancellation delivery in the operation/audit transaction. Equal-epoch node acceptance requires identical prior cancellation evidence; a stopped job stays stopped. It does not renew execution authority, release capacity, extend the run deadline or prove native process exit. This uses existing schemas and ordinary signed cancellation commands; both endpoints need the updated replay behavior.
+
+The backend checkpoint passes 590 unit tests (53.51 s), 15 CLI tests (25.39 s) and strict all-target Clippy (24.59 s), in `.direnv/cancellation-recovery-full.log`. The final source, including attempt-page metadata, Threads confirmation and coordinator instructions, passes 591 unit tests (56.59 s), 15 CLI tests (26.13 s) and strict all-target Clippy (29.83 s), in `.direnv/cancellation-recovery-ui-full.log`. `nix fmt` passes without changes (`.direnv/cancellation-recovery-fmt.log`). Its Nix package gate is pending. These tests use isolated state, real IPC/NATS and simulated process evidence; none launches a native model or changes host services.
+
+| Evidence | Boundary established |
+| --- | --- |
+| `cancellation_recovery_delivers_unseen_stop_and_replays_without_releasing_capacity` | Original bytes retained, new UUID/same cancellation, scoped current-delivery projection, operation replay after stop/restart and no capacity release until a stop event is applied |
+| `cancellation_recovery_requires_scoped_current_intent_and_valid_original` | Node/foreign-run/stale-epoch refusal, unexpired refusal, original signature/recipient checks and recovery of an intent that expired before first signing |
+| `cancellation_recovery_rolls_back_on_audit_failure_and_serializes_competing_renewals` | Failed audit rolls back outbox/operation changes; eight concurrent new operations produce one renewal |
+| `cancellation_recovery_node_requires_identical_persisted_epoch_and_never_resurrects_stopped_job` | An equal epoch alone is insufficient; conflicting contents fail and a previously stopped job is unchanged |
+| `cancellation_recovery_real_broker_handles_expiry_restart_and_preexisting_cancellation` | Restricted real broker, actual validity expiry, restarted node accepts a fresh delivery of a prior cancellation; only the later stop event releases capacity |
+| `cancellation_recovery_private_api_and_mcp_share_scoped_operation_receipts` | Real controller socket, MCP decision/API replay and unauthorized node refusal without credentials in the response |
+| `cancellation_recovery_popup_confirms_captured_delivery_and_disables_stale_or_current_stops` | Actual popup key/confirmation path keeps the captured command/epoch across refreshed rows; valid deliveries, stopped jobs and stale views have no retry action |
+
 ### Expired node-event recovery
 
 `recover-event` renews transport authority around one immutable original signed event; it does not rewrite an old envelope, renew a worker capability or infer execution from broker storage. Controller recovery records point to an accepted inbox record, and node recovery records link each replacement to its original logical operation. New controller/node schemas are 11/9. Expired controller-origin commands, invalid original repair and native/Git uncertainty are not covered by this feature.
@@ -156,7 +172,7 @@ Bounded operator reads and receipt checkpoint: `.direnv/operator-reads-full.log`
 | Signed origin and route authorization | Identity tampering/expiry tests, controller receive tests, real NATS ACL tests | Explicit node rotation/revocation commands remain pending |
 | Reply inbox confidentiality and broker management | `real_broker_generated_acl_isolates_reply_inboxes_and_runtime_management` requires actual NATS permission errors for foreign reply subscriptions, consumer reads, stream mutations, message reads and ACKs; confirms legitimate deliveries/ACKs/reconnects | Generated runtime policy must be applied to the deployed broker; administrators remain trusted |
 | Broker policy usability and reserved routes | `broker_routes_reject_reserved_names_and_wildcards_before_enrollment_or_grant`; continuous CLI workflow invokes `broker-policy` and installs its permissions on separate controller/node users | Example in `docs/nats-acl.md`; existing host/broker configuration is not changed |
-| Durable offline transport | Real JetStream restart/offline and expired node-event recovery tests; ACK follows SQLite acceptance | Expired controller commands and invalid original repair remain pending |
+| Durable offline transport | Real JetStream restart/offline, expired node-event recovery and cancellation renewal tests; ACK follows SQLite acceptance | Other expired controller commands and invalid original repair remain pending |
 | Poisoned consumer windows | `poisoned_broker_windows_cannot_starve_valid_commands_and_events`: 65 malformed records per endpoint followed by a valid command/event, real restricted NATS clients, zero broker pending deliveries | TERM follows local persistence, not application acceptance; bounded storage can still exhaust |
 | Failed local quarantine write | `failed_local_hold_never_terminates_broker_delivery` injects SQLite failure on both endpoints and observes one outstanding broker delivery each | No TERM, command or applied inbox row is written |
 | Deferred prerequisites, restart and lost local receipt | `missing_assignment_retries_after_restart_and_lost_application_receipt`; `deferred_controller_application_survives_restart_and_creates_one_receipt` | Real broker/SQLite; no models; retry runs full original authorization |
@@ -282,7 +298,7 @@ Mailer protocol-2 support is an independent local commit **`7a12d5a`** on `feat/
 - Reconciliation for legacy/lost-wrapper registration evidence. Explicit recovery covers prelaunch Claude/Pi and still-owned Codex before binding.
 - Service onboarding and cross-host resource focus. Managed project creation now has a form and resumable CLI.
 - Projects/legacy snapshot pagination, oversized individual-record retrieval and remaining aggregate API bounds. Signed-record budgets and coordinator CLI/MCP collection pages are implemented.
-- Expired controller-command recovery, invalid original repair and in-place node-key rotation. Expired node-event recovery, current-enrollment grants and owner drain/revocation are implemented.
+- Expired execution/memory command handling, invalid original repair and in-place node-key rotation. Expired node events and cancellation delivery have explicit recovery; current-enrollment grants and owner drain/revocation are implemented.
 - Optional project/cross-run memory and Markdown projection.
 - Stronger model-facing validation beyond the isolated continuous-service workflow and protocol fixtures.
 
