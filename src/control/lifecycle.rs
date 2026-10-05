@@ -41,6 +41,7 @@ pub fn reconcile(store: &mut NodeStore, config: &RuntimeConfig, key: &Identity) 
     };
     let mut observed = Vec::new();
     for (attempt, epoch, state, checkpoint) in jobs {
+        super::process_recovery::recover(&store.connection, &store.dir, &attempt, false)?;
         let process: Option<(u64, String, Value)> = store
             .connection
             .query_row(

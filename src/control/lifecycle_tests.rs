@@ -22,12 +22,53 @@ fn process_wrapper_child() {
     let c = rusqlite::Connection::open(state.join("node.sqlite")).unwrap();
     c.busy_timeout(Duration::from_secs(2)).unwrap();
     c.execute_batch("PRAGMA synchronous=FULL").unwrap();
+    if let Ok(mode) = std::env::var("HS_PROCESS_AUTOREAP") {
+        // This is the isolated wrapper fixture, never the parent test process.
+        unsafe {
+            let mut action: libc::sigaction = std::mem::zeroed();
+            libc::sigemptyset(&mut action.sa_mask);
+            action.sa_sigaction = if mode == "ignore" {
+                libc::SIG_IGN
+            } else {
+                libc::SIG_DFL
+            };
+            if mode == "no_wait" {
+                action.sa_flags = libc::SA_NOCLDWAIT;
+            }
+            assert_eq!(
+                libc::sigaction(libc::SIGCHLD, &action, std::ptr::null_mut()),
+                0
+            );
+        }
+    }
     crate::control::process::run(c, lease, &attempt, 1, deadline, command).unwrap();
     if std::env::var_os("HS_PROCESS_PTY").is_some() {
         assert_eq!(
             unsafe { libc::tcgetpgrp(0) },
             unsafe { libc::getpgrp() },
             "wrapper must restore foreground group"
+        );
+    }
+}
+
+#[test]
+fn native_wrapper_retains_child_when_sigchld_would_otherwise_auto_reap() {
+    for mode in ["ignore", "no_wait"] {
+        let x = ProcessFixture::new();
+        let mut command = x.command("exit 7", now() + 30);
+        command.env("HS_PROCESS_AUTOREAP", mode);
+        let mut child = WrapperChild(command.spawn().unwrap());
+        assert!(
+            child.wait().success(),
+            "wrapper failed with inherited {mode}"
+        );
+        let receipt = x.receipt();
+        assert_eq!(receipt["reason"], "exit");
+        assert_eq!(receipt["code"], 7);
+        #[cfg(target_os = "linux")]
+        assert!(
+            receipt["kernel_identity"].is_object(),
+            "unreaped child must remain identifiable even after fast exit"
         );
     }
 }
@@ -495,6 +536,10 @@ fn native_ownership_lease_requires_live_holder_and_rejects_missing_symlink_or_pu
     std::fs::remove_file(&path).unwrap();
     std::os::unix::fs::symlink("missing", &path).unwrap();
     assert!(crate::control::process::require_live_owner(dir.path(), &receipt).is_err());
+    std::fs::remove_file(&path).unwrap();
+    let fifo = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+    assert!(crate::control::process::require_live_owner(dir.path(), &receipt).is_err());
     assert!(
         crate::control::process::require_live_owner(
             dir.path(),
@@ -548,5 +593,53 @@ fn native_owner_crash_releases_lease_without_claiming_its_child_exited() {
     while !std::path::Path::new(&format!("{}.done", x.marker.display())).exists() {
         assert!(Instant::now() < until, "native fixture did not finish");
         std::thread::sleep(Duration::from_millis(10));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        while crate::control::kernel_process::exited(&receipt["kernel_identity"])
+            .unwrap()
+            .is_none()
+        {
+            assert!(Instant::now() < until, "native process did not exit");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        x.node = node_store(&x.f);
+        x.node.connection.execute_batch("CREATE TRIGGER fail_recovery BEFORE UPDATE ON runtime_processes WHEN NEW.state='exited' BEGIN SELECT RAISE(ABORT,'injected recovery receipt loss'); END;").unwrap();
+        assert!(lifecycle::reconcile(&mut x.node, &x.config, &x.f.node_key).is_err());
+        assert!(x.node.pending().unwrap().is_empty());
+        assert_eq!(x.active(), 1);
+        x.node.connection.execute_batch("DROP TRIGGER fail_recovery; CREATE TRIGGER fail_stop BEFORE UPDATE ON jobs WHEN NEW.state='stopped' BEGIN SELECT RAISE(ABORT,'injected stop receipt loss'); END;").unwrap();
+        assert!(lifecycle::reconcile(&mut x.node, &x.config, &x.f.node_key).is_err());
+        let recovered = x.receipt();
+        assert_eq!(recovered["reason"], "recovered_native_exit");
+        assert_eq!(recovered["exit_evidence"]["exit_status_known"], false);
+        assert!(recovered["code"].is_null() && recovered["signal"].is_null());
+        assert!(recovered.get("finished_at").is_none());
+        let pending = x.node.pending().unwrap();
+        assert_eq!(pending.len(), 1);
+        x.node
+            .connection
+            .execute_batch("DROP TRIGGER fail_stop")
+            .unwrap();
+        x.node = node_store(&x.f);
+        lifecycle::reconcile(&mut x.node, &x.config, &x.f.node_key).unwrap();
+        assert_eq!(
+            serde_json::to_value(x.node.pending().unwrap()).unwrap(),
+            serde_json::to_value(pending).unwrap(),
+            "signed stop replay must be identical"
+        );
+        assert_eq!(
+            x.active(),
+            1,
+            "local exit recovery is not controller acceptance"
+        );
+        x.deliver_stop();
+        assert_eq!(x.active(), 0);
+        assert_eq!(
+            document::<Task>(&x.f.store.connection, "tasks", &x.attempt.task)
+                .unwrap()
+                .state,
+            "interrupted"
+        );
     }
 }

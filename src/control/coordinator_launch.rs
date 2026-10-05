@@ -341,6 +341,7 @@ pub fn advance(store: &mut Store, id: &str, runner: &dyn Runner) -> Result<Value
     if state == "exited" {
         return Ok(json!({"id":id,"state":state}));
     }
+    super::process_recovery::recover(&store.connection, &store.dir, id, true)?;
     let exited: bool = store.connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM coordinator_processes WHERE launch=?1 AND state='exited')",
         [id],

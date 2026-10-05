@@ -965,3 +965,119 @@ fn registration_recovery_coordinator_fences_files_processes_generation_and_rolls
         .unwrap();
     assert!(recover(p.generation).is_err());
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn coordinator_recovers_crashed_wrapper_only_after_native_exit_and_retries_retirement() {
+    let mut f = Fixture::new();
+    runtime(&mut f, "codex");
+    let mailer = Mailer::new(&f, false);
+    let mut cfg = config(&f);
+    cfg.codex_binary = stub(&f);
+    let marker = f.dir.path().join("started");
+    let release = f.dir.path().join("release");
+    struct Release(std::path::PathBuf);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            let _ = std::fs::write(&self.0, b"release");
+        }
+    }
+    let cleanup = Release(release.clone());
+    std::fs::write(&cfg.codex_binary, format!("#!/bin/sh\n: > {}\nn=0\nwhile [ ! -f {} ] && [ $n -lt 1000 ]; do n=$((n+1)); sleep 0.02; done\nexit 7\n", crate::remote::quote(marker.to_str().unwrap()), crate::remote::quote(release.to_str().unwrap()))).unwrap();
+    let id = start(&mut f, cfg);
+    let p = plan(&f, &id);
+    let home = launch::files(&f.store.dir, &p).join("home");
+    let world = World::new();
+    shell(&world, &home, false);
+    launch::advance(&mut f.store, &id, &world.runner).unwrap();
+    let mut wrapper = child(&f, &id);
+    wait_running(&f, &id);
+    let p = plan(&f, &id);
+    let uuid = p.expected_session.clone().unwrap_or_else(super::id);
+    observed(&world, &p, &uuid, "t1", &home);
+    assert_eq!(
+        launch::advance(&mut f.store, &id, &world.runner).unwrap()["state"],
+        "bound"
+    );
+    let read_process = |f: &Fixture| -> Value {
+        let doc: String = f
+            .store
+            .connection
+            .query_row(
+                "SELECT doc FROM coordinator_processes WHERE launch=?1",
+                [&id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        serde_json::from_str(&doc).unwrap()
+    };
+    let original = read_process(&f);
+    wrapper.0.kill().unwrap();
+    assert!(!wrapper.wait().success());
+    assert_eq!(
+        launch::advance(&mut f.store, &id, &world.runner).unwrap()["state"],
+        "bound"
+    );
+    assert_eq!(
+        read_process(&f),
+        original,
+        "live orphan must not be declared exited"
+    );
+    assert!(f.store.snapshot(&p.credential, &f.run).is_ok());
+    drop(cleanup);
+    let until = Instant::now() + Duration::from_secs(5);
+    while crate::control::kernel_process::exited(&original["kernel_identity"])
+        .unwrap()
+        .is_none()
+    {
+        assert!(Instant::now() < until, "native fixture did not exit");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    f.store.connection.execute_batch("CREATE TRIGGER fail_retire BEFORE UPDATE ON principals WHEN NEW.active=0 BEGIN SELECT RAISE(ABORT,'injected retirement loss'); END;").unwrap();
+    assert!(launch::advance(&mut f.store, &id, &world.runner).is_err());
+    let receipt = read_process(&f);
+    assert_eq!(receipt["reason"], "recovered_native_exit");
+    assert!(
+        receipt["code"].is_null(),
+        "fixture exits 7, but a non-parent cannot recover its status"
+    );
+    assert!(
+        f.store.snapshot(&p.credential, &f.run).is_ok(),
+        "failed retirement must roll back"
+    );
+    f.store
+        .connection
+        .execute_batch("DROP TRIGGER fail_retire")
+        .unwrap();
+    f.store = Store::open(&f.store.dir).unwrap();
+    for _ in 0..2 {
+        assert_eq!(
+            launch::advance(&mut f.store, &id, &world.runner).unwrap()["state"],
+            "exited"
+        );
+    }
+    assert!(f.store.snapshot(&p.credential, &f.run).is_err());
+    let routes: u64 = f
+        .store
+        .connection
+        .query_row(
+            "SELECT count(*) FROM coordinator_routes WHERE active=1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(routes, 0);
+    let exits: u64 = f
+        .store
+        .connection
+        .query_row(
+            "SELECT count(*) FROM journal WHERE kind='coordinator_exited'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(exits, 1);
+    assert_eq!(world.runner.count("workspace create"), 1);
+    assert_eq!(world.runner.count("pane run"), 1);
+    assert_eq!(mailer.count("register"), 1);
+}

@@ -4,9 +4,9 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
-**Last completed full Nix gate:** commit `d7f2aa33df60d41a92258f0d520edbc38e4495ad` passes package build and `nix flake check` on x86_64-linux, with 497 unit and 10 CLI tests offline. It includes explicit prelaunch registration recovery and the separate recovery ledger. The Codex live-ownership extension still requires its package gate. This does not establish other platforms or completion of the remaining feature scope.
+**Last completed full Nix gate:** commit `737eb14217fcb40bbef57c96e9c7e0ed9d65845a` passes package build and `nix flake check` on x86_64-linux, with 500 unit and 10 CLI tests offline. It includes Codex registration recovery with live ownership. The passive kernel-exit recovery extension still requires its package gate. This does not establish other platforms or completion of the remaining feature scope.
 
-The local implementation suite currently passes **500 unit tests and 10 CLI tests** (local suite with four test threads), including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
+The local implementation suite currently passes **505 unit tests and 10 CLI tests** (local suite with four test threads), including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
 
 | Requirement | Evidence | Limit |
 | --- | --- | --- |
@@ -72,7 +72,7 @@ The local implementation suite currently passes **500 unit tests and 10 CLI test
 | Reviewer transport | `assigned_reviewer_uses_signed_node_transport_and_receives_controller_receipt` uses a restricted NATS node account and the worker boundary | The review decision is simulated; broker ACK cannot approve it |
 | Native exit and durable capacity release | `normal_exit_receipt_survives_restart_and_loss_between_event_and_job_update` waits for a real child, restarts node state and injects failure after event enqueue | Native-process scope, not a detached-descendant or remote-provider audit |
 | Cancellation and deadlines | `cancellation_stops_owned_child_and_fences_workers_before_releasing_capacity`, `deadline_stops_native_process_without_a_live_controller_and_controller_expires_run` | Real harmless children, including TERM refusal and KILL escalation; no model sessions |
-| Missing receipt / stale PID | `missing_exit_receipt_never_signals_a_saved_pid_or_frees_capacity` points the stored PID at a separate live test process | Unknown wrapper outcomes remain occupied; no automatic orphan recovery |
+| Missing receipt / stale PID | `missing_exit_receipt_never_signals_a_saved_pid_or_frees_capacity` points the stored PID at a separate live test process | Legacy or insufficient identity evidence remains occupied; passive Linux recovery is covered separately below |
 | Prelaunch cancellation and wrapper failure | `cancellation_before_launch_is_provable_and_late_execute_stays_fenced`, `spawn_failure_and_wrapper_signal_have_durable_terminal_receipts` | No automatic pane or worktree deletion |
 | Interactive terminal | `interactive_native_child_gets_foreground_terminal_and_wrapper_restores_it` creates a real PTY and sends input to the foreground native child | Linux host evidence; no live Herdr/model session |
 | Node schema migration | `node_v2_migration_preserves_pending_events_and_does_not_invent_process_receipts` | Old launcher instances remain uncertain without new exit receipts |
@@ -137,7 +137,7 @@ Mailer protocol-2 support is an independent local commit **`7a12d5a`** on `feat/
 
 - Broader replanning and abandonment of an uncertain verifier.
 - Recovery/abandonment of uncertain cancelled-run effects and conservative verification checkout cleanup.
-- Recovery after loss of the native wrapper; detached-descendant audit and conservative resource cleanup.
+- Recovery of still-live orphans, legacy capture gaps, changed boots/namespaces and non-Linux wrapper loss; detached-descendant audit and conservative resource cleanup.
 - Reconciliation for legacy/lost-wrapper registration evidence. Explicit recovery covers prelaunch Claude/Pi and still-owned Codex before binding.
 - Service onboarding and cross-host resource focus. Managed project creation now has a form and resumable CLI.
 - Aggregate API/wire bounds and large-run context pagination.
@@ -319,3 +319,21 @@ Commit `d7f2aa33df60d41a92258f0d520edbc38e4495ad` passes full Nix build and flak
 | Wrapper crash releases ownership despite a living native child; capacity remains occupied | `native_owner_crash_releases_lease_without_claiming_its_child_exited` |
 
 The wrappers and harmless child processes are real; Herdr/mailer/model boundaries remain simulated. The first fully parallel local run passed 498 of 500 unit tests but failed two existing NATS cases with connection refusal/request timeout; log `.direnv/codex-registration-first-failure.log` retains the evidence. Both cases pass independently, and the complete suite passes with four test threads: 500 unit tests (31.03 s) and 10 CLI tests (22.46 s). After the Clippy-requested late-initialization cleanup, nine recovery regressions and both ownership regressions pass again, with strict all-target Clippy (10.82 s). No assertion is skipped or weakened. The package gate remains pending. Logs: `.direnv/codex-registration-focused.log`, `.direnv/codex-registration-guards.log`, `.direnv/codex-registration-full.log` and `.direnv/codex-registration-final.log`. Ownership is positive evidence only: it never establishes exit when absent, and legacy process receipts are not upgraded by guessing.
+
+## Passive kernel exit recovery
+
+The preceding Codex recovery commit `737eb14` passed its complete x86_64-linux package/flake gate: 500 unit tests (89.15 s), 10 CLI tests (46.15 s), build phase 9 min 42 s and check phase 6 min 8 s. Output: `/nix/store/f02dzl6s9fb0c564va1d5l5wmd7lbi4h-herdr-supervisor-0.1.0`. Logs: `.direnv/codex-registration-nix-build.log` and `.direnv/codex-registration-nix-check.log`. Other systems were not built.
+
+The new recovery regressions exercise the following boundaries:
+
+| Invariant | Regression | Scope |
+| --- | --- | --- |
+| Kernel identity, live process, exit, reused identity and foreign boot/namespace | `kernel_process_identity_distinguishes_live_exit_reuse_and_foreign_scope` | Real child/pidfd; identity mismatch simulates PID reuse and leaves the live process untouched |
+| Child ownership despite inherited auto-reaping | `native_wrapper_retains_child_when_sigchld_would_otherwise_auto_reap` | Isolated wrappers start with SIGCHLD ignored or SA_NOCLDWAIT; fast-exiting children retain captured identity and their actual code 7 |
+| Correct birth-field parsing | `kernel_process_parser_uses_birth_field_after_full_command_name` | Commands containing spaces and parentheses; malformed records rejected |
+| Ownership and exact row/epoch required | `process_recovery_requires_exact_identity_and_abandoned_private_owner` | Both node and coordinator tables, live lease even after child exit, missing/corrupt identity/lease, foreign boot and ordinary receipt preservation |
+| Node recovery and durable signed stop replay | `native_owner_crash_releases_lease_without_claiming_its_child_exited` | Real wrapper killed through its test Child handle; native process exits separately; SQL faults before local receipt and after signed event, restart and controller-only capacity release |
+| Coordinator recovery and transactional retirement | `coordinator_recovers_crashed_wrapper_only_after_native_exit_and_retries_retirement` | Real wrapper/native process, failed principal retirement, restart, one journal event and no repeated native launch; Herdr/mailer are fixtures |
+| Private regular ownership file | `native_ownership_lease_requires_live_holder_and_rejects_missing_symlink_or_public_file` | Also rejects a FIFO without blocking |
+
+Recovered exit status remains unknown, even when the fixture deliberately exits with code 7. These tests do not establish detached-descendant cleanup, active orphan termination, another platform or model processing. The final local suite passes 505 unit tests (38.82 s) and 10 CLI tests (23.67 s), with four test threads. `nix fmt` passes without source changes. Logs are `.direnv/kernel-recovery-final.log` and `.direnv/kernel-recovery-fmt.log`; the earlier pre-SIGCHLD suite is retained in `.direnv/kernel-recovery-full.log`. Strict all-target Clippy passes (26.18 s). The full package gate remains pending.

@@ -14,6 +14,33 @@ extern "C" fn stop_signal(_: libc::c_int) {
     STOP.store(true, Ordering::Relaxed);
 }
 
+/// Only the dedicated wrapper uses this. An inherited SIG_IGN/SA_NOCLDWAIT
+/// would auto-reap a child, invalidating both Child ownership and birth capture.
+struct ChildReaping(libc::sigaction);
+impl ChildReaping {
+    fn install() -> Result<Self> {
+        // SAFETY: initialized sigaction structures, a valid empty signal mask,
+        // and a process-wide disposition in the dedicated native wrapper only.
+        unsafe {
+            let mut action: libc::sigaction = std::mem::zeroed();
+            let mut old: libc::sigaction = std::mem::zeroed();
+            libc::sigemptyset(&mut action.sa_mask);
+            action.sa_sigaction = libc::SIG_DFL;
+            if libc::sigaction(libc::SIGCHLD, &action, &mut old) < 0 {
+                return Err(std::io::Error::last_os_error().into());
+            }
+            Ok(Self(old))
+        }
+    }
+}
+impl Drop for ChildReaping {
+    fn drop(&mut self) {
+        unsafe {
+            libc::sigaction(libc::SIGCHLD, &self.0, std::ptr::null_mut());
+        }
+    }
+}
+
 struct Signals(Vec<(libc::c_int, libc::sighandler_t)>);
 impl Signals {
     fn install() -> Self {
@@ -107,6 +134,7 @@ fn run_owned(
     mut command: Command,
     coordinator: bool,
 ) -> Result<()> {
+    let _reaping = ChildReaping::install()?;
     let (table, key, version) = if coordinator {
         ("coordinator_processes", "launch", "generation")
     } else {
@@ -148,8 +176,12 @@ fn run_owned(
     };
     let _signals = Signals::install();
     receipt["child_pid"] = json!(child.id());
+    // The owned Child is still unreaped here, so this birth identity cannot be
+    // substituted by PID reuse. Unsupported kernels leave recovery unavailable.
+    receipt["kernel_identity"] =
+        super::kernel_process::capture(child.id()).unwrap_or(serde_json::Value::Null);
     // A failed running receipt does not abandon the child. Keep watching it and
-    // retry the durable terminal receipt after wait; never infer exit from PID absence.
+    // retry the durable terminal receipt after wait, retaining the exact Child.
     if let Err(error) = c.execute(
         &format!("UPDATE {table} SET state='running',doc=?2 WHERE {key}=?1"),
         params![attempt, serde_json::to_string(&receipt)?],
@@ -220,10 +252,17 @@ pub(super) fn require_live_owner(
     state: &std::path::Path,
     receipt: &serde_json::Value,
 ) -> Result<()> {
-    use std::os::{
-        fd::AsRawFd,
-        unix::fs::{OpenOptionsExt, PermissionsExt},
-    };
+    ensure!(
+        recovery_owner(state, receipt)?.is_none(),
+        "native wrapper is not holding its ownership lease"
+    );
+    Ok(())
+}
+
+pub(super) fn recovery_owner(
+    state: &std::path::Path,
+    receipt: &serde_json::Value,
+) -> Result<Option<super::api::Lease>> {
     let nonce = receipt["owner_nonce"]
         .as_str()
         .context("wrapper ownership evidence unavailable")?;
@@ -231,26 +270,5 @@ pub(super) fn require_live_owner(
         uuid::Uuid::parse_str(nonce)?.to_string() == nonce,
         "invalid owner nonce"
     );
-    let path = state.join(format!("native-owner-{nonce}.lock"));
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)?;
-    let metadata = file.metadata()?;
-    ensure!(
-        metadata.is_file() && metadata.permissions().mode() & 0o077 == 0,
-        "private regular ownership lease required"
-    );
-    // SAFETY: valid fd, nonblocking exclusive flock. This probe sends no signal.
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-        // We acquired it, therefore nobody supplied positive ownership evidence.
-        unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
-        anyhow::bail!("native wrapper is not holding its ownership lease");
-    }
-    let error = std::io::Error::last_os_error();
-    ensure!(
-        error.kind() == std::io::ErrorKind::WouldBlock,
-        "cannot inspect wrapper ownership lease: {error}"
-    );
-    Ok(())
+    super::api::existing_lock(state, &format!("native-owner-{nonce}.lock"))
 }

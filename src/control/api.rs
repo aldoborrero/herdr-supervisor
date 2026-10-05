@@ -126,6 +126,30 @@ fn acquire_lock(dir: &Path, name: &str, wait: bool) -> Result<Lease> {
     Ok(Lease(file))
 }
 
+/// Probe only an existing private lease; missing/invalid files are not evidence.
+pub(super) fn existing_lock(dir: &Path, name: &str) -> Result<Option<Lease>> {
+    use std::os::fd::AsRawFd;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(dir.join(name))?;
+    let metadata = file.metadata()?;
+    ensure!(
+        metadata.is_file() && metadata.permissions().mode() & 0o077 == 0,
+        "private regular ownership lease required"
+    );
+    // SAFETY: a valid owned fd and a nonblocking flock; no process is signalled.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        return Ok(Some(Lease(file)));
+    }
+    let error = std::io::Error::last_os_error();
+    if error.kind() == std::io::ErrorKind::WouldBlock {
+        Ok(None)
+    } else {
+        Err(error.into())
+    }
+}
+
 pub async fn serve(dir: PathBuf, shutdown: impl std::future::Future<Output = ()>) -> Result<()> {
     Store::open(&dir)?.owner()?;
     let state = dir.clone();
