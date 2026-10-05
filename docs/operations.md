@@ -192,7 +192,38 @@ herdr-supervisor control --state CONTROLLER_DIR delivery-status \
 
 The result contains counts for every delivery state and at most 100 recent metadata rows, including attempts, expiry, next attempt time and a diagnostic category. It omits command bodies, signed envelopes and credentials. This command is an inspection of controller state; it does not change the broker or retry a terminal record. Worker `receipt` and MCP `worker_receipt` include the same attempt/schedule/error fields for that worker's event. A zero `next_attempt_at` means no retry is scheduled after a terminal or successful delivery.
 
-Node schema 5 adds retry metadata while preserving existing event IDs/wires, jobs, memory replicas and operation replays. Controller retry metadata uses its existing outbox columns. Expiry does not renew a grant or extend a task deadline. Recovery of terminal outgoing records, inbound poison-record handling and explicit grant/node lifecycle operations remain pending; rejected incoming records still receive no acceptance ACK.
+Node schema 5 adds retry metadata while preserving existing event IDs/wires, jobs, memory replicas and operation replays. Controller retry metadata uses its existing outbox columns. Expiry does not renew a grant or extend a task deadline. Recovery of terminal outgoing records and explicit grant/node lifecycle operations remain pending. Rejected incoming records follow the durable holding policy below; they never receive an application acceptance ACK.
+
+## Rejected incoming deliveries
+
+Controller and node schema 6 add `reception_failures` to their existing private SQLite databases. If application rejects a broker record, the relay first commits its original bytes, SHA-256, state and retry schedule locally. Only after that commit does it send JetStream `TERM` and await broker confirmation. This stops broker redelivery without asserting successful processing ([NATS acknowledgement semantics](https://github.com/nats-io/nats.docs/blob/master/using-nats/jetstream/model_deep_dive.md)). It frees the consumer's pending-delivery window so malformed records or temporarily missing prerequisites do not indefinitely block later work. Ordinary accepted records still use the application transaction followed by a confirmed ACK.
+
+Local states are distinct:
+
+- `pending`: a structurally intact signed record was rejected by application checks. Up to 16 due records are retried per relay cycle, before fetching new deliveries, with persisted exponential delays capped at 60 seconds. Every attempt checks the original bytes, signature, expiry, current authorization, route and epoch again. Permission failures are never bypassed. A dependency arriving later can allow an otherwise valid record to succeed.
+- `invalid`: encoding, integrity or immutable envelope checks failed. No application retry is scheduled. Documents over 300,000 bytes retain only their hash and size.
+- `expired`: the original signed validity elapsed. No automatic re-signing, deadline extension or inference about a past uncertain outcome occurs.
+- `applied`: a retry committed the ordinary application transaction. Its receipt is separate from model processing. A crash before saving this local retry receipt replays the receiver's existing idempotent operation.
+
+Duplicate rejected bytes reuse the same local entry, including after a lost TERM response. Diagnostic categories and status output contain no raw record bodies, capabilities or exception strings. The private database may contain credentials inside retained wire records; keep it private and preserve it together with ordinary controller/node state. A restored broker without this database cannot recover records previously transferred to the local queue by TERM.
+
+Each endpoint retains at most 4,096 rejected records and 64 MiB of raw bodies. A full or unwritable holding store sends no TERM; the broker retains responsibility for redelivery. Existing local retries run before attempting new intake. Storage exhaustion can still halt intake and must be resolved; this is bounded recovery, not an unlimited denial-of-service guarantee.
+
+Local operator inspection uses filesystem authority and does not contact a broker or expose message bodies:
+
+```bash
+herdr-supervisor control --state CONTROLLER_DIR reception-status
+herdr-supervisor control --state NODE_DIR reception-status --node
+```
+
+Both views include state counts and at most 100 recent metadata rows. After inspecting the records, explicitly prune terminal entries older than a past positive Unix timestamp:
+
+```bash
+herdr-supervisor control --state CONTROLLER_DIR reception-prune --before UNIX_TIMESTAMP
+herdr-supervisor control --state NODE_DIR reception-prune --node --before UNIX_TIMESTAMP
+```
+
+Pruning never deletes `pending` entries, command/inbox application receipts, jobs or task results. It deletes the selected terminal diagnostic records and their retained bodies; there is no automatic history eviction. It does not compact the SQLite file, requeue a terminal record or discard broker history. Normal SQLite page reuse allows subsequent entries within the logical limit. Back up the private state before intentionally removing evidence that you need to retain.
 
 ## Run an executor
 
@@ -309,7 +340,7 @@ Workers submit `propose_memory` with `run`, `topic`, `text`, `source_attempt` an
 
 Memory is run-scoped and includes provenance; only requested topics plus preferences enter an assignment, bounded to 32,000 UTF-8 text bytes. Cross-run project memory and Markdown projections remain pending.
 
-Approval/withdrawal and node delivery intents commit in one controller transaction. Each affected active attempt receives a signed `memory_update` with its exact run/attempt/epoch, a monotonically increasing run memory version and a complete selected snapshot with the same text budget. Version gaps are normal: unrelated topics do not trigger that worker's update. Nodes persist before broker ACK, reject foreign scope or content conflicts, and ignore older versions. A complete snapshot makes withdrawal durable even if updates arrive out of order. An update that precedes its execute order remains unacknowledged until the assignment exists.
+Approval/withdrawal and node delivery intents commit in one controller transaction. Each affected active attempt receives a signed `memory_update` with its exact run/attempt/epoch, a monotonically increasing run memory version and a complete selected snapshot with the same text budget. Version gaps are normal: unrelated topics do not trigger that worker's update. Nodes persist before broker ACK, reject foreign scope or content conflicts, and ignore older versions. A complete snapshot makes withdrawal durable even if updates arrive out of order. An update that precedes its execute order is durably held for local retry before TERM; it cannot be applied until the assignment exists.
 
 `worker context` and MCP `worker_context` return both the immutable startup `memory` and `current_memory` (`version`, `snapshot`, `acknowledged_version`). The latter is the latest approved selection replicated to that node, not a promise of instantaneous consistency during a partition. Contracts and their hashes do not change. After reading the current snapshot, the worker declares that version through its existing scoped prefix:
 

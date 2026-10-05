@@ -4,7 +4,7 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
-The local implementation suite currently passes **422 unit tests and 7 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
+The local implementation suite currently passes **430 unit tests and 7 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
 
 | Requirement | Evidence | Limit |
 | --- | --- | --- |
@@ -13,7 +13,13 @@ The local implementation suite currently passes **422 unit tests and 7 CLI tests
 | Signed origin and route authorization | Identity tampering/expiry tests, controller receive tests, real NATS ACL tests | Explicit node rotation/revocation commands remain pending |
 | Reply inbox confidentiality and broker management | `real_broker_generated_acl_isolates_reply_inboxes_and_runtime_management` requires actual NATS permission errors for foreign reply subscriptions, consumer reads, stream mutations, message reads and ACKs; confirms legitimate deliveries/ACKs/reconnects | Generated runtime policy must be applied to the deployed broker; administrators remain trusted |
 | Broker policy usability and reserved routes | `broker_routes_reject_reserved_names_and_wildcards_before_enrollment_or_grant`; continuous CLI workflow invokes `broker-policy` and installs its permissions on separate controller/node users | Example in `docs/nats-acl.md`; existing host/broker configuration is not changed |
-| Durable offline transport | Real JetStream restart/offline test; ACK follows SQLite acceptance | Inbound poison-record handling and recovery of terminal outgoing records remain pending |
+| Durable offline transport | Real JetStream restart/offline test; ACK follows SQLite acceptance | Recovery of terminal outgoing records remains pending |
+| Poisoned consumer windows | `poisoned_broker_windows_cannot_starve_valid_commands_and_events`: 65 malformed records per endpoint followed by a valid command/event, real restricted NATS clients, zero broker pending deliveries | TERM follows local persistence, not application acceptance; bounded storage can still exhaust |
+| Failed local quarantine write | `failed_local_hold_never_terminates_broker_delivery` injects SQLite failure on both endpoints and observes one outstanding broker delivery each | No TERM, command or applied inbox row is written |
+| Deferred prerequisites, restart and lost local receipt | `missing_assignment_retries_after_restart_and_lost_application_receipt`; `deferred_controller_application_survives_restart_and_creates_one_receipt` | Real broker/SQLite; no models; retry runs full original authorization |
+| Incoming integrity, limits and maintenance | `reception_checks_integrity_time_scope_and_never_renews_or_leaks_records`; `reception_limits_fail_closed_and_oversize_documents_retain_no_body`; continuous CLI workflow uses status/prune | 4,096 rows, 64 MiB raw bodies, no automatic terminal eviction; pending entries survive pruning |
+| Deferred execution fencing | `frozen_reception_bytes_and_cancellation_fence_deferred_execution` | Changed stored bytes rejected; cancellation tombstone prevents delayed launch |
+| Controller/node schema 6 | `schema_five_upgrade_preserves_existing_jobs_and_frozen_outbox`; earlier migration tests updated to include the new table | Existing event identities, frozen outbox and jobs preserved |
 | Durable retry and lost SQL publication receipt | `broker_acceptance_with_lost_sql_receipt_retries_identical_bytes_after_restart` injects failure after real broker storage, reopens SQLite and checks unchanged wire/ID, broker dedup and controller application | Network timeout alone never establishes acceptance |
 | Expired, malformed and premature outgoing records | `expired_malformed_and_future_outgoing_records_do_not_block_commands_or_receipts` keeps expired/invalid rows, defers a future timestamp and preserves active process capacity | Outgoing terminal states do not establish task outcomes |
 | Fairness across denied routes | `denied_outgoing_route_does_not_starve_incoming_events_or_other_nodes` receives a worker proposal and delivers its receipt while another destination is denied by real NATS ACLs | Incoming consumer/service outages remain separate failures |
@@ -126,8 +132,12 @@ Mailer protocol-2 support is an independent local commit **`7a12d5a`** on `feat/
 - Idempotent/reconcilable mailer registration after a lost registration response.
 - Full onboarding, task/profile forms and cross-host resource focus.
 - Aggregate API/wire bounds and large-run context pagination.
-- Inbound poison-record policy, recovery/requeue of terminal outgoing records, and grant/node lifecycle operations.
+- Recovery/requeue of terminal outgoing records and grant/node lifecycle operations.
 - Optional project/cross-run memory and Markdown projection.
 - Stronger model-facing validation beyond the isolated continuous-service workflow and protocol fixtures.
 
 No push, public release, host changes or deployment has occurred. Existing user sessions and shared runtime servers were not modified.
+
+The rejected-delivery change passes 430 unit tests (8.58 s), all 7 CLI tests (22.50 s after fixing the new fixture call) and strict all-target Clippy (21.32 s). The eight reception regressions include real restricted-broker delivery, saturation beyond the 64-message pending window, failed local persistence, missing prerequisites, restart, lost local application receipts, changed wire bytes, cancellation fencing, bounded retention/pruning and schema-5 migration. No live model, deployed broker or host configuration was changed. These are local Cargo results using the existing RAM cache; full Nix package/check validation of this source remains pending.
+
+For the same reception source, `nix fmt`, realization of `checks.x86_64-linux.service-modules` and `checks.x86_64-linux.pkgs-formatter-check`, and `nix flake check --no-build` pass. The last command evaluates derivations only; it does not replace the outstanding full package build/check. The shared filesystem still had approximately 773 MiB available, so the previously failing full build was not restarted under equivalent conditions.

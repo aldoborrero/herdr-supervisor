@@ -784,6 +784,11 @@ class Fixture:
         assert all(
             "payload" not in row and "wire" not in row for row in deliveries["recent"]
         )
+        rejected = self.cli(self.controller, "reception-status")
+        assert rejected["state_counts"] == {}
+        assert rejected["recent"] == []
+        pruned = self.cli(self.controller, "reception-prune", "--before", "1")
+        assert pruned == {"removed": 0, "before": 1, "pending_preserved": True}
         assert self.creates == self.launches == [author, reviewer]
         assert len(self.registrations) == len(self.deliveries) == 2
         self.stop(self.node_process)

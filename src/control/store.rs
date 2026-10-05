@@ -124,6 +124,7 @@ impl Store {
             3 => (),
             4 => (),
             5 => (),
+            6 => (),
             _ => bail!("unsupported controller schema {version}; no migration applied"),
         }
         if version <= 2 {
@@ -137,6 +138,9 @@ impl Store {
         if version <= 4 {
             tx.execute_batch(include_str!("migration5.sql"))?;
             tx.pragma_update(None, "user_version", 5)?;
+        }
+        if version <= 5 {
+            tx.execute_batch(super::reception::SCHEMA)?;
         }
         tx.commit()?;
         Ok(Self {

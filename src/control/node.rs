@@ -94,6 +94,7 @@ impl NodeStore {
             3 => (),
             4 => (),
             5 => (),
+            6 => (),
             _ => bail!("unsupported node schema"),
         }
         if version <= 2 {
@@ -112,6 +113,9 @@ impl NodeStore {
         }
         if version <= 4 {
             tx.execute_batch(super::delivery::NODE_SCHEMA)?;
+        }
+        if version <= 5 {
+            tx.execute_batch(super::reception::SCHEMA)?;
         }
         let existing: (String, String, String, u64) = tx.query_row(
             "SELECT owner,node,key,epoch FROM authority WHERE singleton=1",

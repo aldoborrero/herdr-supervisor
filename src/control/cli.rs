@@ -19,6 +19,19 @@ pub struct ControlArgs {
 
 #[derive(Subcommand)]
 enum ControlCommand {
+    /// Delete only terminal local rejection records older than an explicit Unix timestamp
+    ReceptionPrune {
+        #[arg(long)]
+        node: bool,
+        #[arg(long)]
+        before: i64,
+    },
+    /// Inspect local rejected-delivery metadata, without message bodies or credentials
+    ReceptionStatus {
+        /// Inspect node.sqlite instead of control.sqlite
+        #[arg(long)]
+        node: bool,
+    },
     /// Inspect bounded outgoing delivery metadata without exposing command bodies
     DeliveryStatus {
         #[arg(long)]
@@ -547,6 +560,12 @@ pub fn run(args: ControlArgs) -> Result<()> {
             let grant = identity.delegation(&node, &key, epoch, expires_at)?;
             grant.verify(jiff::Timestamp::now().as_second())?;
             serde_json::to_value(grant)?
+        }
+        ControlCommand::ReceptionPrune { node, before } => {
+            super::reception::prune(&args.state, node, before)?
+        }
+        ControlCommand::ReceptionStatus { node } => {
+            super::reception::local_status(&args.state, node)?
         }
         ControlCommand::DeliveryStatus {
             credential: path,

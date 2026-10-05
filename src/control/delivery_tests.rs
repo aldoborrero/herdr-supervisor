@@ -304,7 +304,7 @@ fn node_v4_retry_migration_preserves_wire_jobs_memory_and_idempotent_operations(
     let req = proposal(&f, &a, &token, "migration-note");
     let event = node.enqueue(&req, &f.node_key).unwrap();
     let before = serde_json::to_value(node.pending().unwrap()).unwrap();
-    node.connection.execute_batch("ALTER TABLE events DROP COLUMN tries; ALTER TABLE events DROP COLUMN available_at; ALTER TABLE events DROP COLUMN last_error; PRAGMA user_version=4;").unwrap();
+    node.connection.execute_batch("ALTER TABLE events DROP COLUMN tries; ALTER TABLE events DROP COLUMN available_at; ALTER TABLE events DROP COLUMN last_error; DROP TABLE reception_failures; PRAGMA user_version=4;").unwrap();
     drop(node);
     let mut node = node_store(&f);
     assert_eq!(
@@ -337,7 +337,7 @@ fn node_v4_retry_migration_preserves_wire_jobs_memory_and_idempotent_operations(
         node.connection
             .pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
             .unwrap(),
-        5
+        6
     );
 }
 

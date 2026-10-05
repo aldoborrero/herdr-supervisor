@@ -1,4 +1,4 @@
-//! NATS carries signed records. All acknowledgements follow local durable application.
+//! Signed NATS records: acceptance ACK follows application; TERM follows durable holding.
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -174,7 +174,7 @@ pub fn decode(bytes: &[u8]) -> Result<SignedRecord> {
 
 pub async fn controller_once(store: &mut Store, broker: &Broker) -> Result<usize> {
     let identity = Identity::load(&store.dir.join("owner.key"))?;
-    let mut count = 0;
+    let mut count = super::reception::retry(store)?;
     // Receive before publishing: a failed/expired outgoing record must not
     // prevent new results, cancellation receipts or resource bindings.
     let consumer = broker.consumer("controller").await?;
@@ -186,9 +186,22 @@ pub async fn controller_once(store: &mut Store, broker: &Broker) -> Result<usize
         .await?;
     while let Some(message) = messages.next().await {
         let message = message.map_err(anyhow::Error::from_boxed)?;
+        if super::reception::known(&store.connection, &message.payload)? {
+            message
+                .double_ack_with(jetstream::AckKind::Term)
+                .await
+                .map_err(anyhow::Error::from_boxed)?;
+            continue;
+        }
         let accepted = decode(&message.payload).and_then(|signed| store.receive(&signed));
-        if let Err(error) = accepted {
-            eprintln!("controller rejected record: {error}");
+        if accepted.is_err() {
+            // TERM transfers redelivery responsibility to a durable local queue.
+            // It never asserts application acceptance; a failed write sends no TERM.
+            super::reception::hold(&mut store.connection, &message.payload)?;
+            message
+                .double_ack_with(jetstream::AckKind::Term)
+                .await
+                .map_err(anyhow::Error::from_boxed)?;
             continue;
         }
         message
@@ -249,7 +262,7 @@ pub async fn controller_once(store: &mut Store, broker: &Broker) -> Result<usize
 }
 
 pub async fn node_once(store: &mut NodeStore, broker: &Broker) -> Result<usize> {
-    let mut count = 0;
+    let mut count = super::reception::retry(store)?;
     let consumer = broker.consumer(&store.node_id).await?;
     let mut messages = consumer
         .fetch()
@@ -259,9 +272,22 @@ pub async fn node_once(store: &mut NodeStore, broker: &Broker) -> Result<usize> 
         .await?;
     while let Some(message) = messages.next().await {
         let message = message.map_err(anyhow::Error::from_boxed)?;
+        if super::reception::known(&store.connection, &message.payload)? {
+            message
+                .double_ack_with(jetstream::AckKind::Term)
+                .await
+                .map_err(anyhow::Error::from_boxed)?;
+            continue;
+        }
         let accepted = decode(&message.payload).and_then(|signed| store.receive(&signed));
-        if let Err(error) = accepted {
-            eprintln!("node rejected record: {error}");
+        if accepted.is_err() {
+            // TERM transfers redelivery responsibility to a durable local queue.
+            // It never asserts application acceptance; a failed write sends no TERM.
+            super::reception::hold(&mut store.connection, &message.payload)?;
+            message
+                .double_ack_with(jetstream::AckKind::Term)
+                .await
+                .map_err(anyhow::Error::from_boxed)?;
             continue;
         }
         message

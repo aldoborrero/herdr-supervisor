@@ -83,6 +83,8 @@ Worktrees isolate Git checkouts. Credentials and private state operate within a 
 
 The flake exports opt-in NixOS and Home Manager modules for a controller and independently configured execution nodes. Each service uses the initialized runtime owner/state and configuration file paths; keys and tokens stay in private runtime files. See [service setup](docs/services.md) for examples, dependencies and shutdown behavior.
 
+Rejected broker deliveries have a bounded, durable local queue with automatic retries and metadata-only inspection. See [incoming delivery recovery](docs/operations.md#rejected-incoming-deliveries) for TERM semantics, storage limits and explicit pruning.
+
 ## Memory and persistence
 
 The controller stores proposals and revisions in `control.sqlite`, with WAL journaling, foreign keys and full synchronization. Approval records the author, evidence, source attempt and approving principal. Withdrawal creates a new revision without deleting history. Dispatch includes only requested topics plus preferences, with at most 32,000 UTF-8 bytes of text.

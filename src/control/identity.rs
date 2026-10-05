@@ -125,7 +125,7 @@ impl SignedRecord {
     /// Authentication only. The receiver must also authorize owner, role, route and epoch.
     pub fn verify(&self, now: i64) -> Result<()> {
         ensure!(
-            self.record.created_at <= now + 30
+            self.record.created_at <= now.saturating_add(30)
                 && self.record.expires_at > now
                 && self.record.expires_at > self.record.created_at,
             "record expired or invalid time"

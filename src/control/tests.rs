@@ -1820,3 +1820,6 @@ mod broker_policy_tests;
 
 #[path = "delivery_tests.rs"]
 mod delivery_tests;
+
+#[path = "reception_tests.rs"]
+mod reception_tests;

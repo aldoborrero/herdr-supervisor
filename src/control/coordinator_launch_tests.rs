@@ -491,7 +491,7 @@ fn schema_four_migration_preserves_active_coordinator_routes_and_memory() {
         },
     );
     let before = coordinator::context(&f.store, &cap, &f.run).unwrap();
-    f.store.connection.execute_batch("DROP TABLE coordinator_processes; DROP TABLE coordinator_launches; PRAGMA user_version=4;").unwrap();
+    f.store.connection.execute_batch("DROP TABLE coordinator_processes; DROP TABLE coordinator_launches; DROP TABLE reception_failures; PRAGMA user_version=4;").unwrap();
     f.store = Store::open(&f.store.dir).unwrap();
     let after = coordinator::context(&f.store, &cap, &f.run).unwrap();
     assert_eq!(after["native_coordinator"], before["native_coordinator"]);
