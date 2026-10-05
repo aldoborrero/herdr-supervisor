@@ -474,9 +474,13 @@ async fn controller_service_delivers_coordinator_bootstrap_with_real_broker() {
     let owner = f.store.owner().unwrap();
     let server = NatsServer::start(&owner);
     let config = server.config("admin");
-    let broker = crate::control::transport::Broker::connect(&config, &owner)
-        .await
-        .unwrap();
+    let broker = crate::control::transport::Broker::connect(
+        &config,
+        &owner,
+        crate::control::broker_policy::Endpoint::Provisioner,
+    )
+    .await
+    .unwrap();
     broker
         .provision(&["controller".into(), "local".into()])
         .await

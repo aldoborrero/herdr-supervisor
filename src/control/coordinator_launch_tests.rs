@@ -520,7 +520,13 @@ async fn controller_service_pumps_coordinator_intents_and_reconciles_after_resta
     let owner = f.store.owner().unwrap();
     let server = NatsServer::start(&owner);
     let config = server.config("admin");
-    let broker = Broker::connect(&config, &owner).await.unwrap();
+    let broker = Broker::connect(
+        &config,
+        &owner,
+        crate::control::broker_policy::Endpoint::Provisioner,
+    )
+    .await
+    .unwrap();
     broker
         .provision(&["controller".into(), "local".into()])
         .await

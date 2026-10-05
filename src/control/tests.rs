@@ -740,18 +740,18 @@ impl NatsServer {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        let digest = digest(owner.as_bytes());
-        let stream = format!("HS_{digest}");
-        let config = format!(
-            r#"listen: "127.0.0.1:{port}"
-jetstream {{ store_dir: "{}", max_file_store: 2GB, max_memory_store: 16MB }}
-authorization {{ users: [
- {{user: admin, password: "admin-test-password"}},
- {{user: node, password: "node-test-password", permissions: {{publish: {{allow: ["hs.{digest}.to.controller", "$JS.API.STREAM.INFO.{stream}", "$JS.API.CONSUMER.INFO.{stream}.local", "$JS.API.CONSUMER.MSG.NEXT.{stream}.local", "$JS.ACK.{stream}.local.>"]}}, subscribe: {{allow: ["_INBOX.>"]}} }} }}
-] }}
-"#,
-            dir.path().join("jetstream").display()
-        );
+        let policy =
+            super::broker_policy::policy(owner, &["local".into(), "other".into()]).unwrap();
+        let config = json!({
+            "listen":format!("127.0.0.1:{port}"),
+            "jetstream":{"store_dir":dir.path().join("jetstream"),"max_file_store":2147483648_u64,"max_memory_store":16777216},
+            "authorization":{"users":[
+                {"user":"admin","password":"admin-test-password"},
+                {"user":"controller","password":"controller-test-password","permissions":policy["controller"]["permissions"]},
+                {"user":"node","password":"node-test-password","permissions":policy["nodes"]["local"]["permissions"]},
+                {"user":"other","password":"other-test-password","permissions":policy["nodes"]["other"]["permissions"]}
+            ]}
+        }).to_string();
         let path = dir.path().join("server.conf");
         std::fs::write(&path, config).unwrap();
         let binary = std::env::var_os("NATS_SERVER").unwrap_or_else(|| "nats-server".into());
@@ -809,18 +809,26 @@ async fn real_jetstream_offline_node_restart_and_ack_after_persistence() {
     let task = f.task();
     f.dispatch(&task);
     let server = NatsServer::start(&f.store.owner().unwrap());
-    let admin = Broker::connect(&server.config("admin"), &f.store.owner().unwrap())
-        .await
-        .unwrap();
+    let admin = Broker::connect(
+        &server.config("admin"),
+        &f.store.owner().unwrap(),
+        crate::control::broker_policy::Endpoint::Provisioner,
+    )
+    .await
+    .unwrap();
     admin
         .provision(&["controller".into(), "local".into()])
         .await
         .unwrap();
     assert_eq!(controller_once(&mut f.store, &admin).await.unwrap(), 1);
     // Consumer existed before the offline node, so its durable history survives reconnect.
-    let node_broker = Broker::connect(&server.config("node"), &f.store.owner().unwrap())
-        .await
-        .unwrap();
+    let node_broker = Broker::connect(
+        &server.config("node"),
+        &f.store.owner().unwrap(),
+        crate::control::broker_policy::Endpoint::Node("local"),
+    )
+    .await
+    .unwrap();
     let mut node = node_store(&f);
     node.connection
         .execute_batch(
@@ -870,16 +878,24 @@ async fn real_broker_acl_blocks_node_publishing_controller_commands() {
     let f = Fixture::new();
     let owner = f.store.owner().unwrap();
     let server = NatsServer::start(&owner);
-    let admin = Broker::connect(&server.config("admin"), &owner)
-        .await
-        .unwrap();
+    let admin = Broker::connect(
+        &server.config("admin"),
+        &owner,
+        crate::control::broker_policy::Endpoint::Provisioner,
+    )
+    .await
+    .unwrap();
     admin
         .provision(&["controller".into(), "local".into()])
         .await
         .unwrap();
-    let broker = Broker::connect(&server.config("node"), &owner)
-        .await
-        .unwrap();
+    let broker = Broker::connect(
+        &server.config("node"),
+        &owner,
+        crate::control::broker_policy::Endpoint::Node("local"),
+    )
+    .await
+    .unwrap();
     let result = tokio::time::timeout(std::time::Duration::from_secs(2), async {
         broker
             .context
@@ -1795,3 +1811,6 @@ mod coordinator_launch_tests;
 
 #[path = "live_memory_tests.rs"]
 mod live_memory_tests;
+
+#[path = "broker_policy_tests.rs"]
+mod broker_policy_tests;

@@ -484,7 +484,13 @@ async fn controller_service_reconciles_cancelled_repository_and_retains_its_refs
     let owner = x.f.store.owner().unwrap();
     let server = NatsServer::start(&owner);
     let config = server.config("admin");
-    let broker = Broker::connect(&config, &owner).await.unwrap();
+    let broker = Broker::connect(
+        &config,
+        &owner,
+        crate::control::broker_policy::Endpoint::Provisioner,
+    )
+    .await
+    .unwrap();
     broker
         .provision(&["controller".into(), "local".into()])
         .await
@@ -1240,9 +1246,13 @@ async fn continuous_controller_verifies_without_blocking_api_and_applies_owned_r
     let i = x.request();
     let server = NatsServer::start(&x.f.store.owner().unwrap());
     let broker_config = server.config("admin");
-    let broker = Broker::connect(&broker_config, &x.f.store.owner().unwrap())
-        .await
-        .unwrap();
+    let broker = Broker::connect(
+        &broker_config,
+        &x.f.store.owner().unwrap(),
+        crate::control::broker_policy::Endpoint::Provisioner,
+    )
+    .await
+    .unwrap();
     broker
         .provision(&["controller".into(), "local".into()])
         .await
@@ -1318,16 +1328,24 @@ async fn assigned_reviewer_uses_signed_node_transport_and_receives_controller_re
     let (reviewer, token) = x.reviewer(&i);
     let owner = x.f.store.owner().unwrap();
     let server = NatsServer::start(&owner);
-    let controller = Broker::connect(&server.config("admin"), &owner)
-        .await
-        .unwrap();
+    let controller = Broker::connect(
+        &server.config("admin"),
+        &owner,
+        crate::control::broker_policy::Endpoint::Provisioner,
+    )
+    .await
+    .unwrap();
     controller
         .provision(&["controller".into(), "local".into()])
         .await
         .unwrap();
-    let broker = Broker::connect(&server.config("node"), &owner)
-        .await
-        .unwrap();
+    let broker = Broker::connect(
+        &server.config("node"),
+        &owner,
+        crate::control::broker_policy::Endpoint::Node("local"),
+    )
+    .await
+    .unwrap();
     let mut node = node_store(&x.f);
     controller_once(&mut x.f.store, &controller).await.unwrap();
     node_once(&mut node, &broker).await.unwrap();

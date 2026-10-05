@@ -173,7 +173,7 @@ Broker JSON contains `url`, `credentials` (an absolute private `.creds` or JSON 
 
 Subjects are `hs.<sha256-owner-DID>.to.<node-id>` and `.to.controller`. Consumers use explicit ACK after SQLite application. Grant expiry and node epoch are checked on reception. Automated grant renewal and node rotation/revocation commands are not yet provided.
 
-A node's broker ACL must prevent publishing to other nodes' command subjects and reading their consumers. It needs publication to the controller subject, access to its own durable pull consumer, scoped ACK publication and reply inbox subscriptions. The real-broker authorization test demonstrates deny-by-default routing; a production ACL template is still pending.
+A node's broker ACL must prevent publishing to other nodes' command subjects and reading their consumers or reply inboxes. Generate the exact runtime permissions with `control --state CONTROLLER_DIR broker-policy --node NODE_ID`; see the [deployment example and reply-prefix migration](nats-acl.md). The controller and each node use distinct `_HS_INBOX.<owner-hash>...` prefixes automatically. The generated policy includes only the runtime's publish routes, its own pull consumer and ACKs, and its own reply subscriptions. Broker administration is a separate credential. The continuous-service test uses the generated permissions for both the controller and node, while real-broker regressions verify rejected reads, writes and management requests.
 
 ## Run an executor
 

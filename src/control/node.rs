@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::identity::{Identity, Record, SignedRecord};
-use super::model::{Attempt, Profile, Request, digest, identifier};
+use super::model::{Attempt, Profile, Request, digest};
 use super::store::{private_dir, secret_file};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -42,7 +42,7 @@ impl NodeStore {
         grant: SignedRecord,
         identity: &Identity,
     ) -> Result<Self> {
-        identifier(node_id)?;
+        super::broker_policy::node_id(node_id)?;
         grant.verify(jiff::Timestamp::now().as_second())?;
         ensure!(
             grant.record.record_type == "local.herdr.supervisor.nodeGrant"

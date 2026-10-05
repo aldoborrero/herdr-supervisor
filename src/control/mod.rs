@@ -1,5 +1,6 @@
 //! Managed execution authority. Projects' files are views, never a second scheduler.
 pub mod api;
+pub mod broker_policy;
 pub mod cli;
 pub mod coordinator;
 pub mod coordinator_launch;

@@ -7,6 +7,7 @@ use async_nats::jetstream::{self, consumer::PullConsumer};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
+use super::broker_policy::{Endpoint, inbox_prefix};
 use super::identity::{Identity, SignedRecord};
 use super::model::{digest, identifier};
 use super::node::NodeStore;
@@ -36,7 +37,12 @@ pub struct Broker {
 }
 
 impl Broker {
-    pub async fn connect(config: &BrokerConfig, owner: &str) -> Result<Self> {
+    pub async fn connect(
+        config: &BrokerConfig,
+        owner: &str,
+        endpoint: Endpoint<'_>,
+    ) -> Result<Self> {
+        let inbox = inbox_prefix(owner, endpoint)?;
         use std::os::unix::fs::PermissionsExt;
         let meta = std::fs::symlink_metadata(&config.credentials)?;
         ensure!(
@@ -56,6 +62,7 @@ impl Broker {
         };
         // TLS remains the default even over NetBird. Plaintext is an explicit private-network choice.
         options = options
+            .custom_inbox_prefix(inbox)
             .require_tls(!config.private_network_plaintext)
             .connection_timeout(Duration::from_secs(5));
         let client = options.connect(&config.url).await?;

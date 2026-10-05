@@ -19,6 +19,12 @@ pub struct ControlArgs {
 
 #[derive(Subcommand)]
 enum ControlCommand {
+    /// Print runtime NATS permissions and reply prefixes; does not configure a broker
+    BrokerPolicy {
+        /// Node routes to include; defaults to the controller's enrolled active nodes
+        #[arg(long)]
+        node: Vec<String>,
+    },
     /// Run controller API, NATS relay and durable Git/check executor together
     RunController {
         #[arg(long)]
@@ -535,12 +541,22 @@ pub fn run(args: ControlArgs) -> Result<()> {
             grant.verify(jiff::Timestamp::now().as_second())?;
             serde_json::to_value(grant)?
         }
+        ControlCommand::BrokerPolicy { node } => {
+            let store = Store::open(&args.state)?;
+            let nodes = if node.is_empty() {
+                store.nodes()?
+            } else {
+                node
+            };
+            super::broker_policy::policy(&store.owner()?, &nodes)?
+        }
         ControlCommand::Provision { broker, target } => {
             let store = Store::open(&args.state)?;
             runtime()?.block_on(async {
                 let broker = super::transport::Broker::connect(
                     &super::transport::read_config(&broker)?,
                     &store.owner()?,
+                    super::broker_policy::Endpoint::Provisioner,
                 )
                 .await?;
                 let mut targets = target;
@@ -558,6 +574,7 @@ pub fn run(args: ControlArgs) -> Result<()> {
                 let broker = super::transport::Broker::connect(
                     &super::transport::read_config(&broker)?,
                     &store.owner()?,
+                    super::broker_policy::Endpoint::Controller,
                 )
                 .await?;
                 loop {
@@ -591,6 +608,7 @@ pub fn run(args: ControlArgs) -> Result<()> {
                 let broker = super::transport::Broker::connect(
                     &super::transport::read_config(&broker)?,
                     &owner,
+                    super::broker_policy::Endpoint::Node(&node),
                 )
                 .await?;
                 loop {

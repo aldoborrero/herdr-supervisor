@@ -70,6 +70,7 @@ pub async fn run(
     let broker = super::transport::Broker::connect(
         &super::transport::read_config(&broker_config)?,
         &access.owner,
+        super::broker_policy::Endpoint::Node(&store.node_id),
     )
     .await?;
     let (stop, stopped) = tokio::sync::oneshot::channel();
@@ -122,6 +123,7 @@ pub async fn controller(
     let broker = super::transport::Broker::connect(
         &super::transport::read_config(&broker_config)?,
         &store.owner()?,
+        super::broker_policy::Endpoint::Controller,
     )
     .await?;
     let (stop, stopped) = tokio::sync::oneshot::channel();

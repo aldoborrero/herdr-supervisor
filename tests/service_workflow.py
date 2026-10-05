@@ -7,7 +7,6 @@ Git, JetStream, worker IPC, wrappers, process termination and restart are real.
 """
 
 import argparse
-import hashlib
 import json
 import os
 import shlex
@@ -403,20 +402,35 @@ class Fixture:
                 str(int(time.time()) + 3600),
             ),
         )
-        digest = hashlib.sha256(self.owner.encode()).hexdigest()
-        stream = f"HS_{digest}"
+        policy = self.cli(self.controller, "broker-policy", "--node", "local")
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             port = listener.getsockname()[1]
         config = self.file(
             "nats.conf",
-            f'''listen: "127.0.0.1:{port}"
-jetstream {{ store_dir: "{self.root / "jetstream"}", max_file_store: 2GB, max_memory_store: 8MB }}
-authorization {{ users: [
- {{user: admin, password: "admin-test-password"}},
- {{user: node, password: "node-test-password", permissions: {{publish: {{allow: ["hs.{digest}.to.controller", "$JS.API.STREAM.INFO.{stream}", "$JS.API.CONSUMER.INFO.{stream}.local", "$JS.API.CONSUMER.MSG.NEXT.{stream}.local", "$JS.ACK.{stream}.local.>"]}}, subscribe: {{allow: ["_INBOX.>"]}} }} }}
-] }}
-''',
+            {
+                "listen": f"127.0.0.1:{port}",
+                "jetstream": {
+                    "store_dir": str(self.root / "jetstream"),
+                    "max_file_store": 2147483648,
+                    "max_memory_store": 8388608,
+                },
+                "authorization": {
+                    "users": [
+                        {"user": "admin", "password": "admin-test-password"},
+                        {
+                            "user": "controller",
+                            "password": "controller-test-password",
+                            "permissions": policy["controller"]["permissions"],
+                        },
+                        {
+                            "user": "node",
+                            "password": "node-test-password",
+                            "permissions": policy["nodes"]["local"]["permissions"],
+                        },
+                    ]
+                },
+            },
         )
         self.spawn("nats", [self.nats, "-c", config])
 
@@ -425,7 +439,7 @@ authorization {{ users: [
                 return True
 
         wait_for("private NATS", listening)
-        for user in ("admin", "node"):
+        for user in ("admin", "controller", "node"):
             creds = self.file(
                 f"{user}-creds.json",
                 {"user": user, "password": f"{user}-test-password"},
@@ -469,7 +483,7 @@ authorization {{ users: [
                 self.controller,
                 "run-controller",
                 "--broker",
-                self.root / "admin-broker.json",
+                self.root / "controller-broker.json",
                 "--repositories",
                 self.root / "repositories.json",
             ],

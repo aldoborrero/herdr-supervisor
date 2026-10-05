@@ -90,6 +90,7 @@ impl Identity {
         epoch: u64,
         expires: i64,
     ) -> Result<SignedRecord> {
+        super::broker_policy::node_id(node)?;
         verifying_key(node_did)?;
         let now = jiff::Timestamp::now().as_second();
         self.sign(Record {

@@ -645,7 +645,7 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
             max_active,
         } => {
             own(p)?;
-            identifier(node_id)?;
+            super::broker_policy::node_id(node_id)?;
             verifying_key(key)?;
             ensure!(
                 *max_active > 0 && *max_active <= 128,
