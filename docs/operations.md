@@ -156,7 +156,7 @@ Attachment requires no legacy threads, recorded coordinator or task entries; it 
 | Threads | Attempts, role, node and state; `s` requests stop with the displayed epoch |
 | Tasks | Create a task with Enter/`n` on its creation row; `e` edits a planned contract/dependencies; integration/check/review evidence; `r` requests repair of interrupted/rejected tasks |
 | Inbox | Native coordinator notices and their receipts; `a` acknowledges an inspected notice |
-| Settings | Objective, policy, nodes, native coordinator and launch receipts; `p` pauses/resumes, `x` cancels |
+| Settings | Objective, policy, nodes, coordinator and launch receipts; `p` pauses/resumes, `x` cancels; owner can create profiles, `e` edit and `d` remove |
 | Memory | Approved topics with versions and pending proposals with evidence; `a` approves, `w` withdraws |
 | Routines | Displays the controller scheduling policy; legacy routines are not executed |
 
@@ -168,7 +168,31 @@ The equivalent CLI is `managed apply SLUG --operation ID --request JSON_FILE` (`
 
 The popup and its project picker read controller state in the background, with at most four simultaneous reads and one pending read per project binding. An initial view shows a loading state. Refresh failure retains the last successful snapshot as explicitly stale/read-only; action hints and coordinator launch are disabled there. A changed or malformed binding invalidates the cached authority, and replies for an older binding are discarded. Reconnection restores current data and actions. This cache lives only in the popup process and never writes controller decisions or legacy project files.
 
-Background refresh preserves the selected managed record, project-picker filter and selection, and open confirmations/details. A confirmation retains its captured revision/epoch, which the controller still validates. An explicit mutation uses the existing CLI/API path and may wait for its response; only background reads are asynchronous. `managed status`, `context` and `overview` remain synchronous CLI reads. Service onboarding, profile editing forms, resource focus across hosts and aggregate snapshot bounds remain pending. The popup itself must run on the controller host; workers may execute remotely over NATS.
+Background refresh preserves the selected managed record, project-picker filter and selection, and open confirmations/details. A confirmation retains its captured revision/epoch, which the controller still validates. An explicit mutation uses the existing CLI/API path and may wait for its response; only background reads are asynchronous. `managed status`, `context` and `overview` remain synchronous CLI reads. Service onboarding, resource focus across hosts and aggregate snapshot bounds remain pending. The popup itself must run on the controller host; workers may execute remotely over NATS.
+
+## Edit run profiles
+
+In **Settings**, an owner view can select **Create a run profile…** (Enter/`n`), press **e** on an existing profile, or **d** to confirm removal. A run-scoped supervisor view displays profiles read-only. The form captures the run revision and accepts a name, Codex/Claude/Pi runtime, a JSON array of model/tuning arguments and a positive active-attempt limit. Existing names are fixed; create another profile to use another name. Runtime arguments cannot override permissions, session identity or checkout. At least one profile must remain.
+
+The controller decision is `set_profile`:
+
+```json
+{
+  "method": "set_profile",
+  "params": {
+    "run": "RUN_ID",
+    "expected_revision": 7,
+    "name": "reviewer",
+    "profile": { "runtime": "claude", "argv": [], "limit": 1 }
+  }
+}
+```
+
+Submit through `managed apply` or the owner controller API with a stable operation ID. Explicit `"profile": null` removes the named profile; omitting `profile` is rejected. Changes require an active or paused, unexpired run and increment its revision. The form freezes its stdin request before submission; after a failed response Enter retries that exact operation. Escape returns to inspect state and does not undo an accepted request. Stale views cannot open editors or submit removal actions.
+
+Changes apply to future reservations. Authors, reviewers and coordinator launch plans retain their assigned runtime/arguments even if their profile is changed or removed. The controller snapshot exposes each attempt's `profile_snapshot`. Limits count all active attempts with the same profile name, including ones reserved under earlier settings. Lowering a limit blocks new reservations while at capacity; it does not stop existing agents. The coordinator receives a profile-change notice and must reread current profiles before dispatch; its scoped credential cannot change them.
+
+Verification candidates retain their original policy and policy hash, so editing profiles does not invalidate existing check/review receipts. Every other policy field and the exact contract still participate in the verification gate. Controller schema 8 stores these policy snapshots and immutable attempt profiles; node schema remains 7. Migration recovers profiles from original execute intents, verifies retained signed records and preserves their bytes. A missing legacy execute intent stays explicitly unavailable instead of borrowing the current profile. An old candidate whose policy no longer matches its original hash remains unresolved. No downgrade is supported; older controller binaries must not open schema 8.
 
 ## Amend a planned task
 

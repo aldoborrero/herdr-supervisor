@@ -4,9 +4,9 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
-**Last completed full Nix gate:** commit `102e590662e6bfda91ce3660f7de4f9a40d30905` passes package build and `nix flake check` on x86_64-linux, with 468 unit and 10 CLI tests offline. It includes managed creation/recovery, the plugin-menu correction and task creation. The subsequent planned-task amendment and planning notices pass locally and still require a package gate. This does not establish other platforms or completion of the remaining feature scope.
+**Last completed full Nix gate:** commit `f05d59c48dc6613279c91b1e52c87d2f1477bc73` passes package build and `nix flake check` on x86_64-linux, with 477 unit and 10 CLI tests offline. It includes planned-task amendment and planning notices. Owner-managed profiles pass locally and still require their package gate. This does not establish other platforms or completion of the remaining feature scope.
 
-The local implementation suite currently passes **477 unit tests and 10 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
+The local implementation suite currently passes **489 unit tests and 10 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
 
 | Requirement | Evidence | Limit |
 | --- | --- | --- |
@@ -139,7 +139,7 @@ Mailer protocol-2 support is an independent local commit **`7a12d5a`** on `feat/
 - Recovery/abandonment of uncertain cancelled-run effects and conservative verification checkout cleanup.
 - Recovery after loss of the native wrapper; detached-descendant audit and conservative resource cleanup.
 - Idempotent/reconcilable mailer registration after a lost registration response.
-- Service onboarding, profile editing forms and cross-host resource focus. Managed project creation now has a form and resumable CLI.
+- Service onboarding and cross-host resource focus. Managed project creation now has a form and resumable CLI.
 - Aggregate API/wire bounds and large-run context pagination.
 - Recovery/requeue of terminal outgoing records and grant/node lifecycle operations.
 - Optional project/cross-run memory and Markdown projection.
@@ -255,10 +255,31 @@ The task-form source passes the full local suite: 468 unit tests (7.69 s), 10 CL
 | Native notice intent for successful planning decisions | `amended_task_generates_one_coordinator_notice_and_replay_does_not_repeat_it`; `operator_created_task_and_dependency_changes_wake_coordinator_once_each` |
 | Actual CLI/private IPC amendment and replay | The managed creation CLI regression now edits its task, verifies a changed hash/revision and replays the older creation receipt without restoring old state |
 
-The new mutation uses the existing scoped controller API and MCP facade. Tests exercise SQLite transactions, real private IPC and the actual CLI; no live model or shared service is involved. New notice tests establish journal-to-notice persistence; existing notifier tests cover native delivery separately. The coordinator instruction update describes artifact verification and acceptance already covered by the artifact pipeline tests. It does not establish model compliance. The full local suite passes 477 unit tests (7.96 s), 10 CLI tests (22.66 s) and strict all-target Clippy (12.69 s). Log: `.direnv/task-amend-full.log`. Package validation for this source remains pending.
+The new mutation uses the existing scoped controller API and MCP facade. Tests exercise SQLite transactions, real private IPC and the actual CLI; no live model or shared service is involved. New notice tests establish journal-to-notice persistence; existing notifier tests cover native delivery separately. The coordinator instruction update describes artifact verification and acceptance already covered by the artifact pipeline tests. It does not establish model compliance. The full local suite passes 477 unit tests (7.96 s), 10 CLI tests (22.66 s) and strict all-target Clippy (12.69 s). Log: `.direnv/task-amend-full.log`. The full package gate subsequently passed at `f05d59c`, as recorded below.
 
 ### Full package gate for task creation and plugin menu
 
 Commit `102e590662e6bfda91ce3660f7de4f9a40d30905` passes full Nix build and flake check on x86_64-linux. Compilation took 5 min 50 s and check phase 4 min 58 s, including 468 unit tests (79.99 s) and 10 CLI tests (44.92 s). Formatter/service-module checks pass; incompatible platforms were omitted. Output: `/nix/store/3bkkf5541vy7vjq4sgf2jp7067nslcbj-herdr-supervisor-0.1.0`. Logs: `.direnv/managed-task-form-nix-build.log` and `.direnv/managed-task-form-nix-check.log`. The real-pseudoterminal menu test and large stdin contract run inside the package gate. This predates planned-task amendment and its new notice events.
 
 After a final help-text adjustment excluding the task itself from predecessor choices, the two amendment-form regressions and strict all-target Clippy pass again (`.direnv/task-amend-final.log`). `nix fmt` passes for the amendment source. No host/service activation or publication occurred.
+
+## Planned-task amendment package gate
+
+Commit `f05d59c48dc6613279c91b1e52c87d2f1477bc73` passes full Nix build and flake check on x86_64-linux. Compilation took 6 min 1 s and check phase 5 min 6 s, including 477 unit tests (80.34 s) and 10 CLI tests (43.44 s). Formatter/service-module checks pass; incompatible platforms were omitted. Output: `/nix/store/fgjnhdllzr45fsphy03f85im65kr07k4-herdr-supervisor-0.1.0`. Logs: `.direnv/task-amend-nix-build.log` and `.direnv/task-amend-nix-check.log`.
+
+## Owner-managed profiles
+
+| Requirement | Evidence |
+| --- | --- |
+| Owner authority, exact revision, replay, explicit deletion and argument restrictions | `run_profiles_are_owner_scoped_revisioned_and_cannot_override_permissions_or_remove_last_profile` |
+| Existing assignments survive edits/removal; future reservations obey new limits | `run_profiles_edit_and_removal_preserve_reserved_assignments_and_future_capacity_limits` |
+| Atomic profile snapshots and journal failures | `run_profiles_snapshot_and_profile_update_roll_back_with_failed_outbox_or_journal` |
+| Schema-7 migration preserves original signed bytes and assigned profile | `run_profiles_v7_migration_preserves_signed_bytes_and_original_profile_after_policy_change` |
+| Conflicting/missing legacy evidence does not invent authority | `run_profiles_migration_rejects_conflicting_frozen_intent_without_partial_upgrade`, `run_profiles_missing_legacy_order_stays_unknown_instead_of_borrowing_current_policy` |
+| Original checks/review remain valid after profile edit; other policy changes fail | `run_profiles_updates_preserve_migrated_check_receipts_and_inflight_reviewer_but_not_other_policy_changes` |
+| Coordinator launch retains assigned settings and receives profile-change notice once | `run_profiles_changes_preserve_coordinator_launch_snapshot`, `run_profiles_owner_update_is_visible_and_notifies_coordinator_once` |
+| Owner-only form, fixed name, literal argv, validation and frozen request | `run_profiles_form_is_owner_only_and_preserves_name_argv_and_run_revision`, `run_profiles_form_validates_permission_flags_name_and_limits_before_freezing` |
+| Popup owner/stale fencing, failure replay and captured removal revision | `run_profiles_popup_fences_owner_edits_and_freezes_failures_and_removal_revision` |
+| Actual CLI mutation/replay through private IPC | Extended `managed_create_publishes_one_bound_view_through_real_controller_ipc_without_launching_agents` |
+
+The full local suite passes 489 unit tests (8.07 s), 10 CLI tests (26.54 s) and strict all-target Clippy (12.33 s). Log: `.direnv/run-profiles-full.log`. Tests use real SQLite/Git/IPC and controlled runtime boundaries, not live model sessions. Controller schema is 8; node schema remains 7. The profile checkpoint still requires its full Nix package gate. Original policy hashes and receipts are retained; compatibility excludes only the profiles map, not checks, review requirements or budgets.

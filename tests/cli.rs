@@ -225,6 +225,39 @@ fn managed_create_publishes_one_bound_view_through_real_controller_ipc_without_l
     let final_state: Value = serde_json::from_slice(&final_state.stdout).unwrap();
     assert_eq!(final_state["tasks"][0], edited);
     assert_eq!(final_state["active_attempts"], 0);
+    let profile = serde_json::to_string(&json!({"method":"set_profile","params":{
+        "run":receipt["run"],"expected_revision":final_state["run"]["revision"],"name":"reviewer",
+        "profile":{"runtime":"pi","argv":["--model","owner-choice"],"limit":1}}}))
+    .unwrap();
+    let args = [
+        "--root",
+        root_arg,
+        "managed",
+        "apply",
+        "managed-demo",
+        "--operation",
+        "owner-profile-cli",
+        "--request-json",
+        &profile,
+    ];
+    let saved = hp(home.path(), &args);
+    assert!(
+        saved.status.success(),
+        "{}",
+        String::from_utf8_lossy(&saved.stderr)
+    );
+    assert_eq!(hp(home.path(), &args).stdout, saved.stdout);
+    let policy: Value = serde_json::from_slice(&saved.stdout).unwrap();
+    assert_eq!(policy["policy"]["profiles"]["reviewer"]["runtime"], "pi");
+    let view = hp(
+        home.path(),
+        &["--root", root_arg, "managed", "status", "managed-demo"],
+    );
+    assert!(view.status.success());
+    let view: Value = serde_json::from_slice(&view.stdout).unwrap();
+    assert_eq!(view["actor_role"], "owner");
+    assert_eq!(view["active_attempts"], 0);
+    assert_eq!(view["tasks"][0], edited);
 }
 
 #[test]

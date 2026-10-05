@@ -126,6 +126,7 @@ impl Store {
             5 => (),
             6 => (),
             7 => (),
+            8 => (),
             _ => bail!("unsupported controller schema {version}; no migration applied"),
         }
         if version <= 2 {
@@ -145,6 +146,9 @@ impl Store {
         }
         if version <= 6 {
             tx.execute_batch(super::artifacts::SCHEMA)?;
+        }
+        if version <= 7 {
+            super::run_profiles::migrate(&tx)?;
         }
         tx.commit()?;
         Ok(Self {
@@ -182,6 +186,7 @@ impl Store {
         supervise(&principal, run)?;
         let target = match &request.command {
             Mutation::Pause { run, .. }
+            | Mutation::SetProfile { run, .. }
             | Mutation::Resume { run, .. }
             | Mutation::Cancel { run, .. }
             | Mutation::CompleteRun { run, .. }
@@ -388,10 +393,24 @@ impl Store {
         let mut statement = self
             .connection
             .prepare("SELECT doc FROM attempts WHERE run=?1 ORDER BY id")?;
-        let attempts: Vec<Value> = statement
+        let mut attempts: Vec<Value> = statement
             .query_map([run_id], |r| r.get::<_, String>(0))?
             .map(|r| Ok(serde_json::from_str(&r?)?))
             .collect::<Result<_>>()?;
+        for attempt in &mut attempts {
+            let profile: Option<String> = self
+                .connection
+                .query_row(
+                    "SELECT profile FROM attempt_profiles WHERE attempt=?1",
+                    [attempt["id"].as_str().context("attempt ID missing")?],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            attempt["profile_snapshot"] = profile
+                .map(|doc| serde_json::from_str::<Value>(&doc))
+                .transpose()?
+                .unwrap_or(Value::Null);
+        }
         let mut query = self
             .connection
             .prepare("SELECT doc FROM integrations WHERE run=?1 ORDER BY rowid")?;
@@ -660,6 +679,7 @@ fn add_dependency(c: &Connection, task: &Task, predecessor: &str) -> Result<()> 
 
 pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) -> Result<Value> {
     match command {
+        Mutation::SetProfile { .. } => super::run_profiles::change(tx, p, command),
         Mutation::StartCoordinator { .. } => super::coordinator_launch::reserve(tx, p, command),
         Mutation::BindCoordinator { .. } | Mutation::AcknowledgeNotices { .. } => {
             super::coordinator::mutate(tx, p, command)
@@ -922,6 +942,7 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
                     serde_json::to_string(&a)?
                 ],
             )?;
+            super::run_profiles::remember(tx, &a.id, prof)?;
             let credential = issue(tx, "worker", Some(&a.run), Some(&a.id), None, a.epoch)?;
             let memory = memory_snapshot(tx, &r.id, &t.contract.memory_topics, 32000)?;
             effect(
@@ -953,7 +974,7 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
                 "run cancelled"
             );
             ensure!(
-                resource.runtime == r.policy.profiles[&a.profile].runtime,
+                resource.runtime == super::run_profiles::assigned(tx, &a.id)?.runtime,
                 "runtime mismatch"
             );
             uuid::Uuid::parse_str(&resource.session)?;

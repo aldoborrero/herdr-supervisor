@@ -572,3 +572,42 @@ fn operator_created_task_and_dependency_changes_wake_coordinator_once_each() {
         );
     }
 }
+
+#[test]
+fn run_profiles_owner_update_is_visible_and_notifies_coordinator_once() {
+    let mut f = Fixture::new();
+    bind(&mut f, endpoint());
+    let run: Run = document(&f.store.connection, "runs", &f.run).unwrap();
+    let req = request(
+        &f.owner,
+        Mutation::SetProfile {
+            run: f.run.clone(),
+            expected_revision: run.revision,
+            name: "new".into(),
+            profile: Some(Profile {
+                runtime: "pi".into(),
+                argv: vec![],
+                limit: 1,
+            }),
+        },
+    );
+    f.store.apply(&req).unwrap();
+    assert_eq!(coordinator::collect(&mut f.store).unwrap(), 1);
+    f.store.apply(&req).unwrap();
+    assert_eq!(coordinator::collect(&mut f.store).unwrap(), 0);
+    let owner = coordinator::context(&f.store, &f.owner, &f.run).unwrap();
+    let supervisor = coordinator::context(&f.store, &f.supervisor, &f.run).unwrap();
+    assert_eq!(owner["actor_role"], "owner");
+    assert_eq!(supervisor["actor_role"], "supervisor");
+    assert_eq!(
+        supervisor["run"]["policy"]["profiles"]["new"]["runtime"],
+        "pi"
+    );
+    assert!(
+        supervisor["notices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["kind"] == "set_profile")
+    );
+}

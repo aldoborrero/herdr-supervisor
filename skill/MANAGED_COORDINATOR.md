@@ -24,6 +24,9 @@ same ID and identical content. Read current revisions before new decisions.
    refresh after a conflict rather than silently rebasing an uncertain request.
 1. Dispatch a planned task with `dispatch`: task, expected_revision of the task,
    node and allowed profile. Node enrollment/profiles are owner configuration.
+   After a profile-change notice, reread current policy before dispatch. Existing
+   attempts retain their assigned profile snapshot; a removed name cannot be
+   used for new reservations. Your scoped credential cannot change profiles.
 1. After a code or artifact result, use `request_verification`: attempt and
    expected_revision of the task. For code, checks run on the actual combined
    Git candidate. For artifacts, checks run on verified copies of the sealed

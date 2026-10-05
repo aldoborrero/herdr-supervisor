@@ -973,6 +973,7 @@ enum Mode {
     List,
     Setup(Box<crate::managed_setup_form::Form>),
     TaskForm(Box<crate::managed_task_form::Form>),
+    ProfileForm(Box<crate::managed_profile_form::Form>),
     /// A scrollable text; `files` are selectable lines that open with ↵.
     Detail {
         title: String,
@@ -1593,6 +1594,26 @@ impl<'a> Popup<'a> {
                     editing,
                 },
             },
+            Mode::ProfileForm(mut form) => {
+                use crate::managed_profile_form::Outcome;
+                match form.key(key) {
+                    Ok(Outcome::Cancel) => Mode::List,
+                    Ok(Outcome::Stay) => Mode::ProfileForm(form),
+                    Ok(Outcome::Submit(submission)) => {
+                        if self.run(&submission.args, Some(&submission.request)) {
+                            self.scope = Some(form.slug.clone());
+                            self.message = "Run profile saved. Existing attempts keep their assigned settings.".into();
+                            Mode::List
+                        } else {
+                            Mode::ProfileForm(form)
+                        }
+                    }
+                    Err(error) => {
+                        self.message = error.to_string();
+                        Mode::ProfileForm(form)
+                    }
+                }
+            }
             Mode::TaskForm(mut form) => {
                 use crate::managed_task_form::Outcome;
                 match form.key(key) {
@@ -1932,6 +1953,38 @@ impl<'a> Popup<'a> {
                 return;
             }
             self.run(&["open".into(), slug], None);
+            return;
+        }
+        if (!doc["_profile_form"].is_null()
+            && matches!(key.code, KeyCode::Enter | KeyCode::Char('n')))
+            || (doc["_profile_name"].is_string() && key.code == KeyCode::Char('e'))
+        {
+            if doc["_view_read_only"] == true {
+                self.message = "State is stale; wait for the controller to reconnect".into();
+                return;
+            }
+            let name = doc["_profile_name"].as_str();
+            let context = if name.is_none() {
+                Some(&doc["_profile_form"])
+            } else {
+                self.rows.iter().find_map(|row| match &row.kind {
+                    RowKind::Managed {
+                        slug: owner,
+                        doc: context,
+                        ..
+                    } if owner == &slug && !context["_profile_form"].is_null() => {
+                        Some(&context["_profile_form"])
+                    }
+                    _ => None,
+                })
+            };
+            match context
+                .ok_or_else(|| anyhow::anyhow!("Profile editing requires current owner context"))
+                .and_then(|context| crate::managed_profile_form::Form::new(&slug, context, name))
+            {
+                Ok(form) => self.mode = Mode::ProfileForm(Box::new(form)),
+                Err(error) => self.message = error.to_string(),
+            }
             return;
         }
         if key.code == KeyCode::Char('e') && doc["_editable_task"] == true {
@@ -2540,6 +2593,65 @@ impl<'a> Popup<'a> {
         let body_top = 2;
         let body_height = height.saturating_sub(4);
         match &self.mode {
+            Mode::ProfileForm(form) => {
+                queue!(
+                    out,
+                    cursor::MoveTo(0, body_top as u16),
+                    SetAttribute(Attribute::Bold),
+                    Print(fit(
+                        &format!(
+                            " {} · {}{}",
+                            if form.editing() {
+                                "Edit profile"
+                            } else {
+                                "New profile"
+                            },
+                            form.slug,
+                            if form.frozen() {
+                                " · submission frozen"
+                            } else {
+                                ""
+                            }
+                        ),
+                        width
+                    )),
+                    SetAttribute(Attribute::Reset)
+                )?;
+                if body_height >= 4 {
+                    for (line, index) in form.visible(body_height - 3).enumerate() {
+                        let field = &form.fields[index];
+                        queue!(out, cursor::MoveTo(0, (body_top + 1 + line) as u16))?;
+                        if index == form.selected {
+                            queue!(out, SetAttribute(Attribute::Reverse))?;
+                        }
+                        queue!(
+                            out,
+                            Print(fit(
+                                &format!(
+                                    " {:<18} {}{}",
+                                    field.label,
+                                    crate::managed::display(&field.value),
+                                    if index == form.selected { "▏" } else { "" }
+                                ),
+                                width
+                            )),
+                            SetAttribute(Attribute::Reset)
+                        )?;
+                    }
+                }
+                if body_height >= 2 {
+                    queue!(
+                        out,
+                        cursor::MoveTo(0, (body_top + body_height - 1) as u16),
+                        SetAttribute(Attribute::Dim),
+                        Print(fit(
+                            &crate::managed::display(&form.fields[form.selected].hint),
+                            width
+                        )),
+                        SetAttribute(Attribute::Reset)
+                    )?;
+                }
+            }
             Mode::TaskForm(form) => {
                 queue!(
                     out,
@@ -2952,10 +3064,11 @@ impl<'a> Popup<'a> {
             Mode::List => format!(
                 "{}  N new supervised project  P project  / find  tab section  esc close",
                 match self.current().map(|r| &r.kind) {
+                    Some(RowKind::Managed { doc, .. }) if !doc["_profile_form"].is_null() && doc["_view_read_only"] != true => "↵/n new run profile  c coordinator".into(),
                     Some(RowKind::Managed { doc, .. }) if !doc["_task_form"].is_null() && doc["_view_read_only"] != true => "↵/n new task  c coordinator".into(),
                     Some(RowKind::Managed { actions, doc, .. }) => format!(
                         "↵ details  c coordinator  {}{}",
-                        if doc["_editable_task"] == true && doc["_view_read_only"] != true { "e edit task  " } else { "" },
+                        if doc["_editable_task"] == true && doc["_view_read_only"] != true { "e edit task  " } else if doc["_profile_name"].is_string() && doc["_view_read_only"] != true { "e edit profile  " } else { "" },
                         actions
                             .iter()
                             .map(|a| format!("{} {}", a.key, a.label))
@@ -2971,6 +3084,8 @@ impl<'a> Popup<'a> {
             Mode::Projects(_) => {
                 "↑↓ choose  ↵ switch  N new supervised project  / filter  esc close".into()
             }
+            Mode::ProfileForm(form) if form.frozen() => "↑↓/tab inspect  ↵ retry exact submission  esc return to inspect state".into(),
+            Mode::ProfileForm(_) => "↑↓/tab field  ←→ runtime  ↵ save profile  esc cancel".into(),
             Mode::TaskForm(form) if form.frozen() => "↑↓/tab inspect  ↵ retry exact submission  esc return to inspect state".into(),
             Mode::TaskForm(form) => format!("↑↓/tab field  ←→ result type  ↵ {} task  esc cancel", if form.editing() { "save" } else { "create" }),
             Mode::Setup(_) => {
@@ -3228,6 +3343,65 @@ fn run_popup(mut popup: Popup<'_>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_profiles_popup_fences_owner_edits_and_freezes_failures_and_removal_revision() {
+        use crate::managed_profile_form::tests::context;
+        let world = crate::scenarios::World::new();
+        let ctx = world.ctx();
+        let mut popup = Popup::new(&ctx, None, String::new());
+        popup.section = 4;
+        let mut denied = context();
+        denied["actor_role"] = serde_json::json!("supervisor");
+        let rows = crate::managed::panel_view(
+            "demo",
+            Section::Settings,
+            crate::managed_refresh::View::Current(denied),
+        );
+        assert!(!rows.iter().any(|row|matches!(&row.kind,RowKind::Managed {doc,..} if !doc["_profile_form"].is_null() || !doc["_profile_name"].is_null())));
+        popup.rows = crate::managed::panel_view(
+            "demo",
+            Section::Settings,
+            crate::managed_refresh::View::Stale(context(), "offline".into()),
+        );
+        popup.selected=popup.rows.iter().position(|row|matches!(&row.kind,RowKind::Managed {doc,..} if doc["_profile_name"]=="second")).unwrap();
+        popup.key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        assert!(matches!(popup.mode, Mode::List));
+        popup.rows = crate::managed::panel_view(
+            "demo",
+            Section::Settings,
+            crate::managed_refresh::View::Current(context()),
+        );
+        popup.selected=popup.rows.iter().position(|row|matches!(&row.kind,RowKind::Managed {doc,..} if doc["_profile_name"]=="second")).unwrap();
+        popup.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        let Mode::Confirm { action, .. } = &popup.mode else {
+            panic!("removal must be confirmed");
+        };
+        let request: serde_json::Value = serde_json::from_str(action.last().unwrap()).unwrap();
+        assert_eq!(request["params"]["name"], "second");
+        assert_eq!(request["params"]["expected_revision"], 7);
+        assert!(request["params"]["profile"].is_null());
+        popup.mode = Mode::List;
+        popup.key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        assert!(matches!(&popup.mode,Mode::ProfileForm(form) if form.editing()));
+        world.runner.on(
+            "managed apply",
+            crate::runner::fake::fail(1, "response lost"),
+        );
+        popup.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(&popup.mode,Mode::ProfileForm(form) if form.frozen()));
+        assert!(!popup.refresh_view());
+        popup.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let calls = world.runner.calls.borrow();
+        let requests = calls
+            .iter()
+            .filter(|c| c.display().contains("managed apply"))
+            .collect::<Vec<_>>();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].args, requests[1].args);
+        assert_eq!(requests[0].stdin, requests[1].stdin);
+        assert_eq!(world.runner.count("profile add"), 0);
+    }
 
     #[test]
     fn amend_task_popup_opens_existing_contract_and_refuses_edit_from_stale_view() {

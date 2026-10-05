@@ -15,6 +15,8 @@ mod herdr;
 mod inbox;
 mod lifecycle;
 mod managed;
+mod managed_form;
+mod managed_profile_form;
 mod managed_refresh;
 mod managed_setup;
 mod managed_setup_form;

@@ -1831,3 +1831,6 @@ mod artifacts_tests;
 
 #[path = "task_amend_tests.rs"]
 mod task_amend_tests;
+
+#[path = "run_profiles_tests.rs"]
+mod run_profiles_tests;

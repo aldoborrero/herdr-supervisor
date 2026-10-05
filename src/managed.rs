@@ -816,6 +816,37 @@ fn panel_rows(
                 )?);
             }
             add("Run objective and policy".into(), c["run"].clone(), actions);
+            let editable = c["actor_role"] == "owner"
+                && (c["run"]["state"] == "active" || c["run"]["state"] == "paused");
+            if editable {
+                add(
+                    "Create a run profile…".into(),
+                    json!({"_profile_form":{"run":c["run"],"actor_role":c["actor_role"]}}),
+                    vec![],
+                );
+            }
+            if let Some(profiles) = c["run"]["policy"]["profiles"].as_object() {
+                for (name, profile) in profiles {
+                    let mut doc = json!({"name":name,"profile":profile});
+                    let mut actions = vec![];
+                    if editable {
+                        doc["_profile_name"] = json!(name);
+                        if profiles.len() > 1 {
+                            actions.push(action('d',"remove profile",json!({"method":"set_profile","params":{"run":run,"expected_revision":c["run"]["revision"],"name":name,"profile":null}}),true)?);
+                        }
+                    }
+                    add(
+                        format!(
+                            "Profile {} · {} · limit {}",
+                            name,
+                            profile["runtime"].as_str().unwrap_or_default(),
+                            profile["limit"]
+                        ),
+                        doc,
+                        actions,
+                    );
+                }
+            }
             if let Some(recovery) = recovery_summary(c) {
                 add(recovery, c["repository_recovery"].clone(), vec![]);
             }

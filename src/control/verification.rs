@@ -34,18 +34,17 @@ pub(super) fn save(c: &Connection, i: &Integration) -> Result<()> {
 }
 
 pub(super) fn policy_hash(r: &Run, t: &Task) -> Result<String> {
-    Ok(digest(&serde_json::to_vec(
-        &json!({"policy":r.policy,"contract":t.contract_hash}),
-    )?))
+    super::run_profiles::policy_digest(&r.policy, &t.contract_hash)
 }
 
 pub(super) fn current(c: &Connection, i: &Integration) -> Result<(Run, Task)> {
     let r: Run = document(c, "runs", &i.run)?;
     let t: Task = document(c, "tasks", &i.task)?;
     ensure!(
-        t.contract_hash == i.contract_hash && policy_hash(&r, &t)? == i.policy_hash,
+        t.contract_hash == i.contract_hash,
         "candidate contract or policy changed"
     );
+    super::run_profiles::validate_policy(c, i, &r.policy)?;
     Ok((r, t))
 }
 
@@ -182,6 +181,7 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
                 "INSERT INTO integrations VALUES (?1,?2,?3,?4,'','preparing',?5)",
                 params![i.id, i.run, i.task, i.base_oid, serde_json::to_string(&i)?],
             )?;
+            super::run_profiles::remember_policy(tx, &i.id, &r.policy)?;
             t.state = "verifying".into();
             t.revision += 1;
             save_task(tx, &t)?;
@@ -288,6 +288,7 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
                     serde_json::to_string(&a)?
                 ],
             )?;
+            super::run_profiles::remember(tx, &a.id, prof)?;
             tx.execute(
                 "INSERT INTO review_assignments VALUES (?1,?2)",
                 params![a.id, i.id],

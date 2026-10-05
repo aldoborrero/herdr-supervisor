@@ -1198,7 +1198,7 @@ fn migration_preserves_v2_authority_credentials_and_operation_replays() {
         .query_row("SELECT count(*) FROM journal", [], |r| r.get(0))
         .unwrap();
     // Restore the actual v2 schema, retaining the authoritative rows and signed outbox.
-    f.store.connection.execute_batch("DROP TABLE coordinator_processes; DROP TABLE coordinator_launches; DROP TABLE coordinator_notices; DROP TABLE coordinator_routes; DROP TABLE verification_worktrees; DROP TABLE check_runs; DROP TABLE review_assignments; DROP TABLE repository_bindings; DROP INDEX active_integration; DROP TABLE artifact_chunks; DROP TABLE artifact_uploads; DROP TABLE reception_failures; PRAGMA user_version=2;").unwrap();
+    f.store.connection.execute_batch("DROP TABLE coordinator_processes; DROP TABLE coordinator_launches; DROP TABLE coordinator_notices; DROP TABLE coordinator_routes; DROP TABLE verification_worktrees; DROP TABLE check_runs; DROP TABLE review_assignments; DROP TABLE repository_bindings; DROP INDEX active_integration; DROP TABLE integration_policies; DROP TABLE attempt_profiles; DROP TABLE artifact_chunks; DROP TABLE artifact_uploads; DROP TABLE reception_failures; PRAGMA user_version=2;").unwrap();
     let state = f.store.dir.clone();
     f.store = Store::open(&state).unwrap();
     assert_eq!(f.store.snapshot(&f.supervisor, &f.run).unwrap(), before);
@@ -1421,4 +1421,103 @@ async fn assigned_reviewer_uses_signed_node_transport_and_receives_controller_re
             .query_row("SELECT count(*) FROM reviews", [], |r| r.get(0))
             .unwrap();
     assert_eq!(rows, 1);
+}
+
+#[test]
+fn run_profiles_updates_preserve_migrated_check_receipts_and_inflight_reviewer_but_not_other_policy_changes()
+ {
+    let mut x = GitFixture::new("sha1", "true", true);
+    x.submit();
+    let i = x.request();
+    let checked = x.advance(&i.id);
+    let receipt: String =
+        x.f.store
+            .connection
+            .query_row(
+                "SELECT doc FROM check_runs WHERE integration=?1",
+                [&i.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+    // Upgrade a genuine v7 candidate without changing its old evidence hash.
+    x.f.store
+        .connection
+        .execute_batch(
+            "DROP TABLE attempt_profiles; DROP TABLE integration_policies; PRAGMA user_version=7;",
+        )
+        .unwrap();
+    x.f.store = Store::open(&x.f.store.dir).unwrap();
+    let (reviewer, token) = x.reviewer(&checked);
+    let run: Run = document(&x.f.store.connection, "runs", &x.f.run).unwrap();
+    call(
+        &mut x.f.store,
+        &x.f.owner,
+        Mutation::SetProfile {
+            run: x.f.run.clone(),
+            expected_revision: run.revision,
+            name: "auto".into(),
+            profile: Some(Profile {
+                runtime: "pi".into(),
+                argv: vec!["--model".into(), "future-model".into()],
+                limit: 2,
+            }),
+        },
+    );
+    assert_eq!(
+        crate::control::run_profiles::assigned(&x.f.store.connection, &reviewer.id)
+            .unwrap()
+            .runtime,
+        "codex"
+    );
+    x.review(&checked, &reviewer, &token, true);
+    let current = verification::integration(&x.f.store.connection, &i.id).unwrap();
+    assert_eq!(current.policy_hash, checked.policy_hash);
+    assert_eq!(
+        x.f.store
+            .connection
+            .query_row(
+                "SELECT doc FROM check_runs WHERE integration=?1",
+                [&i.id],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        receipt
+    );
+    verification::gates(&x.f.store.connection, &current).unwrap();
+    let run: Run = document(&x.f.store.connection, "runs", &x.f.run).unwrap();
+    for field in 0..3 {
+        let mut changed = run.clone();
+        match field {
+            0 => changed.policy.require_review = false,
+            1 => {
+                changed
+                    .policy
+                    .checks
+                    .insert("test".into(), vec!["false".into()]);
+            }
+            _ => changed.policy.max_active += 1,
+        }
+        save_run(&x.f.store.connection, &changed).unwrap();
+        assert!(
+            verification::gates(&x.f.store.connection, &current)
+                .unwrap_err()
+                .to_string()
+                .contains("verification policy changed")
+        );
+    }
+    save_run(&x.f.store.connection, &run).unwrap();
+    call(
+        &mut x.f.store,
+        &x.f.supervisor,
+        Mutation::ApplyIntegration {
+            integration: current.id.clone(),
+            expected_revision: current.revision,
+        },
+    );
+    let applied = x.advance(&current.id);
+    assert_eq!(applied.state, "applied");
+    assert_eq!(
+        git(&x.repo, &["rev-parse", &x.reference()]),
+        current.candidate_oid.unwrap()
+    );
 }

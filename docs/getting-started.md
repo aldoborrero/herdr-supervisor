@@ -82,7 +82,13 @@ Open the **Tasks** section and select **Create a task…** (Enter or `n`). This 
 
 Enter creates the task through `managed apply`. It does not dispatch an agent. The request retains the run revision captured when the form opened, so a concurrent change may require returning to the refreshed task list and opening a new form. Controller errors keep the submitted form visible. Once submitted, its request is frozen: Enter retries exactly the same operation and Escape returns to inspect current state. Do not interpret Escape as cancelling a request that the controller may already have accepted. After an uncertain response, inspect the task list before intentionally creating another task.
 
-The form writes its JSON request to CLI stdin, so large instructions do not become one oversized process argument. Select a **planned** task and press **e** to edit its contract and complete dependency list. The form preserves its existing fields and captures that task's revision. Saving uses the same frozen-retry behavior as creation. Editing run profiles remains pending.
+The form writes its JSON request to CLI stdin, so large instructions do not become one oversized process argument. Select a **planned** task and press **e** to edit its contract and complete dependency list. The form preserves its existing fields and captures that task's revision. Saving uses the same frozen-retry behavior as creation. Run profiles can be managed from Settings as described below.
+
+## Choose profiles for future agents
+
+With an owner credential, open **Settings** and select **Create a run profile…**. Choose Codex, Claude or Pi, enter model arguments as a JSON list (for example `["--model","MODEL"]`) and set the maximum active attempts for that name. Press **e** on a profile to edit it, or **d** to confirm removal. You must retain at least one profile. Supervisor credentials can inspect profiles but cannot edit them.
+
+Changes affect the next reservations; existing agents keep their assigned settings. Reducing a limit does not terminate agents. The form retains the run revision and freezes submitted requests for exact retries, just like task entry. See [profile operations](operations.md#edit-run-profiles) for API, migration and verification behavior.
 
 ## Start the coordinator when ready
 

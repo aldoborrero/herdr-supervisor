@@ -491,7 +491,7 @@ fn schema_four_migration_preserves_active_coordinator_routes_and_memory() {
         },
     );
     let before = coordinator::context(&f.store, &cap, &f.run).unwrap();
-    f.store.connection.execute_batch("DROP TABLE coordinator_processes; DROP TABLE coordinator_launches; DROP TABLE artifact_chunks; DROP TABLE artifact_uploads; DROP TABLE reception_failures; PRAGMA user_version=4;").unwrap();
+    f.store.connection.execute_batch("DROP TABLE coordinator_processes; DROP TABLE coordinator_launches; DROP TABLE integration_policies; DROP TABLE attempt_profiles; DROP TABLE artifact_chunks; DROP TABLE artifact_uploads; DROP TABLE reception_failures; PRAGMA user_version=4;").unwrap();
     f.store = Store::open(&f.store.dir).unwrap();
     let after = coordinator::context(&f.store, &cap, &f.run).unwrap();
     assert_eq!(after["native_coordinator"], before["native_coordinator"]);
@@ -606,4 +606,33 @@ fn relative_controller_state_keeps_absolute_coordinator_home_and_capability_path
     assert_eq!(store.dir, std::fs::canonicalize(&relative).unwrap());
     assert_eq!(Store::open(&relative).unwrap().dir, store.dir);
     assert!(coordinator::credential_path(&store.dir, "run", 1).is_absolute());
+}
+
+#[test]
+fn run_profiles_changes_preserve_coordinator_launch_snapshot() {
+    let mut f = Fixture::new();
+    let cfg = config(&f);
+    let launch = start(&mut f, cfg);
+    let before = plan(&f, &launch);
+    let run: Run = document(&f.store.connection, "runs", &f.run).unwrap();
+    call(
+        &mut f.store,
+        &f.owner,
+        Mutation::SetProfile {
+            run: f.run.clone(),
+            expected_revision: run.revision,
+            name: "auto".into(),
+            profile: Some(Profile {
+                runtime: "pi".into(),
+                argv: vec!["--model".into(), "future".into()],
+                limit: 1,
+            }),
+        },
+    );
+    let after = plan(&f, &launch);
+    assert_eq!(before.profile, after.profile);
+    assert_eq!(after.profile.runtime, "codex");
+    assert_eq!(before.expected_session, after.expected_session);
+    assert_eq!(before.credential, after.credential);
+    assert!(!after.launch_started);
 }

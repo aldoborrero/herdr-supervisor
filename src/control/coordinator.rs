@@ -198,7 +198,7 @@ pub fn collect(store: &mut Store) -> Result<usize> {
             r.get(0)
         })?;
         let entries: Vec<(i64, String, String)> = {
-            let mut q=tx.prepare("SELECT sequence,kind,aggregate_id FROM journal WHERE sequence>?1 AND sequence<=?2 AND kind IN ('submit_result','submit_review','submit_artifact_review','checks_completed','conflict','checks_failed','invalid_result','stale_base','integration_applied','observe_stopped','propose_memory','approve_memory','withdraw_memory','cancel','pause','resume','retry_task','amend_task','create_task','add_dependency') AND (aggregate_id=?3 OR aggregate_id IN (SELECT id FROM tasks WHERE run=?3) OR aggregate_id IN (SELECT id FROM attempts WHERE run=?3) OR aggregate_id IN (SELECT id FROM integrations WHERE run=?3) OR aggregate_id IN (SELECT id FROM memory_proposals WHERE run=?3) OR json_extract(doc,'$.params.run')=?3 OR json_extract(doc,'$.run')=?3) ORDER BY sequence LIMIT 100")?;
+            let mut q=tx.prepare("SELECT sequence,kind,aggregate_id FROM journal WHERE sequence>?1 AND sequence<=?2 AND kind IN ('submit_result','submit_review','submit_artifact_review','checks_completed','conflict','checks_failed','invalid_result','stale_base','integration_applied','observe_stopped','propose_memory','approve_memory','withdraw_memory','cancel','pause','resume','retry_task','amend_task','create_task','add_dependency','set_profile') AND (aggregate_id=?3 OR aggregate_id IN (SELECT id FROM tasks WHERE run=?3) OR aggregate_id IN (SELECT id FROM attempts WHERE run=?3) OR aggregate_id IN (SELECT id FROM integrations WHERE run=?3) OR aggregate_id IN (SELECT id FROM memory_proposals WHERE run=?3) OR json_extract(doc,'$.params.run')=?3 OR json_extract(doc,'$.run')=?3) ORDER BY sequence LIMIT 100")?;
             q.query_map(params![cursor, end, run], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?))
             })?
@@ -226,6 +226,7 @@ pub fn context(store: &Store, token: &str, run: &str) -> Result<Value> {
     let p = store::authenticate(&store.connection, token)?;
     supervise(&p, run)?;
     let mut snapshot = store.snapshot(token, run)?;
+    snapshot["actor_role"] = json!(p.role);
     let mut q=store.connection.prepare("SELECT n.id,n.max_active,(SELECT count(*) FROM attempts a WHERE a.node=n.id AND a.active=1) FROM nodes n WHERE n.active=1 ORDER BY n.id")?;
     let nodes:Vec<Value>=q.query_map([],|r|Ok(json!({"id":r.get::<_,String>(0)?,"max_active":r.get::<_,u32>(1)?,"active_attempts":r.get::<_,u32>(2)?})))?.collect::<rusqlite::Result<_>>()?;
     snapshot["nodes"] = json!(nodes);

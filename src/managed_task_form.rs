@@ -6,11 +6,7 @@ use std::collections::BTreeSet;
 
 use crate::control::model::{Contract, Mutation, Run, Task, identifier};
 
-pub struct Field {
-    pub label: &'static str,
-    pub value: String,
-    pub hint: String,
-}
+use crate::managed_form::{Field, Submission};
 
 pub struct Form {
     pub slug: String,
@@ -20,12 +16,6 @@ pub struct Form {
     edit: Option<(String, u64)>,
     dependencies: BTreeSet<String>,
     submitted: Option<Submission>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Submission {
-    pub args: Vec<String>,
-    pub request: String,
 }
 
 pub enum Outcome {
@@ -219,25 +209,7 @@ impl Form {
                 dependencies,
             }
         };
-        ensure!(
-            serde_json::to_vec(&command)?.len() <= 300000,
-            "Task request exceeds the managed API document limit"
-        );
-        let mut args = crate::managed::Action {
-            key: 'n',
-            label: "create task",
-            command,
-            confirm: false,
-        }
-        .args(&self.slug)?;
-        // A contract can exceed the OS per-argument limit. Keep JSON on stdin.
-        let request = args.pop().context("task request missing")?;
-        ensure!(
-            args.pop().as_deref() == Some("--request-json"),
-            "unexpected managed argument shape"
-        );
-        args.extend(["--request".into(), "-".into()]);
-        let submission = Submission { args, request };
+        let submission = Submission::new(&self.slug, &command)?;
         self.submitted = Some(submission.clone());
         Ok(submission)
     }

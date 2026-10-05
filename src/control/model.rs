@@ -337,6 +337,13 @@ pub enum Mutation {
         objective: String,
         policy: Policy,
     },
+    SetProfile {
+        run: String,
+        expected_revision: u64,
+        name: String,
+        #[serde(deserialize_with = "Option::deserialize")]
+        profile: Option<Profile>,
+    },
     BindSupervisor {
         run: String,
         expected_revision: u64,
