@@ -51,7 +51,9 @@ See [operations](docs/operations.md) for the request shape, node enrollment and 
 | Claude Code | Explicit development-channel opt-in; assigned UUID; mailer's MCP channel bridge | Channel write; Claude provides no delivery ACK |
 | Pi | Assigned UUID; mailer's extension and `sendMessage` | API submission; not model completion |
 
-A worker receives its assignment only after the controller accepts the exact resource binding. Its private API/CLI/MCP permits reading its contract and selected memory, reporting readiness/results, proposing memory and inspecting its own event receipts. A reviewer receives the exact candidate and reports criterion-by-criterion findings through the same scoped transport. Neither role can dispatch agents, approve memory or alter run policy.
+A worker receives its assignment only after the controller accepts the exact resource binding. Its private API/CLI/MCP permits reading its contract and selected memory, reporting readiness/results, uploading bounded artifacts, proposing memory and inspecting its own event receipts. A reviewer receives the exact candidate and reports criterion-by-criterion findings through the same scoped transport. Neither role can dispatch agents, approve memory or alter run policy.
+
+Authors can upload binary artifacts with resumable chunk operations and inspect controller-verified content hashes. Results seal an attempt/contract-bound manifest. Artifact contract checks and independent acceptance remain in development; see [artifact operations](docs/operations.md#artifact-content-and-immutable-results).
 
 An existing native coordinator session on the controller host can be attached with `control connect-supervisor`. It receives durable notices through mailer and reads current state through `control context` or `supervisor_context`. Replacing it revokes its previous capability; pending notices never change recipients. See [coordinator setup](docs/operations.md#connect-a-native-coordinator).
 

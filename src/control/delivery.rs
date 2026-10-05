@@ -68,7 +68,7 @@ pub fn terminal(c: &Connection, queue: Queue, id: &str, expired: bool) -> Result
 pub fn controller_due(c: &Connection) -> Result<Vec<(String, String)>> {
     // Internal controller effects belong to their own executors, not this relay.
     c.execute("UPDATE outbox SET state='expired',available_at=0,last_error='delivery validity expired; application outcome is not established' WHERE target<>'controller' AND state='pending' AND expires_at<=?1",[now()])?;
-    let mut q=c.prepare("SELECT o.id,o.target FROM outbox o JOIN nodes n ON n.id=o.target AND n.active=1 WHERE o.state='pending' AND o.available_at<=?1 AND o.expires_at>?1 ORDER BY o.available_at,o.rowid LIMIT 16")?;
+    let mut q=c.prepare("SELECT o.id,o.target FROM outbox o JOIN nodes n ON n.id=o.target AND n.active=1 WHERE o.state='pending' AND o.available_at<=?1 AND o.expires_at>?1 ORDER BY (o.kind='cancel') DESC,o.available_at,o.rowid LIMIT 16")?;
     Ok(q.query_map([now()], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<std::result::Result<_, _>>()?)
 }

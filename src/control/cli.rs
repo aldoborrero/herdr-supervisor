@@ -247,6 +247,16 @@ enum ControlCommand {
 
 #[derive(Subcommand)]
 enum WorkerAction {
+    /// Queue a bounded local file as immutable, resumable artifact chunks
+    UploadArtifact {
+        name: String,
+        file: PathBuf,
+    },
+    /// Inspect controller verification of the exact uploaded content
+    ArtifactStatus {
+        name: String,
+        sha256: String,
+    },
     /// Declare that you read this exact current memory version
     AcknowledgeMemory {
         version: u64,
@@ -434,6 +444,27 @@ pub fn run(args: ControlArgs) -> Result<()> {
                         attempt,
                         epoch,
                         version,
+                    }
+                }
+                WorkerAction::UploadArtifact { name, file } => {
+                    let result = super::artifacts::upload(
+                        &args.state,
+                        &token,
+                        &attempt,
+                        epoch,
+                        &name,
+                        &file,
+                    )?;
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                    return Ok(());
+                }
+                WorkerAction::ArtifactStatus { name, sha256 } => {
+                    super::worker::WorkerRequest::ArtifactStatus {
+                        token,
+                        attempt,
+                        epoch,
+                        name,
+                        sha256,
                     }
                 }
                 WorkerAction::Context => super::worker::WorkerRequest::Context {

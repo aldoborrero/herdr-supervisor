@@ -488,7 +488,9 @@ pub fn advance(
                 review.candidate_oid, review.base_oid, review.integration, review.checks_digest
             )
         } else {
-            "Execute only the assigned contract. Submit a result with its exact contract_hash and commit/artifact hashes; do not integrate or decide other tasks. You may propose memory with evidence; approval belongs to the supervisor.".into()
+            format!(
+                "Execute only the assigned contract. Submit a result with its exact contract_hash and commit/artifact hashes; do not integrate or decide other tasks. Upload any artifact with: {prefix} upload-artifact NAME FILE . Inspect {prefix} artifact-status NAME SHA256 until content_verified is true before referencing it in artifacts. An artifact contract uses commit:null and a name-to-SHA256 map. Verified content is not task approval. You may propose memory with evidence; approval belongs to the supervisor."
+            )
         };
         let body = format!(
             "Read your immutable assignment and selected memory with: {prefix} context\nReport readiness using worker apply with method worker_ready, attempt {attempt}, epoch {epoch}, session {} and a stable operation ID. {assignment} Use {prefix} receipt EVENT to distinguish queued from controller-applied. Worker apply accepts --operation ID --request JSON_FILE.",

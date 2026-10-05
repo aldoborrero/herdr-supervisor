@@ -266,6 +266,11 @@ pub struct CriterionReview {
     deny_unknown_fields
 )]
 pub enum Mutation {
+    PutArtifact {
+        attempt: String,
+        epoch: u64,
+        chunk: super::artifacts::Chunk,
+    },
     BindCoordinator {
         run: String,
         expected_revision: u64,

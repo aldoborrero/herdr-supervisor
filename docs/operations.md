@@ -177,7 +177,7 @@ A node's broker ACL must prevent publishing to other nodes' command subjects and
 
 ## Outgoing delivery and retries
 
-Each relay reads incoming records before attempting outgoing publication. A denied destination or an expired outgoing record therefore does not prevent reading new commands/results. Outgoing selection is ordered by due time and limited to 16 records per cycle. Network publication has a three-second budget for the batch and a maximum of two seconds per attempt; SQLite locking and incoming broker calls have their own timeouts.
+Each relay reads incoming records before attempting outgoing publication. A denied destination or an expired outgoing record therefore does not prevent reading new commands/results. Outgoing selection is limited to 16 records per cycle. Due controller cancellation commands have priority over other deliveries; within that priority it is ordered by due time. Bulk artifact receipts cannot consume all positions ahead of a due cancellation. Network publication has a three-second budget for the batch and a maximum of two seconds per attempt; SQLite locking and incoming broker calls have their own timeouts.
 
 The relay persists the attempt count and next retry time before publishing. Failures retain a delay of 2, 4, 8, 16, 32 and then at most 60 seconds, including across restarts. A process that dies during publication leaves that reservation in place. The signed bytes, message ID, author and expiry remain frozen; losing the SQLite publication receipt causes an idempotent retry, not a new operation. Broker storage is still distinct from controller application or a native/model result.
 
@@ -333,6 +333,36 @@ For one explicit reconciliation, the owner can use `control verify --credential 
 If Git advances but the SQLite receipt fails, a later reconciliation recognizes the exact candidate at the owned ref and records the existing effect. It does not apply it a second time. Keep the controller's integration refs reserved for this service: independent Git clients do not participate in its SQLite lock.
 
 This pipeline currently supports `code` contracts. Artifact verification, abandoning an uncertain in-flight verifier and conservative worktree cleanup remain pending. Repair dispatch and reviewer replacement use the explicit lifecycle decisions above. A submitted review or integrated task does not prove that either runtime has stopped.
+
+## Artifact content and immutable results
+
+Ready authors can upload binary files through their scoped node API. The same private NATS protocol carries these bytes to the controller; no shared filesystem, worker-supplied URL or synthetic Git commit is required for content submission. This is the **content and result-sealing layer**. Running contract checks on artifact snapshots, distributing those snapshots to independent reviewers and accepting an artifact task remain pending. `request_verification` still rejects `artifact` contracts; content verification alone never marks a task complete.
+
+Using the worker prefix supplied at bootstrap:
+
+```bash
+herdr-supervisor control --state NODE_DIR worker \
+  --credential WORKER_TOKEN --attempt ATTEMPT --epoch EPOCH \
+  upload-artifact report.pdf ./report.pdf
+```
+
+The CLI reads a regular, non-symlink file into a bounded snapshot and queues 16 KiB chunks with deterministic operation IDs. Files may contain arbitrary bytes, including an empty file. Each chunk carries the filename, lowercase SHA-256 of the complete file, total byte size and zero-based index. Names are flat ASCII filenames, at most 100 characters, starting with a letter or digit; dots, underscores and hyphens are allowed after that. Paths, leading dots and directory traversal are rejected.
+
+Limits are 8 MiB per file, 32 files and 32 MiB of declared file content per attempt. The controller reserves the declared size when the first chunk for a filename arrives, so incomplete uploads cannot evade the quota. These are logical content limits: the private signed event/inbox history and SQLite WAL also consume storage. Filenames and chunks are immutable within an attempt. Different bytes, sizes or hashes under an existing name are rejected; changing a file requires another name within the quota or a new attempt.
+
+Repeating the CLI command with the same filename and bytes resumes the same operations and event IDs. It retries an occupied execution fence for up to a two-second retry window. Other errors, including an ambiguous IPC reply, are returned; the same command can be resumed without a new logical upload. It refuses a file that is itself a symlink, FIFO or device. An upload response reports queueing, not controller verification. Inspect the exact hash returned by the upload:
+
+```bash
+herdr-supervisor control --state NODE_DIR worker \
+  --credential WORKER_TOKEN --attempt ATTEMPT --epoch EPOCH \
+  artifact-status report.pdf SHA256
+```
+
+`content_verified: true` requires an authoritative controller receipt after checking the full SHA-256; `task_accepted` remains false. The status command reads authorization and receipts from one SQLite snapshot and can run while the executor holds its mutation fence. Retired/foreign worker credentials are rejected. MCP offers `worker_artifact_status` with `name` and `sha256`; `worker_apply` supports `put_artifact` with `attempt`, `epoch` and `chunk` (`name`, `sha256`, `size`, `index`, byte-array `data`). The CLI performs this chunking automatically. Reviewers cannot upload author artifacts.
+
+After verification, an `artifact` result uses `commit: null` and an `artifacts` map such as `{"report.pdf":"<sha256>"}`. The controller rehashes stored chunks while sealing the immutable result, binds a version-1 manifest to the exact attempt/contract, and records its manifest hash. Missing chunks, unuploaded hashes or corrupted stored content prevent result submission. A result arriving before its chunks uses the durable rejected-delivery queue and can succeed later after all prerequisites arrive. Code results may also reference uploaded attachments; existing commit verification remains required.
+
+Controller schema 7 adds `artifact_uploads` and `artifact_chunks`; node schema stays 6 and uses its existing signed event outbox. Upload, application receipt and audit metadata commit in the ordinary controller transaction. The journal stores chunk size and SHA-256 instead of duplicating file bytes. Raw signed records and file chunks remain private SQLite state. None of these receipts proves that a model read an artifact or that an independent reviewer approved it.
 
 ## Memory
 

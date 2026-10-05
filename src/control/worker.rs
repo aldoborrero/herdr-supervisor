@@ -36,6 +36,13 @@ impl Access {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkerRequest {
+    ArtifactStatus {
+        token: String,
+        attempt: String,
+        epoch: u64,
+        name: String,
+        sha256: String,
+    },
     AcknowledgeMemory {
         token: String,
         attempt: String,
@@ -93,9 +100,31 @@ fn authorized(
 }
 
 pub fn handle(store: &mut NodeStore, identity: &Identity, request: WorkerRequest) -> Result<Value> {
-    let _lease = super::api::lock(&store.dir, "execution.lock")?;
+    let _lease = if matches!(&request, WorkerRequest::ArtifactStatus { .. }) {
+        None
+    } else {
+        Some(super::api::lock(&store.dir, "execution.lock")?)
+    };
     store.grant.verify(jiff::Timestamp::now().as_second())?;
     match request {
+        WorkerRequest::ArtifactStatus {
+            token,
+            attempt,
+            epoch,
+            name,
+            sha256,
+        } => {
+            // Authorization and receipt projection share one read snapshot.
+            let tx = store.connection.unchecked_transaction()?;
+            let (order, _) = authorized(store, &token, &attempt, Some(epoch))?;
+            ensure!(
+                order.attempt.role == "worker",
+                "artifact upload status belongs to the author"
+            );
+            let result = super::artifacts::status(&tx, &token, &attempt, &name, &sha256)?;
+            tx.commit()?;
+            Ok(result)
+        }
         WorkerRequest::AcknowledgeMemory {
             token,
             attempt,
@@ -122,7 +151,8 @@ pub fn handle(store: &mut NodeStore, identity: &Identity, request: WorkerRequest
         } => {
             identifier(&operation_id)?;
             let (attempt, epoch) = match command.as_ref() {
-                Mutation::WorkerReady { attempt, epoch, .. }
+                Mutation::PutArtifact { attempt, epoch, .. }
+                | Mutation::WorkerReady { attempt, epoch, .. }
                 | Mutation::SubmitResult { attempt, epoch, .. }
                 | Mutation::SubmitReview { attempt, epoch, .. } => (attempt, Some(*epoch)),
                 Mutation::ProposeMemory {
@@ -130,10 +160,19 @@ pub fn handle(store: &mut NodeStore, identity: &Identity, request: WorkerRequest
                     ..
                 } => (attempt, None),
                 _ => {
-                    bail!("workers may only report readiness, results, reviews or memory proposals")
+                    bail!(
+                        "workers may only upload artifacts or report readiness, results, reviews or memory proposals"
+                    )
                 }
             };
             let (order, _) = authorized(store, &token, attempt, epoch)?;
+            if let Mutation::PutArtifact { chunk, .. } = command.as_ref() {
+                ensure!(
+                    order.attempt.role == "worker",
+                    "reviewers cannot upload author artifacts"
+                );
+                chunk.validate()?;
+            }
             if let Mutation::ProposeMemory { run, .. } = command.as_ref() {
                 ensure!(run == &order.attempt.run, "foreign memory scope");
             }
@@ -211,9 +250,10 @@ pub fn mcp(
             }
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({"tools":[
+                {"name":"worker_artifact_status","description":"Inspect your upload's controller content-verification receipts. Content verification is not task acceptance.","inputSchema":{"type":"object","properties":{"name":{"type":"string"},"sha256":{"type":"string"}},"required":["name","sha256"],"additionalProperties":false}},
                 {"name":"worker_context","description":"Read your immutable assignment memory and current_memory (latest replicated approved snapshot and version).","inputSchema":{"type":"object","properties":{},"additionalProperties":false}},
                 {"name":"worker_acknowledge_memory","description":"Declare that you read the exact current memory version. Delivery alone does not acknowledge it.","inputSchema":{"type":"object","properties":{"version":{"type":"integer","minimum":0}},"required":["version"],"additionalProperties":false}},
-                {"name":"worker_apply","description":"Queue readiness, an author result, an assigned review or a memory proposal with a stable operation_id. Queueing is not controller acceptance; inspect the receipt.","inputSchema":{"type":"object","properties":{"operation_id":{"type":"string"},"command":{"type":"object"}},"required":["operation_id","command"],"additionalProperties":false}},
+                {"name":"worker_apply","description":"Queue an artifact chunk, readiness, an author result, an assigned review or a memory proposal with a stable operation_id. Queueing is not controller acceptance; inspect the receipt.","inputSchema":{"type":"object","properties":{"operation_id":{"type":"string"},"command":{"type":"object"}},"required":["operation_id","command"],"additionalProperties":false}},
                 {"name":"worker_receipt","description":"Read controller application receipt for your event.","inputSchema":{"type":"object","properties":{"event":{"type":"string"}},"required":["event"],"additionalProperties":false}}
             ]})),
             "tools/call" => {
@@ -224,6 +264,13 @@ pub fn mcp(
                         attempt: attempt.into(),
                         epoch,
                         version: args["version"].as_u64().context("memory version")?,
+                    },
+                    "worker_artifact_status" => WorkerRequest::ArtifactStatus {
+                        token: token.into(),
+                        attempt: attempt.into(),
+                        epoch,
+                        name: args["name"].as_str().context("artifact name")?.into(),
+                        sha256: args["sha256"].as_str().context("artifact hash")?.into(),
                     },
                     "worker_context" => WorkerRequest::Context {
                         token: token.into(),

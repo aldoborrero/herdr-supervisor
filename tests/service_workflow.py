@@ -7,6 +7,7 @@ Git, JetStream, worker IPC, wrappers, process termination and restart are real.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import shlex
@@ -654,6 +655,45 @@ class Fixture:
         assert current["current_memory"]["version"] == 2
         assert current["current_memory"]["snapshot"]["topics"] == {}
         assert current["current_memory"]["acknowledged_version"] == 1
+        evidence = self.root / "artifact-fixture.bin"
+        evidence_bytes = bytes(range(256)) * 65
+        evidence.write_bytes(evidence_bytes)
+        upload_args = [
+            "worker",
+            "--credential",
+            self.node / "workers" / author / "worker.token",
+            "--attempt",
+            author,
+            "--epoch",
+            "1",
+        ]
+        uploaded = self.cli(
+            self.node, *upload_args, "upload-artifact", "evidence.bin", evidence
+        )
+        assert uploaded["sha256"] == hashlib.sha256(evidence_bytes).hexdigest()
+        assert len(uploaded["events"]) == 2
+        assert not uploaded["content_verified"] and not uploaded["task_accepted"]
+        repeated = self.cli(
+            self.node, *upload_args, "upload-artifact", "evidence.bin", evidence
+        )
+        assert repeated["events"] == uploaded["events"]
+        verified = wait_for(
+            "artifact content reaches controller",
+            lambda: (
+                status
+                if (
+                    status := self.cli(
+                        self.node,
+                        *upload_args,
+                        "artifact-status",
+                        "evidence.bin",
+                        uploaded["sha256"],
+                    )
+                )["content_verified"]
+                else None
+            ),
+        )
+        assert not verified["task_accepted"]
         checkout = Path(self.spaces[author]["cwd"])
         (checkout / "feature.txt").write_text("implemented\n")
         self.git(checkout, "add", "feature.txt")

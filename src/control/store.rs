@@ -125,6 +125,7 @@ impl Store {
             4 => (),
             5 => (),
             6 => (),
+            7 => (),
             _ => bail!("unsupported controller schema {version}; no migration applied"),
         }
         if version <= 2 {
@@ -141,6 +142,9 @@ impl Store {
         }
         if version <= 5 {
             tx.execute_batch(super::reception::SCHEMA)?;
+        }
+        if version <= 6 {
+            tx.execute_batch(super::artifacts::SCHEMA)?;
         }
         tx.commit()?;
         Ok(Self {
@@ -261,7 +265,8 @@ impl Store {
                 );
                 attempt
             }
-            Mutation::WorkerReady { attempt, .. }
+            Mutation::PutArtifact { attempt, .. }
+            | Mutation::WorkerReady { attempt, .. }
             | Mutation::SubmitResult { attempt, .. }
             | Mutation::SubmitReview { attempt, .. } => {
                 ensure!(
@@ -491,7 +496,16 @@ fn apply_transaction(tx: &Transaction<'_>, request: &Request) -> Result<Value> {
             serde_json::to_string(&response)?
         ],
     )?;
-    tx.execute("INSERT INTO journal(principal,operation,aggregate_id,kind,doc,created) VALUES (?1,?2,?3,?4,?5,?6)", params![principal.id, request.operation_id, response.get("id").and_then(Value::as_str).unwrap_or(""), serde_json::to_value(&request.command)?["method"].as_str().unwrap_or(""), serde_json::to_string(&request.command)?, now()])?;
+    let mut audit = serde_json::to_value(&request.command)?;
+    if let Mutation::PutArtifact { chunk, .. } = &request.command {
+        let item = audit["params"]["chunk"]
+            .as_object_mut()
+            .context("artifact audit document")?;
+        item.remove("data");
+        item.insert("chunk_sha256".into(), json!(digest(&chunk.data)));
+        item.insert("chunk_bytes".into(), json!(chunk.data.len()));
+    }
+    tx.execute("INSERT INTO journal(principal,operation,aggregate_id,kind,doc,created) VALUES (?1,?2,?3,?4,?5,?6)", params![principal.id, request.operation_id, response.get("id").or_else(||response.get("attempt")).and_then(Value::as_str).unwrap_or(""), audit["method"].as_str().unwrap_or(""), serde_json::to_string(&audit)?, now()])?;
     Ok(response)
 }
 
@@ -960,6 +974,11 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
             save_attempt(tx, &a)?;
             Ok(serde_json::to_value(a)?)
         }
+        Mutation::PutArtifact {
+            attempt,
+            epoch,
+            chunk,
+        } => super::artifacts::put(tx, p, attempt, *epoch, chunk),
         Mutation::SubmitResult {
             attempt,
             epoch,
@@ -989,18 +1008,16 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
                 oid(commit.as_deref().context("code result needs commit")?)?;
             } else {
                 ensure!(
-                    !artifacts.is_empty(),
-                    "artifact result needs content hashes"
+                    !artifacts.is_empty() && commit.is_none(),
+                    "artifact result requires content and no synthetic code commit"
                 );
             }
-            for (name, hash) in artifacts {
-                identifier(name)?;
-                ensure!(
-                    hash.len() == 64 && hash.bytes().all(|c| c.is_ascii_hexdigit()),
-                    "invalid artifact hash"
-                );
-            }
-            let result = json!({"id":attempt,"task":a.task,"contract_hash":contract_hash,"commit":commit,"artifacts":artifacts,"summary":summary,"author":p.id});
+            let manifest = super::artifacts::seal(tx, &a, artifacts)?;
+            let manifest_hash = manifest
+                .as_ref()
+                .map(|m| serde_json::to_vec(m).map(|b| digest(&b)))
+                .transpose()?;
+            let result = json!({"id":attempt,"task":a.task,"contract_hash":contract_hash,"commit":commit,"artifacts":artifacts,"artifact_manifest":manifest,"artifact_manifest_hash":manifest_hash,"summary":summary,"author":p.id});
             tx.execute(
                 "INSERT INTO results VALUES (?1,?2,?3,?4,?5)",
                 params![
