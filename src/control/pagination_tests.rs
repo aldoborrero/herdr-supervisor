@@ -124,6 +124,29 @@ async fn paginated_context_preserves_all_large_tasks_and_separates_growing_polic
     let checked=tokio::task::spawn_blocking(move || {
         assert!(api::call(&state,&api::ApiRequest::CoordinatorContext {token:token.clone(),run:run.clone()}).unwrap_err().to_string().contains("too large"));
         let overview=api::call(&state,&api::ApiRequest::CoordinatorOverview {token:token.clone(),run:run.clone()}).unwrap();
+        let credential = state.join("picker-token");
+        secret_file(&credential, token.as_bytes()).unwrap();
+        let binding = crate::managed::Binding { version: 1, controller: state.clone(), credential, run: run.clone(), launch_config: None };
+        let picker = binding.overview().unwrap();
+        assert!(picker.get("tasks").is_none());
+        assert!(serde_json::to_vec(&picker).unwrap().len() <= PAGE_BYTES);
+        assert!(crate::managed::summary(&picker).contains("32 tasks"));
+        let mut cache = crate::managed_refresh::Cache::default();
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            cache.poll();
+            match cache.overview("demo", Ok(binding.clone())) {
+                crate::managed_refresh::View::Current(value) => {
+                    assert_eq!(crate::managed::summary(&value), crate::managed::summary(&picker));
+                    assert!(value.get("tasks").is_none());
+                    break;
+                }
+                crate::managed_refresh::View::Loading => {},
+                other => panic!("unexpected picker state: {other:?}"),
+            }
+            assert!(std::time::Instant::now() < until);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
         let cursor=overview["collections"]["tasks"]["cursor"].clone();
         let input=format!("{}\n",json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"supervisor_page","arguments":{"run":run,"collection":"tasks","cursor":cursor,"limit":100}}}));
         let mut output=Vec::new();api::mcp(&state,&token,input.as_bytes(),&mut output).unwrap();

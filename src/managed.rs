@@ -104,6 +104,16 @@ pub fn binding(project: &Project) -> Result<Binding> {
 }
 
 impl Binding {
+    pub fn overview(&self) -> Result<Value> {
+        api::call(
+            &self.controller,
+            &api::ApiRequest::CoordinatorOverview {
+                token: runtime::credential(&self.credential)?,
+                run: self.run.clone(),
+            },
+        )
+    }
+
     pub fn context(&self) -> Result<Value> {
         api::call(
             &self.controller,
@@ -207,7 +217,9 @@ pub fn display(text: &str) -> String {
 
 pub fn summary(context: &Value) -> String {
     let active = context["active_attempts"].as_u64().unwrap_or(0);
-    let tasks = context["tasks"].as_array().map_or(0, Vec::len);
+    let tasks = context["collections"]["tasks"]["count"]
+        .as_u64()
+        .unwrap_or_else(|| context["tasks"].as_array().map_or(0, Vec::len) as u64);
     format!(
         "{} · {tasks} tasks · {active} active attempts",
         context["run"]["state"].as_str().unwrap_or("unknown")

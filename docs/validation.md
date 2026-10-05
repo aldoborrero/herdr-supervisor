@@ -6,7 +6,7 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 **Last completed full Nix gate:** commit `27ed1aeb94e81e591edb1cdf0167394811b33047` passes package build and `nix flake check` on x86_64-linux, with 511 unit and 10 CLI tests offline. It includes passive Linux recovery and transactional signed-record budgets. The paginated-context extension requires its own package gate. This does not establish other platforms or completion of the remaining feature scope.
 
-The local implementation suite currently passes **511 unit tests and 10 CLI tests** (local suite with four test threads), including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
+The local implementation suite currently passes **521 unit tests and 10 CLI tests** (local suite with four test threads), including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
 
 | Requirement | Evidence | Limit |
 | --- | --- | --- |
@@ -364,3 +364,7 @@ Response regressions `api_response_encoder_accepts_exact_frame_and_rejects_one_m
 The prior recovery commit `35ccfef` completed its x86_64-linux gate with 505 unit tests (115.33 s) and 10 CLI tests (48.35 s); build phase 13 min 17 s, check phase 10 min 2 s. Output: `/nix/store/sbwfybpb156d5bfm3cc166whga4z44h3-herdr-supervisor-0.1.0`. Logs: `.direnv/kernel-recovery-nix-build.log` and `.direnv/kernel-recovery-nix-check.log`. Other systems were not built.
 
 The signed-record budget commit `27ed1ae` completed its x86_64-linux Nix build/flake gate with 511 unit tests (114.74 s) and 10 CLI tests (47.93 s). Output: `/nix/store/040nd0m2l7gwmbksfi7imwfqmnj5lkrs-herdr-supervisor-0.1.0`. Logs: `.direnv/wire-limits-nix-build.log` and `.direnv/wire-limits-nix-check.log`. Other systems were not built.
+
+## Bounded Projects picker
+
+The picker now reads `CoordinatorOverview` independently from panel details, sharing the same four-reader pool. `summary_and_detail_share_capacity_but_never_share_payloads_or_old_authority` covers coalescing, one global limit, distinct payloads, cross-projection rebinding and corrupt-marker invalidation. The large-context regression now exercises the actual `Binding.overview` and default asynchronous cache over real IPC when legacy context exceeds 4 MiB, checking all 32 tasks are counted without downloading contracts. The gated-popup test answers summary and detail requests separately while preserving the selected record, filter and captured stop confirmation. This changes data retrieval, not terminal layout or key bindings. Detail-panel pagination remains pending. The follow-up passes 521 unit tests (32.91 s), 10 CLI tests (22.40 s), strict all-target Clippy (13.19 s) and `nix fmt`. Focused cache/popup/large-context tests also pass. Logs: `.direnv/picker-overview-focused.log`, `.direnv/picker-overview-full.log`, `.direnv/picker-overview-fmt.log`. Its full package gate remains pending.

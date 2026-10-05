@@ -9,7 +9,13 @@ use crate::managed::Binding;
 
 const MAX_READS: usize = 4;
 const REFRESH: Duration = Duration::from_secs(2);
-type Fetch = dyn Fn(&Binding) -> Result<Value, String> + Send + Sync;
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Projection {
+    Detail,
+    Overview,
+}
+type Key = (String, Projection);
+type Fetch = dyn Fn(&Binding, Projection) -> Result<Value, String> + Send + Sync;
 
 #[derive(Clone, Debug)]
 pub enum View {
@@ -29,7 +35,7 @@ struct Entry {
 }
 
 struct Read {
-    slug: String,
+    key: Key,
     generation: String,
     binding: Binding,
 }
@@ -40,7 +46,7 @@ struct Reply {
 }
 
 pub struct Cache {
-    entries: BTreeMap<String, Entry>,
+    entries: BTreeMap<Key, Entry>,
     queue: VecDeque<Read>,
     running: usize,
     sender: mpsc::Sender<Reply>,
@@ -50,8 +56,12 @@ pub struct Cache {
 
 impl Default for Cache {
     fn default() -> Self {
-        Self::with_fetch(Arc::new(|binding| {
-            binding.context().map_err(|error| error.to_string())
+        Self::with_fetch(Arc::new(|binding, projection| {
+            match projection {
+                Projection::Detail => binding.context(),
+                Projection::Overview => binding.overview(),
+            }
+            .map_err(|error| error.to_string())
         }))
     }
 }
@@ -71,37 +81,50 @@ impl Cache {
 
     /// A changed or corrupt marker invalidates both cached data and late replies.
     pub fn view(&mut self, slug: &str, binding: anyhow::Result<Binding>) -> View {
+        self.project(slug, binding, Projection::Detail)
+    }
+
+    pub fn overview(&mut self, slug: &str, binding: anyhow::Result<Binding>) -> View {
+        self.project(slug, binding, Projection::Overview)
+    }
+
+    fn project(
+        &mut self,
+        slug: &str,
+        binding: anyhow::Result<Binding>,
+        projection: Projection,
+    ) -> View {
         let binding = match binding {
             Ok(binding) => binding,
             Err(error) => {
-                self.entries.remove(slug);
-                self.queue.retain(|read| read.slug != slug);
+                self.entries.retain(|(name, _), _| name != slug);
+                self.queue.retain(|read| read.key.0 != slug);
                 return View::Failed(error.to_string());
             }
         };
+        // A binding change in either projection invalidates both, including
+        // queued and in-flight replies from the previous authority.
         if self
             .entries
-            .get(slug)
-            .is_none_or(|old| old.binding != binding)
+            .iter()
+            .any(|((name, _), entry)| name == slug && entry.binding != binding)
         {
-            self.queue.retain(|read| read.slug != slug);
-            self.entries.insert(
-                slug.into(),
-                Entry {
-                    binding,
-                    generation: uuid::Uuid::new_v4().to_string(),
-                    value: None,
-                    error: None,
-                    completed: None,
-                    pending: false,
-                },
-            );
+            self.entries.retain(|(name, _), _| name != slug);
+            self.queue.retain(|read| read.key.0 != slug);
         }
-        let entry = self.entries.get_mut(slug).expect("entry just inserted");
+        let key = (slug.to_string(), projection);
+        let entry = self.entries.entry(key.clone()).or_insert_with(|| Entry {
+            binding,
+            generation: uuid::Uuid::new_v4().to_string(),
+            value: None,
+            error: None,
+            completed: None,
+            pending: false,
+        });
         if !entry.pending && entry.completed.is_none_or(|at| at.elapsed() >= REFRESH) {
             entry.pending = true;
             self.queue.push_back(Read {
-                slug: slug.into(),
+                key,
                 generation: entry.generation.clone(),
                 binding: entry.binding.clone(),
             });
@@ -135,7 +158,7 @@ impl Cache {
     }
 
     fn accept(&mut self, reply: Reply) -> bool {
-        let Some(entry) = self.entries.get_mut(&reply.read.slug) else {
+        let Some(entry) = self.entries.get_mut(&reply.read.key) else {
             return false;
         };
         if entry.generation != reply.read.generation || entry.binding != reply.read.binding {
@@ -159,7 +182,7 @@ impl Cache {
             let Some(read) = self.queue.pop_front() else {
                 break;
             };
-            let failed_slug = read.slug.clone();
+            let failed_key = read.key.clone();
             let fetch = self.fetch.clone();
             let sender = self.sender.clone();
             // No join on drop: leaving a popup must not wait for an unavailable
@@ -168,7 +191,7 @@ impl Cache {
                 .name("managed-view".into())
                 .spawn(move || {
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        fetch(&read.binding)
+                        fetch(&read.binding, read.key.1)
                     }))
                     .unwrap_or_else(|_| Err("controller reader stopped unexpectedly".into()));
                     let _ = sender.send(Reply { read, result });
@@ -176,7 +199,7 @@ impl Cache {
             match started {
                 Ok(_) => self.running += 1,
                 Err(_) => {
-                    if let Some(entry) = self.entries.get_mut(&failed_slug) {
+                    if let Some(entry) = self.entries.get_mut(&failed_key) {
                         entry.pending = false;
                         entry.completed = Some(Instant::now());
                         entry.error = Some("could not start controller reader".into());
@@ -196,7 +219,7 @@ mod tests {
 
     fn controlled() -> (Cache, mpsc::Receiver<(String, Answer)>) {
         let (started, requests) = mpsc::channel();
-        let cache = Cache::with_fetch(Arc::new(move |binding| {
+        let cache = Cache::with_fetch(Arc::new(move |binding, _projection| {
             let (answer, response) = mpsc::channel();
             started.send((binding.run.clone(), answer)).unwrap();
             response
@@ -278,7 +301,11 @@ mod tests {
             matches!(cache.view("p", Ok(binding("new"))), View::Current(v) if v["run"]["id"]=="new")
         );
 
-        cache.entries.get_mut("p").unwrap().completed = None;
+        cache
+            .entries
+            .get_mut(&("p".into(), Projection::Detail))
+            .unwrap()
+            .completed = None;
         cache.view("p", Ok(binding("new")));
         let (_, late) = requests.recv_timeout(Duration::from_secs(5)).unwrap();
         assert!(matches!(
@@ -287,7 +314,11 @@ mod tests {
         ));
         late.send(Ok(json!({"run":{"id":"new"}}))).unwrap();
         drain(&mut cache, 0);
-        assert!(!cache.entries.contains_key("p"));
+        assert!(
+            !cache
+                .entries
+                .contains_key(&("p".into(), Projection::Detail))
+        );
         assert!(matches!(cache.view("p", Ok(binding("new"))), View::Loading));
         let (_, wrong) = requests.recv_timeout(Duration::from_secs(5)).unwrap();
         wrong.send(Ok(json!({"run":{"id":"foreign"}}))).unwrap();
@@ -306,7 +337,11 @@ mod tests {
             .send(Ok(json!({"run":{"id":"run","revision":1}})))
             .unwrap();
         drain(&mut cache, 0);
-        cache.entries.get_mut("p").unwrap().completed = None;
+        cache
+            .entries
+            .get_mut(&("p".into(), Projection::Detail))
+            .unwrap()
+            .completed = None;
         cache.view("p", Ok(binding("run")));
         let (_, answer) = requests.recv_timeout(Duration::from_secs(5)).unwrap();
         answer.send(Err("offline".into())).unwrap();
@@ -315,7 +350,11 @@ mod tests {
             matches!(cache.view("p", Ok(binding("run"))), View::Stale(value,error) if value["run"]["revision"]==1 && error=="offline")
         );
         assert!(requests.try_recv().is_err());
-        cache.entries.get_mut("p").unwrap().completed = None;
+        cache
+            .entries
+            .get_mut(&("p".into(), Projection::Detail))
+            .unwrap()
+            .completed = None;
         cache.view("p", Ok(binding("run")));
         let (_, answer) = requests.recv_timeout(Duration::from_secs(5)).unwrap();
         answer
@@ -325,5 +364,74 @@ mod tests {
         assert!(
             matches!(cache.view("p", Ok(binding("run"))), View::Current(value) if value["run"]["revision"]==2)
         );
+    }
+    #[test]
+    fn summary_and_detail_share_capacity_but_never_share_payloads_or_old_authority() {
+        let (started, requests) = mpsc::channel();
+        let mut cache = Cache::with_fetch(Arc::new(move |binding, projection| {
+            let (answer, response) = mpsc::channel();
+            started
+                .send((binding.run.clone(), projection, answer))
+                .unwrap();
+            response.recv_timeout(Duration::from_secs(5)).unwrap()
+        }));
+        let mut pending = BTreeMap::new();
+        for slug in ["p", "q", "r"] {
+            cache.view(slug, Ok(binding("old")));
+            cache.overview(slug, Ok(binding("old")));
+        }
+        for _ in 0..MAX_READS {
+            let (_, projection, answer) = requests.recv_timeout(Duration::from_secs(5)).unwrap();
+            pending
+                .entry(projection)
+                .or_insert_with(Vec::new)
+                .push(answer);
+        }
+        assert_eq!(cache.running, MAX_READS);
+        assert_eq!(cache.queue.len(), 2);
+        for _ in 0..5 {
+            cache.overview("p", Ok(binding("old")));
+            cache.view("p", Ok(binding("old")));
+        }
+        assert_eq!(cache.queue.len(), 2);
+        assert!(requests.try_recv().is_err());
+        // Respond to both projections of p/q; the two queued r reads then start.
+        for (projection, answers) in pending {
+            for answer in answers {
+                answer
+                    .send(Ok(
+                        json!({"run":{"id":"old"},"projection":format!("{projection:?}")}),
+                    ))
+                    .unwrap();
+            }
+        }
+        drain(&mut cache, 2);
+        let (_, _, r1) = requests.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (_, _, r2) = requests.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(
+            matches!(cache.view("p", Ok(binding("old"))), View::Current(value) if value["projection"]=="Detail")
+        );
+        assert!(
+            matches!(cache.overview("p", Ok(binding("old"))), View::Current(value) if value["projection"]=="Overview")
+        );
+        // Rebinding through the summary invalidates the detail as well.
+        cache.overview("r", Ok(binding("new")));
+        let (run, projection, fresh) = requests.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!((run.as_str(), projection), ("new", Projection::Overview));
+        fresh.send(Ok(json!({"run":{"id":"new"}}))).unwrap();
+        r1.send(Ok(json!({"run":{"id":"old"}}))).unwrap();
+        r2.send(Ok(json!({"run":{"id":"old"}}))).unwrap();
+        drain(&mut cache, 0);
+        assert!(matches!(
+            cache.overview("r", Ok(binding("new"))),
+            View::Current(_)
+        ));
+        assert!(
+            !cache
+                .entries
+                .contains_key(&("r".into(), Projection::Detail))
+        );
+        cache.overview("p", Err(anyhow::anyhow!("corrupt marker")));
+        assert!(!cache.entries.keys().any(|(slug, _)| slug == "p"));
     }
 }

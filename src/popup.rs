@@ -216,7 +216,8 @@ pub struct PickerRow {
 #[cfg(test)]
 pub fn picker_rows(root: &Path) -> Vec<PickerRow> {
     picker_rows_with(root, |project| {
-        crate::managed::context(project)
+        crate::managed::binding(project)
+            .and_then(|binding| binding.overview())
             .map(|c| crate::managed::summary(&c))
             .unwrap_or_else(|_| "controller unavailable".into())
     })
@@ -1108,7 +1109,7 @@ impl<'a> Popup<'a> {
             use crate::managed_refresh::View;
             match self
                 .managed
-                .view(&project.slug, crate::managed::binding(project))
+                .overview(&project.slug, crate::managed::binding(project))
             {
                 View::Current(value) => crate::managed::summary(&value),
                 View::Stale(value, _) => {
@@ -3616,13 +3617,20 @@ mod tests {
         let (release, released) = mpsc::channel();
         let server = std::thread::spawn(move || {
             for epoch in [1, 2] {
-                let (mut stream, _) = listener.accept().unwrap();
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(5)))
-                    .unwrap();
-                let mut line = String::new();
-                BufReader::new(&stream).read_line(&mut line).unwrap();
-                let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+                let (mut stream, request) = loop {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    let mut line = String::new();
+                    BufReader::new(&stream).read_line(&mut line).unwrap();
+                    let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+                    if request["op"] == "coordinator_overview" {
+                        writeln!(stream, "{}", json!({"data":{"kind":"paginated_context","run":{"id":"run","state":"active"},"collections":{"tasks":{"count":0}},"active_attempts":1}})).unwrap();
+                        continue;
+                    }
+                    break (stream, request);
+                };
                 assert_eq!(request["op"], "coordinator_context");
                 assert_eq!(request["run"], "run");
                 arrived.send(epoch).unwrap();
@@ -3662,13 +3670,15 @@ mod tests {
         }
         release.send(()).unwrap();
         let until = Instant::now() + Duration::from_secs(5);
-        while !popup.refresh_managed() {
+        loop {
+            popup.refresh_managed();
+            if matches!(&popup.mode, Mode::Projects(picker) if picker.filter.as_deref()==Some("dem") && picker.selected==0 && picker.rows.iter().any(|row| row.slug.as_deref()==Some("demo") && row.status.contains("active")))
+            {
+                break;
+            }
             assert!(Instant::now() < until);
             std::thread::sleep(Duration::from_millis(2));
         }
-        assert!(
-            matches!(&popup.mode, Mode::Projects(picker) if picker.filter.as_deref()==Some("dem") && picker.selected==0 && picker.rows.iter().any(|row| row.slug.as_deref()==Some("demo") && row.status.contains("active")))
-        );
         popup.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         popup.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(

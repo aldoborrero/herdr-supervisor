@@ -100,3 +100,7 @@ Coordinator CLI/MCP now starts with a bounded overview and explicit collection c
 Commit `35ccfef` has completed its full x86_64-linux Nix build/flake gate with all 505 unit and 10 CLI tests offline; its passive native-process recovery limitations remain unchanged.
 
 Commit `27ed1ae` has completed its full x86_64-linux Nix build/flake gate with all 511 unit and 10 CLI tests offline, including the transactional signed-record budget regressions.
+
+### Bounded Projects picker
+
+The project selector now fetches the coordinator overview with authoritative counts rather than complete run contents. Overview and detail projections share one four-reader pool but retain separate cached payloads; any binding change invalidates both and fences late replies. The large-run IPC and popup regressions cover counts, responsiveness and captured actions. Local validation passes 521 unit tests, 10 CLI tests, strict all-target Clippy and `nix fmt`; the package gate remains pending. Detail panels still need paginated navigation; this checkpoint does not claim completion of that deliverable.
