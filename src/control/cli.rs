@@ -19,6 +19,11 @@ pub struct ControlArgs {
 
 #[derive(Subcommand)]
 enum ControlCommand {
+    /// Recover completed verifier receipts without running checks or changing Git
+    ReconcileChecks {
+        #[arg(long)]
+        credential: PathBuf,
+    },
     /// Inspect local node delivery/recovery metadata without the request or response body
     EventStatus { event: String },
     /// Queue a renewed delivery of an expired signed node event; retains the original
@@ -362,6 +367,15 @@ fn credential(path: &Path) -> Result<String> {
 
 pub fn run(args: ControlArgs) -> Result<()> {
     let result = match args.command {
+        ControlCommand::ReconcileChecks { credential: path } => {
+            drop(super::reception::local_db(&args.state, false, false)?);
+            let mut store = Store::open(&args.state)?;
+            super::store::own(&super::store::authenticate(
+                &store.connection,
+                &credential(&path)?,
+            )?)?;
+            super::check_receipts::reconcile(&mut store)?
+        }
         ControlCommand::Record {
             credential: path,
             cursor,

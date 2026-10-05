@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::model::*;
-use super::store::{Store, document, now, private_dir, save_run, save_task, secret_file};
+use super::store::{Store, document, now, private_dir, save_run, save_task};
 use super::verification::{current, gates, integration, save};
 use crate::runner::{Cmd, Output, Runner};
 
@@ -441,16 +441,11 @@ fn checkout(
     Ok(path)
 }
 
-fn check_evidence(output: &Output, path: &Path, name: &str) -> Result<Value> {
+fn check_evidence(output: &Output) -> Value {
     // Retain bounded readable excerpts and hashes of the complete captured output.
     let stdout = output.stdout.chars().take(16384).collect::<String>();
     let stderr = output.stderr.chars().take(16384).collect::<String>();
-    let record = json!({"stdout":stdout,"stderr":stderr,"stdout_hash":digest(output.stdout.as_bytes()),"stderr_hash":digest(output.stderr.as_bytes()),"truncated":stdout.len()!=output.stdout.len()||stderr.len()!=output.stderr.len(),"exit_code":output.code,"timed_out":output.timed_out});
-    secret_file(
-        &path.join(format!("{name}.json")),
-        &serde_json::to_vec(&record)?,
-    )?;
-    Ok(record)
+    json!({"stdout":stdout,"stderr":stderr,"stdout_hash":digest(output.stdout.as_bytes()),"stderr_hash":digest(output.stderr.as_bytes()),"truncated":stdout.len()!=output.stdout.len()||stderr.len()!=output.stderr.len(),"exit_code":output.code,"timed_out":output.timed_out})
 }
 
 fn executable(program: &str, cwd: &Path) -> Result<(PathBuf, String)> {
@@ -529,6 +524,36 @@ fn checks(
         r.state == "active" && now() < r.deadline,
         "run not active for checks"
     );
+    // Recover historical outcomes before reobserving inputs. A check that dirtied
+    // its checkout must become a known failure, not stay blocked on that dirtiness.
+    for name in &t.contract.checks {
+        let prior: Option<(String, String)> = store
+            .connection
+            .query_row(
+                "SELECT id,state FROM check_runs WHERE integration=?1 AND name=?2",
+                params![i.id, name],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        if let Some((check, mut state)) = prior {
+            if state == "started" {
+                super::check_receipts::recover_one(store, &check)?;
+                state = store.connection.query_row(
+                    "SELECT state FROM check_runs WHERE id=?1",
+                    [check],
+                    |r| r.get(0),
+                )?;
+            }
+            if state != "passed" {
+                return fail(
+                    store,
+                    i,
+                    "checks_failed",
+                    "check outcome failed or uncertain; an explicit new verification is required",
+                );
+            }
+        }
+    }
     let path = if i.artifact.is_some() {
         super::artifact_inputs::controller(store, i)?
     } else {
@@ -569,7 +594,9 @@ fn checks(
         }
         let argv = &r.policy.checks[name];
         let (program, program_hash) = executable(&argv[0], &path)?;
-        let mut receipt = json!({"id":id(),"integration":i.id,"name":name,"candidate":candidate,"tree":i.tree_oid,"policy_hash":i.policy_hash,"argv":argv,"cwd":path,"program":program,"program_hash":program_hash,"environment_hash":environment_hash()?,"timeout_secs":config.check_timeout_secs,"started_at":now()});
+        super::check_receipts::prepare(&store.dir)?;
+        let mut receipt = json!({"id":id(),"integration":i.id,"name":name,"candidate":candidate,"tree":i.tree_oid,"policy_hash":i.policy_hash,"argv":argv,"cwd":path,"program":program,"program_hash":program_hash,"environment_hash":environment_hash()?,"timeout_secs":config.check_timeout_secs,"started_at":now(),"receipt_scheme":super::check_receipts::SCHEME});
+        let initial = receipt.clone();
         store.connection.execute(
             "INSERT INTO check_runs VALUES (?1,?2,?3,'started',?4)",
             params![
@@ -591,7 +618,7 @@ fn checks(
             cmd = cmd.env_remove(*key);
         }
         let output = runner.run(&cmd)?;
-        receipt["output"] = check_evidence(&output, path.parent().unwrap(), name)?;
+        receipt["output"] = check_evidence(&output);
         receipt["finished_at"] = json!(now());
         let clean = if let Some(artifact) = &i.artifact {
             super::artifact_inputs::verify(&path, artifact)
@@ -605,16 +632,10 @@ fn checks(
         };
         let passed = output.success() && clean.is_ok();
         if let Err(error) = clean {
-            receipt["checkout_error"] = json!(error.to_string());
+            receipt["checkout_error"] =
+                json!(error.to_string().chars().take(4096).collect::<String>());
         }
-        store.connection.execute(
-            "UPDATE check_runs SET state=?2,doc=?3 WHERE id=?1",
-            params![
-                receipt["id"].as_str(),
-                if passed { "passed" } else { "failed" },
-                serde_json::to_string(&receipt)?
-            ],
-        )?;
+        super::check_receipts::finish(store, &initial, receipt.clone(), passed)?;
         if !passed {
             return fail(
                 store,

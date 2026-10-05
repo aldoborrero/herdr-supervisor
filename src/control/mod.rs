@@ -5,6 +5,7 @@ mod artifact_review;
 pub mod artifacts;
 pub mod broker_policy;
 mod cancellation_recovery;
+mod check_receipts;
 mod cleanup;
 pub mod cli;
 pub mod coordinator;

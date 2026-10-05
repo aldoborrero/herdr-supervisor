@@ -14,6 +14,7 @@ State paths are explicit. No startup command edits global agent configuration, i
 | Controller `owner.key` | Owner signing authority; never copied to nodes |
 | Controller `admin.token` | Local owner capability; never given to workers |
 | Controller `control.sock` | Private controller API |
+| Controller `check-receipts/<check UUID>.json` | Owner-signed completion evidence retained independently of the final SQLite update |
 | Controller `coordinators/<run>/<generation>.token` | Run-scoped coordinator capability; retired when replaced |
 | Controller `coordinators/<run>/<generation>/` | Owned coordinator home, mailer token/config and durable registration receipt |
 | Node `node.key` | Delegated node signing key |
@@ -578,6 +579,23 @@ Use the authenticated `apply` API/CLI/MCP for these decisions:
 1. `apply_integration`: `integration` and its current `expected_revision`. The controller revalidates review/check receipts and advances `refs/heads/hs/integration/<run>` only if its old OID equals the verified base. It refuses a checked-out or symbolic integration ref.
 
 Checks run in a controller-owned detached checkout under `verification/<integration>/checkout`. Receipts retain exact candidate/tree, policy hash, argv, resolved executable and hash, environment digest, timeout, exit status and output hashes/excerpts. Logs are private. An author saying tests passed does not create a check receipt. A check that changes tracked files fails; a started check without a durable outcome is not rerun automatically.
+
+### Recover a completed verifier after a lost database receipt
+
+New checks mark their start document with `local.herdr.supervisor.checkFinish.v1`. After the process returns and the input/checkout observation completes, the controller publishes a private completion file under `check-receipts/`. It writes and fsyncs a temporary file, links it into its final UUID path without replacement, and fsyncs the directory before updating SQLite. An owner-signed local attestation commits to the whole completion document and the hash of its exact start record. The attestation is retained indefinitely; it is not a command, worker capability, broker ACK or authorization to extend the run.
+
+If the final SQLite update or audit write fails, `run-controller` recovers the signed receipt automatically before reconciling cancelled runs. `control verify` also attempts this recovery before consulting a started check. Recovery checks the owner, check UUID, original provenance, candidate/policy, outcome and signature, then commits the check state and a metadata-only journal entry together. It never reruns the check, infers its exit from elapsed time, changes Git, removes resources or bypasses independent review. A recovered failed check stays failed. A completed check may clear a cancelled run's check-exit blocker; every other repository-release condition still applies.
+
+For local owner maintenance, including while the controller service is stopped:
+
+```sh
+herdr-supervisor control --state /private/controller-state reconcile-checks \
+  --credential /private/controller-state/admin.token
+```
+
+The command does not initialize missing state or start any service. It shares `git-executor.lock` with verification, scans at most 16 eligible started checks per call, and rotates its persisted cursor so unavailable records do not starve later receipts. Its report separates recovered IDs, unresolved entries from that batch, total `remaining_started` and `legacy_started`. It omits output/credential bodies and does not claim that an empty batch means all checks finished.
+
+Files are bounded to 1 MiB, must be private regular files, and cannot use a substituted directory or symlink. Partial files, changed signatures/provenance, mismatched candidates and unavailable evidence remain unresolved. Old output-only logs and starts without the new scheme are not adopted. A crash before a complete signed receipt is published can still leave an uncertain verifier, even if its process actually exited. This feature does not recover or terminate a still-live orphan, establish detached-descendant exit or authorize checkout cleanup. Keep completion files with their corresponding controller database and keys in backups; they remain trusted same-UID controller state.
 
 For one explicit reconciliation, the owner can use `control verify --credential ADMIN_TOKEN --repositories REPOSITORIES_JSON INTEGRATION_ID`. This is not a dry run. `run-controller --once` runs one service cycle. Continuous mode keeps IPC and transport active while checks execute and rotates pending candidates so an unavailable repository does not monopolize selection.
 

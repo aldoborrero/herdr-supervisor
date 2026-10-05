@@ -252,10 +252,33 @@ fn artifact_pipeline_lost_check_receipt_does_not_repeat_external_command() {
         .execute_batch("DROP TRIGGER lose_check;")
         .unwrap();
     x.f.store = Store::open(&x.f.store.dir).unwrap();
+    assert_eq!(x.advance().unwrap().state, "verified");
+    assert_eq!(
+        std::fs::read(x.inputs().join("execution-count")).unwrap(),
+        b"x"
+    );
+}
+
+#[test]
+fn check_receipt_recovery_preserves_failed_artifact_inputs_without_repair_or_reexecution() {
+    let mut x = Artifacts::new(
+        "printf x >> execution-count; chmod u+w report.txt; printf corrupt > report.txt",
+        false,
+    );
+    x.f.store.connection.execute_batch("CREATE TRIGGER lose_check BEFORE UPDATE ON check_runs BEGIN SELECT RAISE(ABORT,'lost check receipt'); END;").unwrap();
+    assert!(x.advance().is_err());
+    x.f.store
+        .connection
+        .execute_batch("DROP TRIGGER lose_check;")
+        .unwrap();
     assert_eq!(x.advance().unwrap().state, "checks_failed");
     assert_eq!(
         std::fs::read(x.inputs().join("execution-count")).unwrap(),
         b"x"
+    );
+    assert_eq!(
+        std::fs::read(x.inputs().join("report.txt")).unwrap(),
+        b"corrupt"
     );
 }
 

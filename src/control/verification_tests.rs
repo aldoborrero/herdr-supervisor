@@ -4,6 +4,9 @@ use crate::runner::{Cmd, RealRunner, Runner};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[path = "check_receipts_tests.rs"]
+mod check_receipts_tests;
+
 fn git(path: &Path, args: &[&str]) -> String {
     let out = RealRunner
         .run(
@@ -1040,6 +1043,19 @@ fn started_check_is_not_rerun_after_unknown_execution_outcome() {
     let i = x.request();
     x.f.store.connection.execute_batch("CREATE TRIGGER lose_check BEFORE UPDATE ON check_runs BEGIN SELECT RAISE(ABORT,'lost receipt'); END;").unwrap();
     assert!(git_pipeline::advance(&mut x.f.store, &x.config, &i.id, &RealRunner).is_err());
+    // No independently durable completion survives this simulated crash. A
+    // present, correctly bound finish record is covered by the recovery tests.
+    let check: String =
+        x.f.store
+            .connection
+            .query_row(
+                "SELECT id FROM check_runs WHERE integration=?1",
+                [&i.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+    std::fs::remove_file(crate::control::check_receipts::path(&x.f.store.dir, &check).unwrap())
+        .unwrap();
     x.f.store
         .connection
         .execute_batch("DROP TRIGGER lose_check")

@@ -214,6 +214,10 @@ pub async fn controller(
             if let Err(error)=super::lifecycle::expire_runs(&mut store){eprintln!("deadline reconciliation: {error}");}
             let relayed=super::transport::controller_once(&mut store,&broker).await;
             if let Err(error)=&relayed{eprintln!("controller relay: {error}");}
+            let check_receipts=match super::check_receipts::reconcile(&mut store) {
+                Ok(value)=>value,
+                Err(error)=>{eprintln!("check receipt reconciliation: {error}");json!({"unresolved":error.to_string()})}
+            };
             let recovery=match super::recovery::cancelled(&mut store) {
                 Ok(value)=>value,
                 Err(error)=>{eprintln!("cancelled run reconciliation: {error}");json!({"unresolved":error.to_string()})}
@@ -255,7 +259,7 @@ pub async fn controller(
                     }
                 }}
             }
-            if once{return Ok(json!({"relayed":relayed?,"verification":executed,"recovery":recovery}));}
+            if once{return Ok(json!({"relayed":relayed?,"verification":executed,"recovery":recovery,"check_receipts":check_receipts}));}
             tokio::select!{
                 _=shutdown.recv()=>return Ok(json!({"stopped":true})),
                 _=tokio::time::sleep(Duration::from_millis(500))=>(),

@@ -6,6 +6,56 @@ use std::process::Command;
 const BIN: &str = env!("CARGO_BIN_EXE_herdr-supervisor");
 
 #[test]
+fn check_receipt_reconciliation_cli_requires_owner_and_never_initializes_missing_state() {
+    use serde_json::Value;
+    use std::os::unix::fs::PermissionsExt;
+    let home = tempfile::tempdir().unwrap();
+    let state = home.path().join("controller");
+    let admin = state.join("admin.token");
+    let run = |credential: &Path| {
+        hp(
+            home.path(),
+            &[
+                "control",
+                "--state",
+                state.to_str().unwrap(),
+                "reconcile-checks",
+                "--credential",
+                credential.to_str().unwrap(),
+            ],
+        )
+    };
+    assert!(!run(&admin).status.success());
+    assert!(!state.exists());
+    assert!(
+        hp(
+            home.path(),
+            &["control", "--state", state.to_str().unwrap(), "init"]
+        )
+        .status
+        .success()
+    );
+    let wrong = home.path().join("wrong.token");
+    std::fs::write(&wrong, "x".repeat(40)).unwrap();
+    std::fs::set_permissions(&wrong, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let denied = run(&wrong);
+    assert!(!denied.status.success());
+    assert!(!String::from_utf8_lossy(&denied.stderr).contains(&"x".repeat(40)));
+    let result = run(&admin);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let response: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(response["recovered"], serde_json::json!([]));
+    assert_eq!(response["processes_started"], false);
+    assert_eq!(response["resources_deleted"], false);
+    assert!(!state.join("check-receipts").exists());
+    assert!(!state.join("control.sock").exists());
+}
+
+#[test]
 fn event_recovery_cli_renews_delivery_and_preserves_original_wire_without_services() {
     use serde_json::{Value, json};
     use std::os::unix::fs::PermissionsExt;
