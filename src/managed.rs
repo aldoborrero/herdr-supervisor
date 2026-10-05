@@ -140,6 +140,48 @@ impl Binding {
         )
     }
 
+    pub fn records(
+        &self,
+        collection: crate::control::pagination::Collection,
+        cursor: Option<String>,
+        limit: u32,
+    ) -> Result<Value> {
+        api::call(
+            &self.controller,
+            &api::ApiRequest::RunPage {
+                token: runtime::credential(&self.credential)?,
+                run: self.run.clone(),
+                collection,
+                cursor,
+                limit,
+            },
+        )
+    }
+
+    pub fn open_context(&self, profile: Option<String>) -> Result<Value> {
+        api::call(
+            &self.controller,
+            &api::ApiRequest::CoordinatorOpenContext {
+                token: runtime::credential(&self.credential)?,
+                run: self.run.clone(),
+                profile,
+            },
+        )
+    }
+
+    pub fn apply_receipt(&self, operation: &str, command: Mutation) -> Result<Value> {
+        identifier(operation)?;
+        api::call(
+            &self.controller,
+            &api::ApiRequest::ProjectApplyReceipt {
+                token: runtime::credential(&self.credential)?,
+                run: self.run.clone(),
+                operation_id: operation.into(),
+                command: Box::new(command),
+            },
+        )
+    }
+
     pub fn apply(&self, operation: &str, command: Mutation) -> Result<Value> {
         identifier(operation)?;
         api::call(
@@ -154,6 +196,7 @@ impl Binding {
     }
 }
 
+#[cfg(test)]
 pub fn context(project: &Project) -> Result<Value> {
     binding(project)?.context()
 }
@@ -165,7 +208,7 @@ pub fn attach(root: &Path, slug: &str, binding: Binding) -> Result<()> {
     }
     let project = Project::load_unlocked(root, slug)?;
     let _lease = authority_lease(&project, true)?;
-    let context = binding.context()?;
+    let context = binding.overview()?;
     ensure!(
         context["run"]["id"] == binding.run && context["run"]["project"] == slug,
         "controller run must name this project slug"
@@ -205,7 +248,7 @@ pub(crate) fn write_binding(project: &Project, binding: &Binding) -> Result<()> 
 
 pub fn change_status(project: &Project, status: project::Status) -> Result<Value> {
     let binding = binding(project)?;
-    let context = binding.context()?;
+    let context = binding.overview()?;
     let expected_revision = context["run"]["revision"]
         .as_u64()
         .context("run revision missing")?;
@@ -221,7 +264,7 @@ pub fn change_status(project: &Project, status: project::Status) -> Result<Value
         _ => bail!("archive/delete is not a controller lifecycle action"),
     };
     let operation = format!("ui-{}", digest(&serde_json::to_vec(&command)?));
-    binding.apply(&operation, command)
+    binding.apply_receipt(&operation, command)
 }
 
 /// Keep model-provided text inert when rendered in the terminal.
@@ -243,7 +286,15 @@ pub fn summary(context: &Value) -> String {
 }
 
 pub fn overview(project: &Project) -> Result<String> {
-    let context = context(project)?;
+    let binding = binding(project)?;
+    let context = binding.overview()?;
+    let page = binding.records(
+        crate::control::pagination::Collection::Tasks,
+        context["collections"]["tasks"]["cursor"]
+            .as_str()
+            .map(str::to_owned),
+        50,
+    )?;
     let mut lines = vec![
         format!("{} · {}", project.slug, summary(&context)),
         display(context["run"]["objective"].as_str().unwrap_or_default()),
@@ -251,8 +302,9 @@ pub fn overview(project: &Project) -> Result<String> {
     if let Some(recovery) = recovery_summary(&context) {
         lines.push(recovery);
     }
-    if let Some(tasks) = context["tasks"].as_array() {
-        for t in tasks {
+    if let Some(tasks) = page["items"].as_array() {
+        for item in tasks {
+            let t = &item["value"];
             lines.push(format!(
                 "{}  {}  {}",
                 t["id"].as_str().unwrap_or_default(),
@@ -260,6 +312,14 @@ pub fn overview(project: &Project) -> Result<String> {
                 display(t["contract"]["title"].as_str().unwrap_or_default())
             ));
         }
+    }
+    if page["next_cursor"].is_string() {
+        lines.push(format!(
+            "Showing {} of {} tasks; use managed page {} --collection tasks to continue",
+            page["items"].as_array().map_or(0, Vec::len),
+            context["collections"]["tasks"]["count"],
+            project.slug
+        ));
     }
     Ok(format!("{}\n", lines.join("\n")))
 }
@@ -314,7 +374,7 @@ pub fn open_coordinator(
         "managed coordinator identity is bound by the controller"
     );
     let binding = binding(project)?;
-    let context = binding.context()?;
+    let context = binding.open_context(options.profile.clone())?;
     if !context["native_coordinator"].is_null() {
         ensure!(
             !options.new && options.profile.is_none(),
@@ -322,12 +382,7 @@ pub fn open_coordinator(
         );
         return focus_coordinator(ctx, project, &options.session);
     }
-    if let Some(launch) = context["coordinator_launches"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|l| l["state"] != "exited")
-    {
+    if let Some(launch) = context["pending_launch"].as_object() {
         ensure!(
             !options.new && options.profile.is_none(),
             "coordinator launch is pending or unresolved; replacement refused"
@@ -342,21 +397,17 @@ pub fn open_coordinator(
                 .map(|s| format!(" · {}", display(s)))
                 .unwrap_or_default()
         );
+        if launch["last_error_omitted"] == true {
+            println!("Launch error exceeds the preview budget; inspect launch diagnostics");
+        }
         return Ok(());
     }
     let config = crate::control::coordinator_launch::read_config(binding.launch_config.as_ref().context("automatic launch needs managed attach --launch-config and run-controller --coordinator-config")?)?;
-    let profiles = context["run"]["policy"]["profiles"]
-        .as_object()
-        .context("run profiles missing")?;
-    let profile = match &options.profile {
-        Some(name) => name.clone(),
-        None if profiles.len() == 1 => profiles.keys().next().unwrap().clone(),
-        None => bail!("choose a run-authorized coordinator profile with --profile"),
-    };
-    ensure!(
-        profiles.contains_key(&profile),
+    let profile = context["selected_profile"].as_str().with_context(|| if options.profile.is_some() {
         "coordinator profile is not authorized by this run"
-    );
+    } else {
+        "choose a run-authorized coordinator profile with --profile; managed page --collection profiles lists them"
+    })?.to_string();
     let command = Mutation::StartCoordinator {
         run: binding.run.clone(),
         expected_revision: context["run"]["revision"]
@@ -379,7 +430,7 @@ pub fn focus_coordinator(
     project: &Project,
     session: &crate::paths::SessionFlags,
 ) -> Result<()> {
-    let context = context(project)?;
+    let context = binding(project)?.overview()?;
     let endpoint = &context["native_coordinator"]["endpoint"];
     let uuid = endpoint["native_session"]
         .as_str()
@@ -425,6 +476,20 @@ pub fn project_for_workspace(ctx: &Ctx, workspace: &str, socket: &str) -> Option
     let herdr = crate::herdr::Herdr::new(ctx.env.herdr_bin(), socket, ctx.runner);
     let panes = herdr.pane_list().ok()?;
     let agents = herdr.agent_list().ok()?;
+    let observations: Vec<_> = agents
+        .iter()
+        .filter(|a| a.workspace_id == workspace)
+        .filter_map(|a| {
+            let observation = crate::control::pagination::SessionObservation {
+                session: a.session_id().into(),
+                runtime: a.agent.clone(),
+                workspace: a.workspace_id.clone(),
+                pane: a.pane_id.clone(),
+                terminal: a.terminal_id.clone(),
+            };
+            observation.validate().ok().map(|()| observation)
+        })
+        .collect();
     let mut matches = Vec::new();
     for project in projects {
         let home = project.canonical_dir();
@@ -435,21 +500,23 @@ pub fn project_for_workspace(ctx: &Ctx, workspace: &str, socket: &str) -> Option
                     .any(|dir| !dir.is_empty() && Path::new(dir) == home)
         });
         let native = || -> Option<bool> {
-            let c = context(&project).ok()?;
-            Some(
-                agents
-                    .iter()
-                    .filter(|a| a.workspace_id == workspace && !a.session_id().is_empty())
-                    .any(|a| {
-                        c["native_coordinator"]["endpoint"]["native_session"] == a.session_id()
-                            || c["attempts"].as_array().into_iter().flatten().any(|t| {
-                                t["state"] != "stopped"
-                                    && t["native_session"] == a.session_id()
-                                    && t["resource"]["pane"] == a.pane_id
-                                    && t["resource"]["terminal"] == a.terminal_id
-                            })
-                    }),
-            )
+            let binding = binding(&project).ok()?;
+            let token = runtime::credential(&binding.credential).ok()?;
+            for chunk in observations.chunks(50) {
+                let result = api::call(
+                    &binding.controller,
+                    &api::ApiRequest::MatchSessions {
+                        token: token.clone(),
+                        run: binding.run.clone(),
+                        observations: chunk.to_vec(),
+                    },
+                )
+                .ok()?;
+                if result["matched"] == true {
+                    return Some(true);
+                }
+            }
+            Some(false)
         };
         if in_home || native() == Some(true) {
             matches.push(project.slug.clone());
@@ -493,8 +560,22 @@ enum ManagedAction {
         #[arg(long)]
         launch_config: Option<PathBuf>,
     },
-    /// Show current controller context; unavailable authority never falls back to files
-    Status { slug: String },
+    /// Show bounded controller context; --full requests the legacy aggregate
+    Status {
+        slug: String,
+        #[arg(long)]
+        full: bool,
+    },
+    /// Read complete records from one authorized collection
+    Page {
+        slug: String,
+        #[arg(long, value_enum)]
+        collection: crate::control::pagination::Collection,
+        #[arg(long)]
+        cursor: Option<String>,
+        #[arg(long, default_value_t = 50)]
+        limit: u32,
+    },
     /// Apply a decision scoped to this project; request is a JSON file or - for stdin
     Apply {
         slug: String,
@@ -504,6 +585,9 @@ enum ManagedAction {
         request: Option<PathBuf>,
         #[arg(long, conflicts_with = "request")]
         request_json: Option<String>,
+        /// Return a bounded committed-operation receipt; normal output stays compatible
+        #[arg(long)]
+        receipt: bool,
     },
 }
 
@@ -540,15 +624,31 @@ pub fn run(ctx: &Ctx, args: ManagedArgs) -> Result<()> {
             attach(&ctx.root, &slug, binding)?;
             println!("attached `{slug}` to controller authority");
         }
-        ManagedAction::Status { slug } => {
+        ManagedAction::Status { slug, full } => {
             let project = Project::load_view(&ctx.root, &slug)?;
-            println!("{}", serde_json::to_string_pretty(&context(&project)?)?);
+            let binding = binding(&project)?;
+            let context = if full {
+                binding.context()?
+            } else {
+                binding.overview()?
+            };
+            println!("{}", serde_json::to_string_pretty(&context)?);
+        }
+        ManagedAction::Page {
+            slug,
+            collection,
+            cursor,
+            limit,
+        } => {
+            let project = Project::load_view(&ctx.root, &slug)?;
+            println!("{}", binding(&project)?.records(collection, cursor, limit)?);
         }
         ManagedAction::Apply {
             slug,
             operation,
             request,
             request_json,
+            receipt,
         } => {
             let project = Project::load_view(&ctx.root, &slug)?;
             let mut bytes = Vec::new();
@@ -563,7 +663,13 @@ pub fn run(ctx: &Ctx, args: ManagedArgs) -> Result<()> {
             }
             ensure!(bytes.len() <= 300000, "managed request too large");
             let command: Mutation = serde_json::from_slice(&bytes)?;
-            println!("{}", binding(&project)?.apply(&operation, command)?);
+            let binding = binding(&project)?;
+            let response = if receipt {
+                binding.apply_receipt(&operation, command)?
+            } else {
+                binding.apply(&operation, command)?
+            };
+            println!("{response}");
         }
     }
     Ok(())
@@ -588,6 +694,7 @@ impl Action {
             format!("ui-{}", digest(json.as_bytes())),
             "--request-json".into(),
             json,
+            "--receipt".into(),
         ])
     }
 }

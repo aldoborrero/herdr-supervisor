@@ -358,7 +358,7 @@ pub(crate) mod tests {
         let submission = form.prepare().unwrap();
         assert!(submission.request.len() > 131072);
         assert!(submission.args.iter().all(|arg| arg.len() < 512));
-        assert_eq!(&submission.args[5..], &["--request", "-"]);
+        assert_eq!(&submission.args[5..], &["--request", "-", "--receipt"]);
         let request: Value = serde_json::from_str(&submission.request).unwrap();
         assert_eq!(
             request["params"]["contract"]["instructions"]

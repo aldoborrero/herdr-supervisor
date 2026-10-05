@@ -32,3 +32,5 @@ pub mod worker;
 
 #[cfg(test)]
 mod tests;
+
+pub mod receipt;

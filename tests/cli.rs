@@ -116,7 +116,14 @@ fn managed_create_publishes_one_bound_view_through_real_controller_ipc_without_l
     assert_eq!(receipt["models_started"], false);
     let snapshot = hp(
         home.path(),
-        &["--root", root_arg, "managed", "status", "managed-demo"],
+        &[
+            "--root",
+            root_arg,
+            "managed",
+            "status",
+            "managed-demo",
+            "--full",
+        ],
     );
     assert!(snapshot.status.success());
     let snapshot: Value = serde_json::from_slice(&snapshot.stdout).unwrap();
@@ -183,12 +190,48 @@ fn managed_create_publishes_one_bound_view_through_real_controller_ipc_without_l
     assert_eq!(submit(), task);
     let latest = hp(
         home.path(),
-        &["--root", root_arg, "managed", "status", "managed-demo"],
+        &[
+            "--root",
+            root_arg,
+            "managed",
+            "status",
+            "managed-demo",
+            "--full",
+        ],
     );
     assert!(latest.status.success());
     let latest: Value = serde_json::from_slice(&latest.stdout).unwrap();
     assert_eq!(latest["tasks"].as_array().unwrap().len(), 1);
     assert_eq!(latest["active_attempts"], 0);
+    let overview = hp(
+        home.path(),
+        &["--root", root_arg, "managed", "status", "managed-demo"],
+    );
+    assert!(overview.status.success());
+    let overview: Value = serde_json::from_slice(&overview.stdout).unwrap();
+    assert!(overview.get("tasks").is_none());
+    assert_eq!(overview["collections"]["tasks"]["count"], 1);
+    let page = hp(
+        home.path(),
+        &[
+            "--root",
+            root_arg,
+            "managed",
+            "page",
+            "managed-demo",
+            "--collection",
+            "tasks",
+            "--limit",
+            "1",
+        ],
+    );
+    assert!(
+        page.status.success(),
+        "{}",
+        String::from_utf8_lossy(&page.stderr)
+    );
+    let page: Value = serde_json::from_slice(&page.stdout).unwrap();
+    assert_eq!(page["items"][0]["value"]["id"], task["id"]);
     let mut replacement = task["contract"].clone();
     replacement["instructions"] = json!(" Keep revised literal $HOME and trailing space ");
     let edit = serde_json::to_string(&json!({"method":"amend_task","params":{
@@ -212,6 +255,18 @@ fn managed_create_publishes_one_bound_view_through_real_controller_ipc_without_l
     );
     assert_eq!(hp(home.path(), &edit_args).stdout, edited.stdout);
     let edited: Value = serde_json::from_slice(&edited.stdout).unwrap();
+    let mut receipt_args = edit_args.to_vec();
+    receipt_args.push("--receipt");
+    let small_receipt = hp(home.path(), &receipt_args);
+    assert!(
+        small_receipt.status.success(),
+        "{}",
+        String::from_utf8_lossy(&small_receipt.stderr)
+    );
+    let small_receipt: Value = serde_json::from_slice(&small_receipt.stdout).unwrap();
+    assert_eq!(small_receipt["committed"], true);
+    assert_eq!(small_receipt["response_inline"], true);
+    assert_eq!(small_receipt["response"], edited);
     assert_eq!(edited["contract"], replacement);
     assert_eq!(edited["revision"], 2);
     assert_ne!(edited["contract_hash"], task["contract_hash"]);
@@ -219,7 +274,14 @@ fn managed_create_publishes_one_bound_view_through_real_controller_ipc_without_l
     assert_eq!(submit(), task);
     let final_state = hp(
         home.path(),
-        &["--root", root_arg, "managed", "status", "managed-demo"],
+        &[
+            "--root",
+            root_arg,
+            "managed",
+            "status",
+            "managed-demo",
+            "--full",
+        ],
     );
     assert!(final_state.status.success());
     let final_state: Value = serde_json::from_slice(&final_state.stdout).unwrap();
@@ -296,7 +358,14 @@ fn managed_create_publishes_one_bound_view_through_real_controller_ipc_without_l
     assert!(String::from_utf8_lossy(&collision.stderr).contains("already exists"));
     let view = hp(
         home.path(),
-        &["--root", root_arg, "managed", "status", "managed-demo"],
+        &[
+            "--root",
+            root_arg,
+            "managed",
+            "status",
+            "managed-demo",
+            "--full",
+        ],
     );
     assert!(view.status.success());
     let view: Value = serde_json::from_slice(&view.stdout).unwrap();

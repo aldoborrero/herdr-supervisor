@@ -51,6 +51,7 @@ impl Submission {
             format!("ui-{}", digest(request.as_bytes())),
             "--request".into(),
             "-".into(),
+            "--receipt".into(),
         ];
         Ok(Self { args, request })
     }

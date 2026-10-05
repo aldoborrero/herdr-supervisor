@@ -2611,6 +2611,15 @@ impl<'a> Popup<'a> {
 
     fn draw(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
         let (width, height) = terminal::size().unwrap_or((100, 30));
+        self.draw_at_size(out, width, height)
+    }
+
+    fn draw_at_size(
+        &self,
+        out: &mut impl std::io::Write,
+        width: u16,
+        height: u16,
+    ) -> std::io::Result<()> {
         let (width, height) = (width as usize, height as usize);
         queue!(
             out,
@@ -3442,7 +3451,12 @@ mod tests {
         let Mode::Confirm { action, .. } = &popup.mode else {
             panic!("removal must be confirmed");
         };
-        let request: serde_json::Value = serde_json::from_str(action.last().unwrap()).unwrap();
+        let at = action
+            .iter()
+            .position(|arg| arg == "--request-json")
+            .unwrap();
+        let request: serde_json::Value = serde_json::from_str(&action[at + 1]).unwrap();
+        assert!(action.iter().any(|arg| arg == "--receipt"));
         assert_eq!(request["params"]["name"], "second");
         assert_eq!(request["params"]["expected_revision"], 7);
         assert!(request["params"]["profile"].is_null());
@@ -3903,7 +3917,9 @@ mod tests {
         popup.key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
         assert!(matches!(popup.mode, Mode::List));
         let mut rendered = Vec::new();
-        popup.draw(&mut rendered).unwrap();
+        // A Nix builder's inherited terminal may be too small to show rows.
+        // Test the renderer with a known viewport, not the build host's TTY.
+        popup.draw_at_size(&mut rendered, 120, 30).unwrap();
         let rendered = String::from_utf8(rendered).unwrap();
         assert!(rendered.contains("approved"));
         assert!(rendered.contains("Home first"));

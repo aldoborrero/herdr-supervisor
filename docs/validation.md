@@ -4,9 +4,15 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
+The bounded operator/receipt checkpoint also passes strict all-target Clippy (39.89 s, `.direnv/operator-reads-full.log`) and `nix fmt` (no changes, `.direnv/operator-reads-fmt.log`). Its full Nix build/check remains pending.
+
 **Last completed full Nix gate:** commit `352dcece5a03e21c079b9a397bdf89a2073df9dd` passes package build and `nix flake check` on x86_64-linux, with 520 unit and 10 CLI tests offline. It includes paginated coordinator context and scoped legacy reads. Picker and panel changes require their follow-up package gate. This does not establish other platforms or completion of the remaining feature scope.
 
-The local implementation suite currently passes **530 unit tests and 10 CLI tests** (local suite with four test threads), including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
+The local implementation suite currently passes **534 unit tests and 10 CLI tests** (local suite with four test threads), including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
+
+The subsequent package gate for `cf3ba46553272f74ad566a148a740b5be1aed938` failed: 525/526 unit tests passed; `paginated_panel_keys_send_exact_cursors_and_memory_history_has_no_approval_action` failed its rendered `approved` assertion. The renderer read ambient terminal dimensions; this regression now supplies a fixed 120×30 viewport, retaining the cursor/status/action assertions. The corrected test passes locally. That failed build did not reach CLI tests or flake check and is not a completed gate. Log: `.direnv/project-pages-nix-build.log`.
+
+Bounded operator reads and receipt checkpoint: `.direnv/operator-reads-full.log` records **534 unit tests (47.63 s)** and **10 CLI tests (26.19 s)**. `operator_reads_tests` covers authorized profile selection, unresolved launch/error preview, exact active resources and malformed observation batches. Its real Unix API test commits an operation whose legacy response exceeds 4 MiB, recovers its hash/receipt, reopens SQLite after another decision and verifies identical replay; foreign scope and journal failure cannot return a committed receipt or leave partial changes. `receipt::tests` covers encoded JSON boundaries, escapes and full-result hashing. The large-run pagination fixture also reads coordinator opening through real IPC. CLI coverage exercises bounded default status, explicit full status, pages and receipt recovery. Internal original-response allocation/storage and oversized individual-record retrieval remain limitations. No models or live Herdr servers were used for this checkpoint.
 
 | Requirement | Evidence | Limit |
 | --- | --- | --- |

@@ -1966,3 +1966,6 @@ mod project_pages_tests;
 
 #[path = "editor_pages_tests.rs"]
 mod editor_pages_tests;
+
+#[path = "operator_reads_tests.rs"]
+mod operator_reads_tests;

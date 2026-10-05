@@ -127,6 +127,12 @@ async fn paginated_context_preserves_all_large_tasks_and_separates_growing_polic
         let credential = state.join("picker-token");
         secret_file(&credential, token.as_bytes()).unwrap();
         let binding = crate::managed::Binding { version: 1, controller: state.clone(), credential, run: run.clone(), launch_config: None };
+        let open = binding.open_context(Some("profile11".into())).unwrap();
+        assert_eq!(open["profile_count"],13);
+        assert_eq!(open["selected_profile"],"profile11");
+        assert!(open.get("tasks").is_none());
+        assert!(serde_json::to_vec(&open).unwrap().len() < 1024);
+        assert!(binding.open_context(None).unwrap()["selected_profile"].is_null());
         let picker = binding.overview().unwrap();
         assert!(picker.get("tasks").is_none());
         assert!(serde_json::to_vec(&picker).unwrap().len() <= PAGE_BYTES);

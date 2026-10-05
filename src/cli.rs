@@ -715,7 +715,7 @@ pub fn run() -> Result<()> {
             for slug in project::list_slugs(&ctx.root) {
                 let project = Project::load_view(&ctx.root, &slug)?;
                 if crate::managed::present(&project) {
-                    match crate::managed::context(&project) {
+                    match crate::managed::binding(&project).and_then(|binding| binding.overview()) {
                         Ok(c) => println!("{slug}\tmanaged\t{}", crate::managed::summary(&c)),
                         Err(e) => println!(
                             "{slug}\tcontroller unavailable\t{}",

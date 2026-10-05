@@ -41,6 +41,22 @@ fn response_bytes(value: &Value) -> Result<Vec<u8>> {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ApiRequest {
+    ProjectApplyReceipt {
+        token: String,
+        run: String,
+        operation_id: String,
+        command: Box<Mutation>,
+    },
+    CoordinatorOpenContext {
+        token: String,
+        run: String,
+        profile: Option<String>,
+    },
+    MatchSessions {
+        token: String,
+        run: String,
+        observations: Vec<super::pagination::SessionObservation>,
+    },
     ProjectPage {
         token: String,
         run: String,
@@ -89,6 +105,32 @@ pub enum ApiRequest {
 
 pub fn handle(store: &mut Store, request: ApiRequest) -> Result<Value> {
     match request {
+        ApiRequest::ProjectApplyReceipt {
+            token,
+            run,
+            operation_id,
+            command,
+        } => {
+            let response = store.apply_in_run(
+                &run,
+                &Request {
+                    token,
+                    operation_id: operation_id.clone(),
+                    command: *command,
+                },
+            )?;
+            super::receipt::committed(&operation_id, &response)
+        }
+        ApiRequest::CoordinatorOpenContext {
+            token,
+            run,
+            profile,
+        } => super::pagination::open_context(store, &token, &run, profile.as_deref()),
+        ApiRequest::MatchSessions {
+            token,
+            run,
+            observations,
+        } => super::pagination::matches_sessions(store, &token, &run, &observations),
         ApiRequest::ProjectPage {
             token,
             run,

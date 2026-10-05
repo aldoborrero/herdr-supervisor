@@ -424,3 +424,101 @@ pub fn project_page(
     tx.commit()?;
     Ok(context)
 }
+
+/// Only the facts needed to open/focus a coordinator, independent of task and
+/// profile history size. Reservation still rechecks its captured revision.
+pub fn open_context(
+    store: &Store,
+    token: &str,
+    run: &str,
+    requested_profile: Option<&str>,
+) -> Result<Value> {
+    if let Some(name) = requested_profile {
+        super::model::identifier(name)?;
+    }
+    let tx = store.connection.unchecked_transaction()?;
+    let (principal, _, revision) = authorize(&tx, token, run)?;
+    let (project, state): (String, String) =
+        tx.query_row("SELECT project,state FROM runs WHERE id=?1", [run], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?;
+    let binding: Option<String> = tx
+        .query_row(
+            "SELECT endpoint FROM coordinator_routes WHERE run=?1 AND active=1",
+            [run],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let native = binding
+        .map(|doc| serde_json::from_str::<Value>(&doc))
+        .transpose()?;
+    let pending:Option<(String,String,u64,Option<String>)>=tx.query_row("SELECT id,state,length(CAST(last_error AS BLOB)),CASE WHEN length(CAST(last_error AS BLOB))<=16384 THEN last_error ELSE NULL END FROM coordinator_launches WHERE run=?1 AND state<>'exited' ORDER BY generation LIMIT 1",[run],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
+    let (count,only):(u64,Option<String>)=tx.query_row("SELECT count(*),min(j.key) FROM runs r,json_each(r.doc,'$.policy.profiles') j WHERE r.id=?1",[run],|r|Ok((r.get(0)?,r.get(1)?)))?;
+    let selected = if let Some(name) = requested_profile {
+        let exists:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM runs r,json_each(r.doc,'$.policy.profiles') j WHERE r.id=?1 AND j.key=?2)",params![run,name],|r|r.get(0))?;
+        exists.then(|| name.to_string())
+    } else if count == 1 {
+        only
+    } else {
+        None
+    };
+    let result = json!({"kind":"coordinator_open_context","run":{"id":run,"project":project,"state":state,"revision":revision},"actor_role":principal.role,"native_coordinator":native.map(|endpoint|json!({"endpoint":endpoint})),"pending_launch":pending.map(|(id,state,bytes,error)|json!({"id":id,"state":state,"last_error":error,"last_error_bytes":bytes,"last_error_omitted":bytes>16384})),"profile_count":count,"selected_profile":selected});
+    ensure!(
+        serde_json::to_vec(&result)?.len() <= 262144,
+        "coordinator open context too large"
+    );
+    tx.commit()?;
+    Ok(result)
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionObservation {
+    pub session: String,
+    pub runtime: String,
+    pub workspace: String,
+    pub pane: String,
+    pub terminal: String,
+}
+impl SessionObservation {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            ["codex", "claude", "pi"].contains(&self.runtime.as_str()),
+            "unsupported observed runtime"
+        );
+        for field in [&self.session, &self.workspace, &self.pane, &self.terminal] {
+            ensure!(
+                !field.is_empty() && field.len() <= 256,
+                "invalid observed resource identity"
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Match observations from a chosen Herdr server without exporting all attempts.
+pub fn matches_sessions(
+    store: &Store,
+    token: &str,
+    run: &str,
+    observations: &[SessionObservation],
+) -> Result<Value> {
+    ensure!(
+        observations.len() <= 50,
+        "at most 50 observations per request"
+    );
+    let tx = store.connection.unchecked_transaction()?;
+    authorize(&tx, token, run)?;
+    for observation in observations {
+        observation.validate()?;
+    }
+    let mut matched = false;
+    for o in observations {
+        matched=tx.query_row("SELECT EXISTS(SELECT 1 FROM coordinator_routes WHERE run=?1 AND active=1 AND json_extract(endpoint,'$.native_session')=?2 AND json_extract(endpoint,'$.runtime')=?3) OR EXISTS(SELECT 1 FROM attempts WHERE run=?1 AND active=1 AND json_extract(doc,'$.native_session')=?2 AND json_extract(doc,'$.resource.runtime')=?3 AND json_extract(doc,'$.resource.workspace')=?4 AND json_extract(doc,'$.resource.pane')=?5 AND json_extract(doc,'$.resource.terminal')=?6)",params![run,o.session,o.runtime,o.workspace,o.pane,o.terminal],|r|r.get(0))?;
+        if matched {
+            break;
+        }
+    }
+    tx.commit()?;
+    Ok(json!({"run":run,"matched":matched}))
+}

@@ -667,7 +667,7 @@ pub fn context(ctx: &Ctx, slug: &str, peek: bool) -> Result<()> {
     if crate::managed::present(&project) {
         println!(
             "{}",
-            serde_json::to_string_pretty(&crate::managed::context(&project)?)?
+            serde_json::to_string_pretty(&crate::managed::binding(&project)?.overview()?)?
         );
         return Ok(());
     }
