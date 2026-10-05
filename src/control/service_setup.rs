@@ -20,6 +20,10 @@ use std::{
 };
 
 const MAX_SPEC: usize = 262144;
+
+#[path = "service_check.rs"]
+mod checking;
+pub use checking::check;
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BrokerSpec {
@@ -350,20 +354,44 @@ pub fn prepare(controller: &Path, bundle: &Path, spec: &Spec) -> Result<Value> {
     let grant_path = bundle.join("node-grant.json");
     // Derive the same signed bytes from the frozen operation/time on every
     // retry. A missing export can be recovered; a replaced grant is refused.
-    let grant = Identity::load(&controller.join("owner.key"))?.sign(Record {
-        record_type: "local.herdr.supervisor.nodeGrant".into(),
-        id: intent.operation,
-        owner: owner.clone(),
-        author: owner.clone(),
-        recipient: node_key.did(),
-        epoch: 1,
-        created_at: intent.created_at,
-        expires_at: spec.grant_expires_at,
-        payload: json!({"node":spec.node,"key":node_key.did()}),
-    })?;
+    let grant = Identity::load(&controller.join("owner.key"))?.sign(grant_record(
+        &intent,
+        &owner,
+        &node_key.did(),
+    ))?;
     grant.verify(now())?;
     document(&grant_path, &grant)?;
     let _node = NodeStore::open(&spec.node_state, &spec.node, &owner, grant, &node_key)?;
+    let files = manifest(&controller, &bundle, spec, &owner)?;
+    for (name, value) in &files {
+        document(&bundle.join(name), value)?;
+    }
+    let commands = &files["commands.json"];
+    Ok(
+        json!({"owner":owner,"node":spec.node,"node_key":node_key.did(),"bundle":bundle,"grant_expires_at":spec.grant_expires_at,"launch_config":bundle.join("launch.json"),"commands":commands,"services_started":false,"models_started":false,"broker_provisioned_this_invocation":false,"runtime_health_checked":false}),
+    )
+}
+
+fn grant_record(intent: &Intent, owner: &str, node: &str) -> Record {
+    Record {
+        record_type: "local.herdr.supervisor.nodeGrant".into(),
+        id: intent.operation.clone(),
+        owner: owner.into(),
+        author: owner.into(),
+        recipient: node.into(),
+        epoch: 1,
+        created_at: intent.created_at,
+        expires_at: intent.spec.grant_expires_at,
+        payload: json!({"node":intent.spec.node,"key":node}),
+    }
+}
+
+fn manifest(
+    controller: &Path,
+    bundle: &Path,
+    spec: &Spec,
+    owner: &str,
+) -> Result<BTreeMap<&'static str, Value>> {
     let verifier = git_pipeline::Config {
         repositories: spec
             .repositories
@@ -401,7 +429,7 @@ pub fn prepare(controller: &Path, bundle: &Path, spec: &Spec) -> Result<Value> {
         sender_credential: spec.notifier_credential.clone(),
         supervisor_binary: spec.native.supervisor_binary.clone(),
     };
-    for (name, value) in [
+    let mut files: BTreeMap<_, _> = [
         (
             "admin-broker.json",
             serde_json::to_value(broker(spec, &spec.broker.admin_credentials))?,
@@ -421,21 +449,20 @@ pub fn prepare(controller: &Path, bundle: &Path, spec: &Spec) -> Result<Value> {
         ("launch.json", serde_json::to_value(&spec.native)?),
         (
             "broker-policy.json",
-            broker_policy::policy(&owner, std::slice::from_ref(&spec.node))?,
+            broker_policy::policy(owner, std::slice::from_ref(&spec.node))?,
         ),
-    ] {
-        document(&bundle.join(name), &value)?;
-    }
+    ]
+    .into_iter()
+    .collect();
     let bin = &spec.native.supervisor_binary;
+    let grant_path = bundle.join("node-grant.json");
     let commands = json!({
         "controller":[bin,"control","--state",controller,"run-controller","--broker",bundle.join("controller-broker.json"),"--repositories",bundle.join("repositories.json"),"--coordinator-config",bundle.join("notifier.json")],
         "node":[bin,"control","--state",spec.node_state,"run-node","--broker",bundle.join("node-broker.json"),"--executor",bundle.join("executor.json"),"--runtime-config",bundle.join("runtime.json"),"--node",spec.node,"--owner",owner,"--grant",grant_path],
         "provision":[bin,"control","--state",controller,"provision","--broker",bundle.join("admin-broker.json"),"--target",spec.node]
     });
-    document(&bundle.join("commands.json"), &commands)?;
-    Ok(
-        json!({"owner":owner,"node":spec.node,"node_key":node_key.did(),"bundle":bundle,"grant_expires_at":spec.grant_expires_at,"launch_config":bundle.join("launch.json"),"commands":commands,"services_started":false,"models_started":false,"broker_provisioned_this_invocation":false,"runtime_health_checked":false}),
-    )
+    files.insert("commands.json", commands);
+    Ok(files)
 }
 pub async fn provision(bundle: &Path, spec: &Spec, result: &mut Value) -> Result<()> {
     let owner = result["owner"].as_str().context("missing prepared owner")?;

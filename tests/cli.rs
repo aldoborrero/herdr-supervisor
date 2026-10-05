@@ -76,6 +76,31 @@ fn local_service_setup_cli_resumes_private_bundle_and_does_not_start_services() 
 }
 
 #[test]
+fn local_service_check_cli_is_structured_nonzero_and_never_initializes_missing_state() {
+    let home = tempfile::tempdir().unwrap();
+    let state = home.path().join("missing controller");
+    let bundle = home.path().join("missing bundle");
+    let result = hp(
+        home.path(),
+        &[
+            "control",
+            "--state",
+            state.to_str().unwrap(),
+            "check-local",
+            "--bundle",
+            bundle.to_str().unwrap(),
+        ],
+    );
+    assert!(!result.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(report["checks_passed"], false);
+    assert_eq!(report["checks"][0]["check"], "bundle_integrity");
+    assert_eq!(report["services_started"], false);
+    assert!(!state.exists());
+    assert!(!bundle.exists());
+}
+
+#[test]
 fn managed_create_publishes_one_bound_view_through_real_controller_ipc_without_launching_agents() {
     use serde_json::{Value, json};
     use std::{

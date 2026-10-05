@@ -145,9 +145,10 @@ class NativeEventsServer(socketserver.ThreadingMixIn, socketserver.UnixStreamSer
                             + b"\n"
                         )
                         with self.lock:
-                            assert self.subscriptions > 0, (
-                                "snapshot preceded subscription"
-                            )
+                            if request["id"] != "supervisor-check":
+                                assert self.subscriptions > 0, (
+                                    "event reconciliation snapshot preceded subscription"
+                                )
                             self.snapshots += 1
                     else:
                         raise AssertionError(f"unexpected native method {method}")
@@ -449,7 +450,20 @@ class Fixture:
             self.registrations[request["agent"]] = registration
             return registration
         if request["op"] == "capabilities":
-            return {"idempotentSend": True, "recipientPrecondition": True}
+            return {
+                "protocol": 2,
+                "idempotentSend": True,
+                "recipientPrecondition": True,
+            }
+        if request["op"] == "doctor":
+            assert request["token"] == self.notifier_token
+            return {
+                "sqlite": "ok",
+                "owner": self.owner,
+                "agent": "notifier",
+                "session": self.notifier_session,
+                "epoch": 1,
+            }
         assert request["op"] == "send", request["op"]
         receiver = self.registrations[request["recipient"]]["session"]
         assert request["recipientSession"] == receiver["id"]
@@ -538,6 +552,9 @@ class Fixture:
                 {"user": user, "password": f"{user}-test-password"},
             )
         mailer_admin = self.file("mailer-admin.token", uid() + uid())
+        self.notifier_token = uid() + uid()
+        self.notifier_session = uid()
+        self.file("notifier.token", self.notifier_token)
         setup_spec = self.file(
             "local-services.json",
             {
@@ -565,7 +582,7 @@ class Fixture:
                     "mailer_runtime_binary": str(self.root / "unused-runtime"),
                     "claude_development_channel": False,
                 },
-                "notifier_credential": str(self.root / "unused-notifier.token"),
+                "notifier_credential": str(self.root / "notifier.token"),
             },
         )
         setup_args = [
@@ -625,6 +642,18 @@ class Fixture:
             stub.chmod(0o700)
         self.servers.append(JsonServer(self.root / "fixture.sock", self.herdr))
         self.servers.append(JsonServer(self.mailer / "daemon.sock", self.mail))
+        before = self.snapshot()["run"]
+        diagnostic = self.cli(
+            self.controller, "check-local", "--bundle", self.root / "services"
+        )
+        assert diagnostic["checks_passed"] is True, diagnostic
+        assert diagnostic["model_readiness"] == "not_checked"
+        assert diagnostic["models_started"] is False
+        assert diagnostic["services_started"] is False
+        assert "model_authentication" in diagnostic["not_checked"]
+        assert self.snapshot()["run"] == before
+        assert not self.registrations and not self.models and not self.launches
+        assert self.notifier_token not in json.dumps(diagnostic)
 
     def ready(self, attempt):
         wait_for(

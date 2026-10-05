@@ -246,14 +246,17 @@ fn event(value: &Value) -> Result<bool> {
         || name == "pane_agent_status_changed")
 }
 async fn snapshot(socket: &Path) -> Result<()> {
+    snapshot_with_id(socket, "supervisor-snapshot").await
+}
+pub(super) async fn snapshot_with_id(socket: &Path, id: &str) -> Result<()> {
     let mut stream = timeout(DEADLINE, UnixStream::connect(socket)).await??;
     request(
         &mut stream,
-        json!({"id":"supervisor-snapshot","method":"session.snapshot","params":{}}),
+        json!({"id":id,"method":"session.snapshot","params":{}}),
     )
     .await?;
     let value = timeout(DEADLINE, Frames::new(stream).next(SNAPSHOT_BYTES)).await??;
-    acknowledge(&value, "supervisor-snapshot", "session_snapshot")?;
+    acknowledge(&value, id, "session_snapshot")?;
     let s = &value["result"]["snapshot"];
     ensure!(
         s["protocol"].as_u64().is_some_and(|n| n >= 22) && s["version"].is_string(),

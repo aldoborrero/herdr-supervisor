@@ -1,4 +1,7 @@
 use super::*;
+
+#[path = "service_check_tests.rs"]
+mod check_tests;
 use crate::control::{
     broker_policy::Endpoint,
     coordinator, coordinator_launch, executor, git_pipeline, runtime,

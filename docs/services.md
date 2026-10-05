@@ -17,6 +17,8 @@ Initialization does not enroll the node or provision NATS. Those require the own
 
 For a same-host controller/node, [the resumable local bundle command](getting-started.md#prepare-a-local-service-bundle) performs initialization, enrollment and configuration together, with optional explicit NATS provisioning. Point these module options at its output files. Generating a bundle does not activate systemd units or establish native runtime health.
 
+Before your own activation, `control --state CONTROLLER_DIR check-local --bundle BUNDLE_DIR` reports frozen-state integrity and current dependency observations without provisioning, registering or starting anything. It returns nonzero for failed checks; model authentication and functional worker readiness remain separate. See [the diagnostic contract](getting-started.md#check-the-bundle-before-starting).
+
 The module options name existing JSON configuration files. They do not read those files during Nix evaluation and expose no option for raw tokens, broker passwords or private keys. JSON may be generated declaratively when it contains only public settings and **paths** to private runtime credentials. Never interpolate secret contents with `builtins.readFile`, include passwords in URLs or put private keys in the Nix store. The Rust services perform runtime credential and grant validation.
 
 ## NixOS

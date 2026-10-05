@@ -63,6 +63,21 @@ Apply the generated `broker-policy.json` to distinct accounts on your private NA
 
 Start the services with the returned argv, or reference these bundle paths in the opt-in NixOS/Home Manager modules. The tool does not install units, start Herdr/mailer/NATS, authenticate models or change global configuration. Use the bundle's `launch.json` when creating the project below. A multi-host deployment still follows the explicit key/grant transfer and node mappings in [operations](operations.md#enroll-a-node-and-provision-nats); never copy the controller owner key to a remote node.
 
+### Check the bundle before starting
+
+After preparing the bundle and its external services, run:
+
+```bash
+herdr-supervisor control --state /private/supervisor-controller check-local \
+  --bundle /private/supervisor-services
+```
+
+The command prints a JSON report and returns nonzero when any check fails. `bundle_integrity` checks the frozen configuration, file privacy, owner/node keys and capabilities, original enrollment receipt, both database authorities and signed grant. A failed integrity check stops before contacting external services. It opens the databases read-only and never initializes missing state, repairs files, renews grants or migrates a schema.
+
+The remaining checks use the controller and node's runtime broker credentials to read their consumers, read Herdr's protocol-22-or-later snapshot, authenticate the notifier with mailer's protocol-2 capabilities/doctor, check that the private mailer admin file is readable, and inspect mapped repositories with Git. The broker administrator credential is not used. A final authority read detects changes during those observations. External error bodies are not copied into the report; each failed component has an action explaining what to inspect.
+
+`checks_passed` is a set of current observations, not an atomic guarantee that later startup will succeed. `model_readiness` is explicitly `not_checked`, including when every dependency check passes. `not_checked` lists model authentication, native CLI compatibility, mailer admin authorization, broker ACL isolation, repository write access and worker readiness. In particular, reading the admin file does not prove that the daemon accepts it; mailer has no read-only admin-authentication request. No runtime is launched, registered or messaged. Keep the normal exact-session bootstrap and `worker_ready` handshake when starting work.
+
 ## Create from the popup
 
 ```bash

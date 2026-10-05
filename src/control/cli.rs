@@ -183,6 +183,11 @@ enum ControlCommand {
         #[arg(long)]
         provision: bool,
     },
+    /// Diagnose a saved local bundle and its dependencies without provisioning or starting models
+    CheckLocal {
+        #[arg(long)]
+        bundle: PathBuf,
+    },
     /// Bind an already registered native coordinator and publish its scoped credential file
     ConnectSupervisor {
         #[arg(long)]
@@ -630,6 +635,15 @@ pub fn run(args: ControlArgs) -> Result<()> {
                 ))?;
             }
             result
+        }
+        ControlCommand::CheckLocal { bundle } => {
+            let report = runtime()?.block_on(super::service_setup::check(&args.state, &bundle))?;
+            println!("{}", serde_json::to_string(&report)?);
+            ensure!(
+                report["checks_passed"] == true,
+                "local dependency checks failed; see the structured report"
+            );
+            return Ok(());
         }
         ControlCommand::NodeKey => {
             private_dir(&args.state)?;
