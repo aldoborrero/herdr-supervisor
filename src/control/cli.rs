@@ -173,6 +173,16 @@ enum ControlCommand {
     },
     /// Create owner key, private database and admin credential (never print the token)
     Init,
+    /// Prepare a resumable local controller/node bundle; starts no services or models
+    SetupLocal {
+        #[arg(long)]
+        spec: PathBuf,
+        #[arg(long)]
+        bundle: PathBuf,
+        /// Contact the explicitly configured broker with its separate admin credential
+        #[arg(long)]
+        provision: bool,
+    },
     /// Bind an already registered native coordinator and publish its scoped credential file
     ConnectSupervisor {
         #[arg(long)]
@@ -604,6 +614,22 @@ pub fn run(args: ControlArgs) -> Result<()> {
         ControlCommand::Init => {
             let store = Store::initialize(&args.state)?;
             json!({"owner":store.owner()?,"credential_file":args.state.join("admin.token")})
+        }
+        ControlCommand::SetupLocal {
+            spec,
+            bundle,
+            provision,
+        } => {
+            let spec = super::service_setup::read_spec(&spec)?;
+            let mut result = super::service_setup::prepare(&args.state, &bundle, &spec)?;
+            if provision {
+                runtime()?.block_on(super::service_setup::provision(
+                    &bundle,
+                    &spec,
+                    &mut result,
+                ))?;
+            }
+            result
         }
         ControlCommand::NodeKey => {
             private_dir(&args.state)?;

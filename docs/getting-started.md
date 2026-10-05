@@ -14,6 +14,55 @@ The controller must already be initialized and its API running. For a creation-o
 
 Follow [operations](operations.md) for enrollment, broker permissions and runtime setup, or the opt-in [NixOS/Home Manager service guide](services.md). The creation form does not provision these services. Keep credentials in private runtime files outside repositories and the Nix store.
 
+### Prepare a local service bundle
+
+For a controller and execution node on the same machine, `control setup-local` combines initialization, node enrollment, the signed grant and service configuration. It uses the same NATS node protocol as remote execution. Supply one JSON specification, for example:
+
+```json
+{
+  "node": "local",
+  "node_state": "/private/supervisor-node",
+  "max_active": 3,
+  "grant_expires_at": 1900000000,
+  "repositories": { "/repos/demo": "/home/aldo/Dev/demo" },
+  "worktree_root": "/private/supervisor-worktrees",
+  "check_timeout_secs": 300,
+  "broker": {
+    "url": "nats://127.0.0.1:4222",
+    "admin_credentials": "/private/nats-admin.creds",
+    "controller_credentials": "/private/nats-controller.creds",
+    "node_credentials": "/private/nats-local.creds",
+    "private_network_plaintext": true
+  },
+  "native": {
+    "herdr_binary": "/absolute/bin/herdr",
+    "herdr_socket": "/private/herdr.sock",
+    "supervisor_binary": "/absolute/bin/herdr-supervisor",
+    "mailer_state": "/private/mailer",
+    "mailer_admin_credential": "/private/mailer-admin.token",
+    "codex_binary": "/absolute/bin/codex",
+    "mailer_runtime_binary": "/absolute/bin/herdr-mailer-runtime",
+    "claude_development_channel": false
+  },
+  "notifier_credential": "/private/supervisor-notifier.token"
+}
+```
+
+Replace the illustrative paths and expiry before use. `grant_expires_at` is an explicit Unix timestamp; `date -d '+7 days' +%s` can calculate one on NixOS. Claude requires an explicit development-channel opt-in when you choose that runtime. The notifier credential is a registered mailer sender token, distinct from the mailer admin credential. Broker credentials name three separate runtime files/accounts: administrator, controller and node. The command does not generate those external service credentials. Omit `private_network_plaintext` or set it to false for required TLS; the example opts into plaintext only for a private local broker.
+
+```bash
+herdr-supervisor control --state /private/supervisor-controller setup-local \
+  --spec local-services.json --bundle /private/supervisor-services
+```
+
+This creates private controller/node databases and keys, enrolls one node through the owner mutation API and writes the bundle with mode-0600 files. The owner key stays in the controller directory. The bundle contains `node.token`, `node-grant.json`, separate broker configurations, repository/executor/runtime/notifier/launcher JSON, public broker permissions and `commands.json`. The JSON result supplies exact argv arrays for controller, node and broker provisioning; paths with spaces remain single arguments. It reports `services_started: false`, `models_started: false` and `runtime_health_checked: false`.
+
+The command preserves identities and enrollment on repeat. Its frozen `intent.json` and `authority.json` retain the operation, specification and authority fingerprints. Reuse the same specification and bundle after an interrupted publication or failed broker connection. Existing output files must match; an edited file, changed authority, retired node or expired grant stops the retry. No grant renewal or credential rotation is inferred. Controller, node, bundle, mailer and worktree roots must be distinct and non-overlapping, with service state outside mapped repositories; aliases through existing symlinks are checked before initialization.
+
+Apply the generated `broker-policy.json` to distinct accounts on your private NATS server. This export covers the configured local node; for a controller with additional nodes, generate its complete permissions with `control broker-policy` instead of replacing them with the local-only export. Once those credentials and the server are ready, add `--provision` to the same command to create or validate its stream and controller/node consumers. Only this explicit flag contacts NATS, using the administrator credential. A failed provision leaves the local bundle available for retry. `broker_provisioned_this_invocation` means that request succeeded now; an offline repeat reports false instead of reusing an old health claim.
+
+Start the services with the returned argv, or reference these bundle paths in the opt-in NixOS/Home Manager modules. The tool does not install units, start Herdr/mailer/NATS, authenticate models or change global configuration. Use the bundle's `launch.json` when creating the project below. A multi-host deployment still follows the explicit key/grant transfer and node mappings in [operations](operations.md#enroll-a-node-and-provision-nats); never copy the controller owner key to a remote node.
+
 ## Create from the popup
 
 ```bash

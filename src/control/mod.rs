@@ -26,6 +26,7 @@ mod registration_recovery;
 mod run_profiles;
 pub mod runtime;
 pub mod service;
+pub mod service_setup;
 pub mod store;
 pub mod transport;
 pub mod verification;

@@ -6,6 +6,76 @@ use std::process::Command;
 const BIN: &str = env!("CARGO_BIN_EXE_herdr-supervisor");
 
 #[test]
+fn local_service_setup_cli_resumes_private_bundle_and_does_not_start_services() {
+    use serde_json::{Value, json};
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path();
+    let controller = root.join("controller state");
+    let bundle = root.join("service bundle");
+    let spec_path = root.join("local.json");
+    let mut spec = json!({"node":"local","node_state":root.join("node state"),"max_active":3,"grant_expires_at":jiff::Timestamp::now().as_second()+3600,"repositories":{"/demo":root.join("repository")},"worktree_root":root.join("worktrees"),"check_timeout_secs":60,"broker":{"url":"nats://127.0.0.1:4222","admin_credentials":root.join("missing-admin.creds"),"controller_credentials":root.join("controller.creds"),"node_credentials":root.join("node.creds"),"private_network_plaintext":true},"native":{"herdr_binary":root.join("bin/herdr"),"herdr_socket":root.join("herdr.sock"),"supervisor_binary":BIN,"mailer_state":root.join("mailer"),"mailer_admin_credential":root.join("mailer-admin.token"),"codex_binary":root.join("bin/codex"),"mailer_runtime_binary":root.join("bin/herdr-mailer-runtime"),"claude_development_channel":false},"notifier_credential":root.join("notifier.token")});
+    std::fs::write(&spec_path, serde_json::to_vec(&spec).unwrap()).unwrap();
+    let args = [
+        "control",
+        "--state",
+        controller.to_str().unwrap(),
+        "setup-local",
+        "--spec",
+        spec_path.to_str().unwrap(),
+        "--bundle",
+        bundle.to_str().unwrap(),
+    ];
+    let first = hp(root, &args);
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let value: Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(
+        value["commands"]["controller"][3],
+        controller.to_str().unwrap()
+    );
+    assert_eq!(
+        value["commands"]["node"][3],
+        root.join("node state").to_str().unwrap()
+    );
+    assert_eq!(value["services_started"], false);
+    assert_eq!(value["models_started"], false);
+    assert_eq!(value["broker_provisioned_this_invocation"], false);
+    let token = std::fs::read_to_string(bundle.join("node.token")).unwrap();
+    let owner_token = std::fs::read_to_string(controller.join("admin.token")).unwrap();
+    let repeated = hp(root, &args);
+    assert!(repeated.status.success());
+    assert_eq!(repeated.stdout, first.stdout);
+    let mut provision = args.to_vec();
+    provision.push("--provision");
+    let failed = hp(root, &provision);
+    assert!(!failed.status.success());
+    assert_eq!(
+        std::fs::read_to_string(bundle.join("node.token")).unwrap(),
+        token
+    );
+    let retried = hp(root, &args);
+    assert!(retried.status.success());
+    assert_eq!(retried.stdout, first.stdout);
+    for output in [&first, &repeated, &failed, &retried] {
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!text.contains(&token));
+        assert!(!text.contains(&owner_token));
+    }
+    spec["max_active"] = json!(4);
+    std::fs::write(&spec_path, serde_json::to_vec(&spec).unwrap()).unwrap();
+    assert!(!hp(root, &args).status.success());
+    assert!(!controller.join("control.sock").exists());
+    assert!(!root.join("node state/worker.sock").exists());
+}
+
+#[test]
 fn managed_create_publishes_one_bound_view_through_real_controller_ipc_without_launching_agents() {
     use serde_json::{Value, json};
     use std::{

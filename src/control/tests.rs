@@ -7,6 +7,9 @@ use super::identity::*;
 use super::model::*;
 use super::store::*;
 
+#[path = "service_setup_tests.rs"]
+mod service_setup_tests;
+
 const BASE: &str = "1234567890123456789012345678901234567890";
 
 fn policy() -> Policy {

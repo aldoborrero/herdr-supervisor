@@ -482,28 +482,7 @@ class Fixture:
         }
 
     def start_node(self):
-        self.node_process = self.spawn(
-            "node",
-            [
-                self.binary,
-                "control",
-                "--state",
-                self.node,
-                "run-node",
-                "--broker",
-                self.root / "node-broker.json",
-                "--executor",
-                self.root / "executor.json",
-                "--runtime-config",
-                self.root / "runtime.json",
-                "--node",
-                "local",
-                "--owner",
-                self.owner,
-                "--grant",
-                self.root / "grant.json",
-            ],
-        )
+        self.node_process = self.spawn("node", self.prepared["commands"]["node"])
         wait_for("node API", lambda: (self.node / "worker.sock").exists())
 
     def setup(self):
@@ -516,18 +495,6 @@ class Fixture:
         self.owner = self.cli(self.controller, "init")["owner"]
         self.owner_token = (self.controller / "admin.token").read_text().strip()
         self.supervisor_token = self.owner_token
-        node_key = self.cli(self.node, "node-key")["key"]
-        self.file(
-            "grant.json",
-            self.cli(
-                self.controller,
-                "grant",
-                "local",
-                node_key,
-                "--expires-at",
-                str(int(time.time()) + 3600),
-            ),
-        )
         policy = self.cli(self.controller, "broker-policy", "--node", "local")
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
@@ -566,57 +533,60 @@ class Fixture:
 
         wait_for("private NATS", listening)
         for user in ("admin", "controller", "node"):
-            creds = self.file(
+            self.file(
                 f"{user}-creds.json",
                 {"user": user, "password": f"{user}-test-password"},
             )
-            self.file(
-                f"{user}-broker.json",
-                {
+        mailer_admin = self.file("mailer-admin.token", uid() + uid())
+        setup_spec = self.file(
+            "local-services.json",
+            {
+                "node": "local",
+                "node_state": str(self.node),
+                "max_active": 2,
+                "grant_expires_at": int(time.time()) + 3600,
+                "repositories": {"/fixture": str(self.repo)},
+                "worktree_root": str(self.root / "worktrees"),
+                "check_timeout_secs": 10,
+                "broker": {
                     "url": f"nats://127.0.0.1:{port}",
-                    "credentials": str(creds),
+                    "admin_credentials": str(self.root / "admin-creds.json"),
+                    "controller_credentials": str(self.root / "controller-creds.json"),
+                    "node_credentials": str(self.root / "node-creds.json"),
                     "private_network_plaintext": True,
                 },
-            )
-        self.cli(
-            self.controller,
-            "provision",
-            "--broker",
-            self.root / "admin-broker.json",
-            "--target",
-            "controller",
-            "--target",
-            "local",
-        )
-        self.file(
-            "repositories.json",
-            {
-                "repositories": {
-                    "/fixture": {
-                        "path": str(self.repo),
-                        "node_remotes": {},
-                    }
+                "native": {
+                    "herdr_binary": str(self.root / "herdr-stub"),
+                    "herdr_socket": str(self.root / "native-events.sock"),
+                    "supervisor_binary": self.binary,
+                    "mailer_state": str(self.mailer),
+                    "mailer_admin_credential": str(mailer_admin),
+                    "codex_binary": str(self.root / "model-stub"),
+                    "mailer_runtime_binary": str(self.root / "unused-runtime"),
+                    "claude_development_channel": False,
                 },
-                "check_timeout_secs": 10,
+                "notifier_credential": str(self.root / "unused-notifier.token"),
             },
         )
+        setup_args = [
+            "setup-local",
+            "--spec",
+            setup_spec,
+            "--bundle",
+            self.root / "services",
+        ]
+        self.prepared = self.cli(self.controller, *setup_args, "--provision")
+        assert self.prepared["owner"] == self.owner
+        assert self.prepared["broker_provisioned_this_invocation"] is True
+        assert self.prepared["services_started"] is False
+        assert self.prepared["models_started"] is False
+        replay = self.cli(self.controller, *setup_args)
+        assert replay["commands"] == self.prepared["commands"]
+        assert replay["broker_provisioned_this_invocation"] is False
         self.controller_process = self.spawn(
-            "controller",
-            [
-                self.binary,
-                "control",
-                "--state",
-                self.controller,
-                "run-controller",
-                "--broker",
-                self.root / "controller-broker.json",
-                "--repositories",
-                self.root / "repositories.json",
-            ],
+            "controller", self.prepared["commands"]["controller"]
         )
         wait_for("controller API", lambda: (self.controller / "control.sock").exists())
-        enrolled = self.apply("enroll_node", id="local", key=node_key, max_active=2)
-        self.file("node.token", enrolled["credential"])
         run = self.apply(
             "create_run",
             project="workflow",
@@ -655,28 +625,6 @@ class Fixture:
             stub.chmod(0o700)
         self.servers.append(JsonServer(self.root / "fixture.sock", self.herdr))
         self.servers.append(JsonServer(self.mailer / "daemon.sock", self.mail))
-        self.file(
-            "executor.json",
-            {
-                "repositories": {"/fixture": str(self.repo)},
-                "worktree_root": str(self.root / "worktrees"),
-                "herdr_binary": str(self.root / "herdr-stub"),
-                "herdr_socket": str(self.root / "native-events.sock"),
-            },
-        )
-        admin = self.file("mailer-admin.token", uid() + uid())
-        self.file(
-            "runtime.json",
-            {
-                "supervisor_binary": self.binary,
-                "mailer_state": str(self.mailer),
-                "mailer_admin_credential": str(admin),
-                "node_credential": str(self.root / "node.token"),
-                "codex_binary": str(self.root / "model-stub"),
-                "mailer_runtime_binary": str(self.root / "unused-runtime"),
-                "claude_development_channel": False,
-            },
-        )
 
     def ready(self, attempt):
         wait_for(

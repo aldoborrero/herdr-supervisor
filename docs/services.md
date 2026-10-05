@@ -15,6 +15,8 @@ herdr-supervisor control --state /home/aldo/.local/state/herdr-supervisor/nodes/
 
 Initialization does not enroll the node or provision NATS. Those require the owner-authorized steps in the operations guide. Services deliberately do not create replacement identities on startup. Keep directories 0700 and credential/key files 0600. The NixOS default state root is `/var/lib/herdr-supervisor`; provision ownership there first, or select paths under the runtime user's home as below.
 
+For a same-host controller/node, [the resumable local bundle command](getting-started.md#prepare-a-local-service-bundle) performs initialization, enrollment and configuration together, with optional explicit NATS provisioning. Point these module options at its output files. Generating a bundle does not activate systemd units or establish native runtime health.
+
 The module options name existing JSON configuration files. They do not read those files during Nix evaluation and expose no option for raw tokens, broker passwords or private keys. JSON may be generated declaratively when it contains only public settings and **paths** to private runtime credentials. Never interpolate secret contents with `builtins.readFile`, include passwords in URLs or put private keys in the Nix store. The Rust services perform runtime credential and grant validation.
 
 ## NixOS
