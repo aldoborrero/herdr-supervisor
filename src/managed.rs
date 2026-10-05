@@ -539,19 +539,73 @@ fn action(key: char, label: &'static str, command: Value, confirm: bool) -> Resu
     })
 }
 
+#[cfg(test)]
 pub fn panel(project: &Project, section: crate::popup::Section) -> Vec<crate::popup::Row> {
-    match context(project).and_then(|context| panel_rows(&project.slug, section, &context)) {
+    let view = match context(project) {
+        Ok(value) => crate::managed_refresh::View::Current(value),
+        Err(error) => crate::managed_refresh::View::Failed(error.to_string()),
+    };
+    panel_view(&project.slug, section, view)
+}
+
+pub fn panel_view(
+    slug: &str,
+    section: crate::popup::Section,
+    view: crate::managed_refresh::View,
+) -> Vec<crate::popup::Row> {
+    use crate::managed_refresh::View;
+    let result = match view {
+        View::Current(value) => panel_rows(slug, section, &value),
+        View::Stale(value, error) => panel_rows(slug, section, &value).map(|mut rows| {
+            // Retain useful context, but never advertise decisions from a view
+            // whose last refresh failed. Captured confirmations still carry
+            // their exact revisions and are checked by the controller.
+            for row in &mut rows {
+                if let crate::popup::RowKind::Managed { actions, doc, .. } = &mut row.kind {
+                    actions.clear();
+                    doc["_view_read_only"] = Value::Bool(true);
+                }
+            }
+            rows.insert(
+                0,
+                crate::popup::Row {
+                    header: true,
+                    text: display(&format!("{slug} · last known state · read only: {error}")),
+                    color: Some(crossterm::style::Color::Yellow),
+                    kind: crate::popup::RowKind::None,
+                },
+            );
+            // Action hints were composed from the original rows. Rebuild each
+            // line from the inert title after removing its available actions.
+            for row in &mut rows {
+                if let crate::popup::RowKind::Managed { title, .. } = &row.kind {
+                    row.text = title.clone();
+                }
+            }
+            rows
+        }),
+        View::Loading => {
+            return vec![crate::popup::Row {
+                header: true,
+                text: format!("{slug} · loading controller state…"),
+                color: Some(crossterm::style::Color::DarkGrey),
+                kind: crate::popup::RowKind::None,
+            }];
+        }
+        View::Failed(error) => Err(anyhow::anyhow!(error)),
+    };
+    match result {
         Ok(rows) => rows,
         Err(error) => vec![crate::popup::Row {
             header: false,
             text: format!(
                 "{} · controller unavailable: {}",
-                project.slug,
+                slug,
                 display(&error.to_string())
             ),
             color: Some(crossterm::style::Color::Red),
             kind: crate::popup::RowKind::Managed {
-                slug: project.slug.clone(),
+                slug: slug.into(),
                 title: "Controller unavailable".into(),
                 doc: json!({"error":error.to_string(),"legacy_fallback":false}),
                 actions: vec![],

@@ -213,7 +213,19 @@ pub struct PickerRow {
 }
 
 /// The rows `P` and `/` offer: "All projects", then every listed project.
+#[cfg(test)]
 pub fn picker_rows(root: &Path) -> Vec<PickerRow> {
+    picker_rows_with(root, |project| {
+        crate::managed::context(project)
+            .map(|c| crate::managed::summary(&c))
+            .unwrap_or_else(|_| "controller unavailable".into())
+    })
+}
+
+fn picker_rows_with(
+    root: &Path,
+    mut managed_status: impl FnMut(&Project) -> String,
+) -> Vec<PickerRow> {
     let mut rows = vec![PickerRow {
         slug: None,
         name: "All projects".into(),
@@ -238,9 +250,7 @@ pub fn picker_rows(root: &Path) -> Vec<PickerRow> {
         if let Ok(project) = Project::load_view(root, &slug)
             && crate::managed::present(&project)
         {
-            let status = crate::managed::context(&project)
-                .map(|c| crate::managed::summary(&c))
-                .unwrap_or_else(|_| "controller unavailable".into());
+            let status = managed_status(&project);
             rows.push(PickerRow {
                 slug: Some(slug.clone()),
                 name: slug,
@@ -457,7 +467,17 @@ fn thread_line(r: &ThreadRow, with_project: bool) -> String {
 }
 
 /// The rows of a section, with headings.
+#[cfg(test)]
 pub fn build(ctx: &Ctx, section: Section, scope: Option<&str>) -> Vec<Row> {
+    build_with(ctx, section, scope, crate::managed::panel)
+}
+
+fn build_with(
+    ctx: &Ctx,
+    section: Section,
+    scope: Option<&str>,
+    mut managed_panel: impl FnMut(&Project, Section) -> Vec<Row>,
+) -> Vec<Row> {
     let root = ctx.root.as_path();
     let mut rows = Vec::new();
     for slug in project::list_slugs(root)
@@ -467,7 +487,7 @@ pub fn build(ctx: &Ctx, section: Section, scope: Option<&str>) -> Vec<Row> {
         if let Ok(project) = Project::load_view(root, &slug)
             && crate::managed::present(&project)
         {
-            rows.extend(crate::managed::panel(&project, section));
+            rows.extend(managed_panel(&project, section));
             if scope.is_some() {
                 return rows;
             }
@@ -1006,6 +1026,18 @@ pub struct Popup<'a> {
     quit: bool,
     /// A pane to focus once the popup has closed: (socket, machine, pane).
     jump: Option<(String, String, String)>,
+    managed: crate::managed_refresh::Cache,
+}
+
+fn managed_selection(row: &Row) -> Option<(String, String)> {
+    if let RowKind::Managed {
+        slug, title, doc, ..
+    } = &row.kind
+    {
+        Some((slug.clone(), doc["id"].as_str().unwrap_or(title).into()))
+    } else {
+        None
+    }
 }
 
 impl<'a> Popup<'a> {
@@ -1021,16 +1053,35 @@ impl<'a> Popup<'a> {
             workspace,
             quit: false,
             jump: None,
+            managed: crate::managed_refresh::Cache::default(),
         };
         popup.reload();
         popup
     }
 
     fn reload(&mut self) {
-        self.rows = build(self.ctx, SECTIONS[self.section], self.scope.as_deref());
+        let selected = self.current().and_then(managed_selection);
+        self.rows = build_with(
+            self.ctx,
+            SECTIONS[self.section],
+            self.scope.as_deref(),
+            |project, section| {
+                let view = self
+                    .managed
+                    .view(&project.slug, crate::managed::binding(project));
+                crate::managed::panel_view(&project.slug, section, view)
+            },
+        );
         if SECTIONS[self.section] == Section::Settings {
             self.rows
                 .extend(safety_rows(self.ctx, self.scope.as_deref()));
+        }
+        if let Some(selected) = selected {
+            self.selected = self
+                .rows
+                .iter()
+                .position(|row| managed_selection(row).as_ref() == Some(&selected))
+                .unwrap_or(0);
         }
         if self.rows.get(self.selected).is_none_or(|r| r.header) {
             self.selected = self
@@ -1047,6 +1098,51 @@ impl<'a> Popup<'a> {
 
     fn current(&self) -> Option<&Row> {
         self.rows.get(self.selected).filter(|r| !r.header)
+    }
+
+    fn project_rows(&mut self) -> Vec<PickerRow> {
+        picker_rows_with(&self.ctx.root, |project| {
+            use crate::managed_refresh::View;
+            match self
+                .managed
+                .view(&project.slug, crate::managed::binding(project))
+            {
+                View::Current(value) => crate::managed::summary(&value),
+                View::Stale(value, _) => {
+                    format!("last known: {} · offline", crate::managed::summary(&value))
+                }
+                View::Loading => "loading controller state…".into(),
+                View::Failed(_) => "controller unavailable".into(),
+            }
+        })
+    }
+
+    fn refresh_managed(&mut self) -> bool {
+        if !self.managed.poll() {
+            return false;
+        }
+        self.refresh_view()
+    }
+
+    fn refresh_view(&mut self) -> bool {
+        match &self.mode {
+            Mode::List => self.reload(),
+            Mode::Projects(_) => {
+                let rows = self.project_rows();
+                if let Mode::Projects(picker) = &mut self.mode {
+                    // Keep filtering and keyboard selection while statuses change.
+                    for row in &mut picker.rows {
+                        if let Some(new) = rows.iter().find(|new| new.slug == row.slug) {
+                            row.status.clone_from(&new.status);
+                        }
+                    }
+                }
+            }
+            // Confirmation/edit/detail content stays frozen until the user
+            // returns to the list. A refresh never retargets an action.
+            _ => return false,
+        }
+        true
     }
 
     fn move_by(&mut self, delta: isize) {
@@ -1089,6 +1185,7 @@ impl<'a> Popup<'a> {
             _ => run_hp(self.ctx, args, stdin),
         };
         self.message = text;
+        self.managed.invalidate();
         self.reload();
         ok
     }
@@ -1505,6 +1602,9 @@ impl<'a> Popup<'a> {
                 }
             },
         };
+        if matches!(self.mode, Mode::List) {
+            self.reload();
+        }
     }
 
     /// A pick of the profiles `role` may use (in `slug`, or anywhere when
@@ -1697,11 +1797,8 @@ impl<'a> Popup<'a> {
             KeyCode::Down | KeyCode::Char('j') => self.move_by(1),
             KeyCode::Up | KeyCode::Char('k') => self.move_by(-1),
             KeyCode::Char(c @ ('P' | '/')) => {
-                self.mode = Mode::Projects(Picker::new(
-                    picker_rows(&self.ctx.root),
-                    self.scope.as_deref(),
-                    c == '/',
-                ))
+                let rows = self.project_rows();
+                self.mode = Mode::Projects(Picker::new(rows, self.scope.as_deref(), c == '/'))
             }
             _ if matches!(
                 self.current().map(|r| &r.kind),
@@ -1746,6 +1843,10 @@ impl<'a> Popup<'a> {
             return;
         };
         if key.code == KeyCode::Char('c') {
+            if doc["_view_read_only"] == true {
+                self.message = "State is stale; wait for the controller to reconnect".into();
+                return;
+            }
             self.run(&["open".into(), slug], None);
             return;
         }
@@ -2849,6 +2950,9 @@ pub fn run(ctx: &Ctx, scope: Option<String>, workspace: String) -> Result<()> {
         let mut last = Instant::now();
         popup.draw(&mut out)?;
         while !popup.quit {
+            if popup.refresh_managed() {
+                popup.draw(&mut out)?;
+            }
             if event::poll(Duration::from_millis(250))? {
                 match event::read()? {
                     Event::Key(key) if key.kind != KeyEventKind::Release => popup.key(key),
@@ -2857,9 +2961,10 @@ pub fn run(ctx: &Ctx, scope: Option<String>, workspace: String) -> Result<()> {
                 }
                 popup.draw(&mut out)?;
             }
-            if last.elapsed() >= REFRESH && matches!(popup.mode, Mode::List) {
-                popup.reload();
-                popup.draw(&mut out)?;
+            if last.elapsed() >= REFRESH {
+                if popup.refresh_view() {
+                    popup.draw(&mut out)?;
+                }
                 last = Instant::now();
             }
         }
@@ -2876,6 +2981,163 @@ pub fn run(ctx: &Ctx, scope: Option<String>, workspace: String) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn managed_popup_stays_responsive_to_keys_and_freezes_confirmation_while_socket_is_gated() {
+        use serde_json::json;
+        use std::io::{BufRead, BufReader};
+        use std::os::unix::{fs::PermissionsExt, net::UnixListener};
+        use std::sync::mpsc;
+
+        let world = crate::scenarios::World::new();
+        world.project("demo", "a.sock");
+        let state = tempfile::tempdir().unwrap();
+        let credential = state.path().join("token");
+        std::fs::write(&credential, "private-test-token").unwrap();
+        std::fs::set_permissions(&credential, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let binding = crate::managed::Binding {
+            version: 1,
+            controller: state.path().into(),
+            credential,
+            run: "run".into(),
+            launch_config: None,
+        };
+        let project = Project::load_view(&world.root, "demo").unwrap();
+        project::write_json(&project.state_dir().join("managed.json"), &binding).unwrap();
+        let listener = UnixListener::bind(state.path().join("control.sock")).unwrap();
+        let (arrived, requests) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            for epoch in [1, 2] {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut line = String::new();
+                BufReader::new(&stream).read_line(&mut line).unwrap();
+                let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+                assert_eq!(request["op"], "coordinator_context");
+                assert_eq!(request["run"], "run");
+                arrived.send(epoch).unwrap();
+                released.recv_timeout(Duration::from_secs(5)).unwrap();
+                let mut attempts =
+                    vec![json!({"id":"a","task":"t","state":"running","epoch":epoch})];
+                if epoch == 2 {
+                    attempts.insert(
+                        0,
+                        json!({"id":"b","task":"other","state":"running","epoch":epoch}),
+                    );
+                }
+                let value = json!({"data":{
+                    "run":{"id":"run","state":"active","revision":1},
+                    "active_attempts":1,
+                    "attempts":attempts,
+                    "tasks":[]
+                }});
+                writeln!(stream, "{value}").unwrap();
+            }
+        });
+        let ctx = world.ctx();
+        let mut popup = Popup::new(&ctx, Some("demo".into()), String::new());
+        assert_eq!(requests.recv_timeout(Duration::from_secs(5)).unwrap(), 1);
+        assert!(popup.rows.iter().any(|row| row.text.contains("loading")));
+        popup.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(SECTIONS[popup.section], Section::Tasks);
+        popup.key(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE));
+        assert!(matches!(popup.mode, Mode::Projects(_)));
+        popup.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        popup.key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+        assert_eq!(SECTIONS[popup.section], Section::Threads);
+        popup.key(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE));
+        if let Mode::Projects(picker) = &mut popup.mode {
+            picker.filter = Some("dem".into());
+            picker.selected = 0;
+        }
+        release.send(()).unwrap();
+        let until = Instant::now() + Duration::from_secs(5);
+        while !popup.refresh_managed() {
+            assert!(Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(
+            matches!(&popup.mode, Mode::Projects(picker) if picker.filter.as_deref()==Some("dem") && picker.selected==0 && picker.rows.iter().any(|row| row.slug.as_deref()==Some("demo") && row.status.contains("active")))
+        );
+        popup.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        popup.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(
+            matches!(popup.current().map(|row| &row.kind), Some(RowKind::Managed { doc, .. }) if doc["epoch"]==1)
+        );
+        popup.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+        let Mode::Confirm { action, .. } = &popup.mode else {
+            panic!("missing confirmation")
+        };
+        let captured = action.clone();
+        popup.managed.invalidate();
+        popup.managed.view("demo", Ok(binding));
+        assert_eq!(requests.recv_timeout(Duration::from_secs(5)).unwrap(), 2);
+        release.send(()).unwrap();
+        server.join().unwrap();
+        // Pump until the reply is consumed without rewriting the confirmation.
+        let until = Instant::now() + Duration::from_secs(5);
+        loop {
+            assert!(!popup.refresh_managed());
+            let view = popup
+                .managed
+                .view("demo", crate::managed::binding(&project));
+            if matches!(view, crate::managed_refresh::View::Current(value) if value["attempts"][0]["epoch"]==2)
+            {
+                break;
+            }
+            assert!(Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(matches!(&popup.mode, Mode::Confirm { action, .. } if action==&captured));
+        popup.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(
+            matches!(popup.current().map(|row| &row.kind), Some(RowKind::Managed { doc, .. }) if doc["epoch"]==2 && doc["id"]=="a")
+        );
+        popup.key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+        assert!(popup.quit);
+        assert_eq!(world.runner.count("managed apply"), 0);
+        assert_eq!(world.runner.count("thread stop"), 0);
+    }
+
+    #[test]
+    fn stale_managed_rows_keep_details_but_disable_decisions_and_launches() {
+        let world = crate::scenarios::World::new();
+        world.project("demo", "a.sock");
+        let ctx = world.ctx();
+        let mut popup = Popup::new(&ctx, Some("demo".into()), String::new());
+        popup.rows = crate::managed::panel_view(
+            "demo",
+            Section::Threads,
+            crate::managed_refresh::View::Stale(
+                serde_json::json!({
+                    "run":{"id":"run","state":"active"},
+                    "attempts":[{"id":"a","state":"running","epoch":1}]
+                }),
+                "offline\u{1b}[31m".into(),
+            ),
+        );
+        assert!(popup.rows[0].text.contains("read only"));
+        assert!(
+            popup
+                .rows
+                .iter()
+                .all(|row| !row.text.contains('\u{1b}') && !row.text.contains("s stop"))
+        );
+        popup.selected = popup.rows.iter().position(|row| !row.header).unwrap();
+        assert!(
+            matches!(&popup.current().unwrap().kind, RowKind::Managed { actions, .. } if actions.is_empty())
+        );
+        popup.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+        assert!(matches!(popup.mode, Mode::List));
+        popup.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+        assert!(popup.message.contains("stale"));
+        assert_eq!(world.runner.count("open"), 0);
+        popup.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(popup.mode, Mode::Detail { .. }));
+    }
 
     #[test]
     fn managed_keys_confirm_and_submit_captured_epoch_without_legacy_actions() {

@@ -4,7 +4,7 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
-The local implementation suite currently passes **410 unit tests and 7 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
+The local implementation suite currently passes **415 unit tests and 7 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
 
 | Requirement | Evidence | Limit |
 | --- | --- | --- |
@@ -27,6 +27,9 @@ The local implementation suite currently passes **410 unit tests and 7 CLI tests
 | Notifier service wiring | `controller_service_delivers_coordinator_bootstrap_with_real_broker` | One-cycle service, real NATS and mocked mailer |
 | Managed Projects authority and UI | `managed_projects_render_controller_records_and_decisions_use_exact_revisions`, `managed_binding_blocks_legacy_effects_and_rejects_foreign_owner_decisions`, `project_authority_transition_excludes_existing_operations_and_clones`, `failed_priming_keeps_managed_fence_and_retry_repairs_only_the_view` | Real Unix API/SQLite; legacy Herdr effects observed with a fake runner |
 | Managed memory and actions | `managed_memory_actions_preserve_provenance_revision_and_withdrawal`, `managed_keys_confirm_and_submit_captured_epoch_without_legacy_actions`; extended CLI test attaches, reads, pauses/replays and rejects legacy commands | Popup key test uses the command fixture; CLI test runs the actual binary |
+| Responsive managed popup and picker | `managed_popup_stays_responsive_to_keys_and_freezes_confirmation_while_socket_is_gated` uses a real Unix socket, gated replies, navigation and changed epochs; selection and picker filter survive refresh | Controller replies are protocol fixtures; explicit mutations still use synchronous CLI/API |
+| Bounded asynchronous reads and binding fencing | `slow_readers_are_bounded_coalesced_and_do_not_block_another_project_or_exit`, `authority_changes_and_corrupt_markers_discard_late_snapshots` | Four in-flight reads; aggregate snapshot size/pagination remains pending |
+| Stale views and reconnection | `unavailable_controller_retains_explicitly_stale_data_until_successful_retry`, `stale_managed_rows_keep_details_but_disable_decisions_and_launches` | In-memory display cache only; CLI status/context/overview remain synchronous |
 | Native coordinator focus | `managed_open_focuses_only_the_exact_observed_native_coordinator` | Exact UUID/runtime/terminal checked against simulated Herdr; no model launch |
 | Curated memory | `memory_is_curated_versioned_scoped_and_budgeted` | Run scope; cross-run project memory pending |
 | Atomic live memory and declared consumption | `live_memory_outbox_is_atomic_selected_and_retains_assignment_snapshot` injects an outbox failure, checks topic selection, preserves initial memory and rejects wrong credential/epoch or stale acknowledgement | Acknowledgement is node-local and does not prove model behavior |
@@ -76,7 +79,7 @@ The local implementation suite currently passes **410 unit tests and 7 CLI tests
 
 `checks.<system>.service-modules` evaluates the actual exported NixOS and Home Manager modules with the pinned inputs. Linux checks cover disabled imports, the publishing package default, explicit non-root ownership, controller/node commands, multiple nodes, distinct normalized state, absent runtime configuration files, optional coordinator notifications, dependencies, private masks, restart limits, SIGINT/drain behavior and literal systemd argument escaping. It also reads the rendered unit files from both module systems. Darwin checks disabled imports and rejection of enabled Linux services. These are evaluation/rendering checks; no existing host or user manager is activated. See [services](services.md).
 
-The service-module checkpoint passes 36 Linux assertions and rendered-unit checks, plus evaluation for aarch64-linux and the Darwin rejection case. Full `nix flake check` now passes on x86_64-linux, including package compilation and the 410 unit/7 CLI tests, the service-module checks and the formatter check. This closes the earlier disk-full validation backlog for the modules, continuous workflow, live memory and cancellation recovery. It does not establish builds on the other declared platforms.
+The service-module checkpoint passes 36 Linux assertions and rendered-unit checks, plus evaluation for aarch64-linux and the Darwin rejection case. The cancellation-recovery checkpoint (`1a5afe9`) passes full `nix flake check` on x86_64-linux, including package compilation and its 410 unit/7 CLI tests, the service-module checks and the formatter check. This closes the earlier disk-full validation backlog for the modules, continuous workflow, live memory and cancellation recovery. The asynchronous-view checkpoint adds five regressions listed above and uses the same full package gates. This does not establish builds on the other declared platforms.
 
 The same source also passes `cargo test --locked --offline` and strict all-target Clippy using a task-local RAM-backed Cargo cache. Earlier `nix flake check --no-build` results established evaluation only; they have now been supplemented by the full package gate. The successful Nix build uses the normal daemon build directory. No shared permissions or daemon settings were changed.
 
@@ -108,7 +111,7 @@ Mailer protocol-2 support is an independent local commit **`7a12d5a`** on `feat/
 - Recovery/abandonment of uncertain cancelled-run effects and conservative verification checkout cleanup.
 - Recovery after loss of the native wrapper; detached-descendant audit and conservative resource cleanup.
 - Idempotent/reconcilable mailer registration after a lost registration response.
-- Full onboarding, task/profile forms, cross-host resource focus and asynchronous managed view refresh.
+- Full onboarding, task/profile forms and cross-host resource focus.
 - Aggregate API/wire bounds and large-run context pagination.
 - NATS backoff/expiry handling, node lifecycle operations and deployment ACL examples.
 - Optional project/cross-run memory and Markdown projection.

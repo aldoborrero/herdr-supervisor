@@ -53,6 +53,8 @@ An existing native coordinator session on the controller host can be attached wi
 
 Use `managed attach` to connect a fresh Projects folder to that run. Its popup then shows authoritative tasks, attempts, notices and memory; actions carry explicit revisions, and legacy scheduling is blocked for that project. See [Projects setup and keys](docs/operations.md#attach-the-projects-view). With an owner-approved `--launch-config` and the controller notifier enabled, `open` reserves and starts a coordinator using a run-authorized profile. Subsequent opens report pending launches or focus the exact registered session. An unresolved launch is never silently replaced.
 
+The popup refreshes controller state in the background so you can keep navigating while a controller is slow or unavailable. After a failed refresh, it labels the last known state and disables its actions until reconnection. Open confirmations keep their original target and revision.
+
 The launch tests execute harmless stub processes and use fake Herdr/mailer responses alongside real Git and Unix sockets. They do **not** prove authenticated model processing. See [validation](docs/validation.md) for evidence and current gaps.
 
 ## Architecture

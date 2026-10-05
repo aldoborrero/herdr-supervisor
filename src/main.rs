@@ -15,6 +15,7 @@ mod herdr;
 mod inbox;
 mod lifecycle;
 mod managed;
+mod managed_refresh;
 mod names;
 mod notify;
 mod overview;
