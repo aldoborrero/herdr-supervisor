@@ -2,6 +2,21 @@
 
 This guide covers `control` and the managed Projects view. The [inherited Projects guide](upstream/operations.md) describes the file-based scheduler used by projects that have not been attached to a controller. Attached projects read controller records and reject legacy scheduling commands.
 
+## Isolated native resource acceptance
+
+From this source checkout, use the devshell and explicitly select the installed Herdr and supervisor binaries:
+
+```sh
+nix develop
+PYTHONDONTWRITEBYTECODE=1 python3 tests/native_resources.py \
+  --binary ./result/bin/herdr-supervisor \
+  --nats-server "$NATS_SERVER" \
+  --herdr /absolute/path/to/herdr \
+  --plugin ./result/share/herdr-supervisor
+```
+
+The driver creates fresh temporary HOME/XDG state, a private named Herdr server, a Git repository and restricted NATS services. It exercises actual worktree creation/removal, exact resource binding, replay, event subscription and cancellation before launch. `--plugin` is optional; it links the packaged manifest disabled, checks its registry entries and executable, then unlinks it. No startup hook or model is invoked, and existing sessions/configuration are not selected. All owned processes and temporary files are cleaned up on exit. Failures print fixture logs. This is opt-in because the installed Herdr binary is not a pinned package-test dependency; it does not establish model processing or multi-host behavior. See [validation](validation.md) for tested versions and boundaries.
+
 ## Processes and authority
 
 Run `control run-controller --broker BROKER_JSON --repositories REPOSITORIES_JSON` against one private controller state directory. It combines the API, relay and Git verifier. `control serve` and `control relay-controller` expose the first two components independently; they do not execute checks or integration intents. Each execution node has a different private directory, its own signing key, and a `control run-node` process combining its relay, worker API and executor. The node's SQLite inbox/outbox survives process restarts. The separate mailer daemon must already be running locally on that node.

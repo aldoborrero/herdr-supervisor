@@ -4,6 +4,20 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
+### Installed Herdr resource acceptance
+
+`tests/native_resources.py` is an opt-in acceptance driver for an explicitly supplied Herdr executable. It creates a named headless server inside fresh private HOME/XDG/socket state, uses real restricted NATS and Git, and changes SQLite only through production commands. No agent or model is launched. The controller's cancellation reaches the node before its executor runs; the test verifies zero runtime process rows and zero mailer registrations or model launches.
+
+The source at `4381921` passes against installed Herdr 0.9.1, protocol 22: real worktree creation with exact workspace/pane/terminal binding; idempotent preparation; production event subscription and bootstrap snapshot (`lifecycle_only=0`, authority remains hints only); real signed cancellation; cleanup inspection; actual Herdr worktree removal and replay with retained branch/commit refs. Logs: `.direnv/native-resources-second.log` and `.direnv/native-resources-events.log`. All owned server/fixture children are stopped through their owned handles. The initial harness failed to repump the relay after its single executor cycle, then masked the timeout by JSON-decoding the textual server-stop response; `.direnv/native-resources-first.log` retains that failure. Both harness issues are corrected.
+
+This establishes native resource operations and subscription setup, not authenticated model processing, event-triggered recovery/reconnection against real Herdr, remote hosts, or unattended descendant containment. Mailer/model boundaries remain fixtures. The optional `--plugin` path additionally checks a packaged manifest through disabled link/list/unlink in this isolated registry, including action/pane executable paths; it never invokes startup or activates the user's plugin.
+
+The manifest assertions pass with the `5110022` package and the `4381921` debug executable: exactly ten actions and four panes, disabled startup, immutable absolute executable paths, CLI help and an empty plugin registry after unlink. Log: `.direnv/native-resources-manifest-assertions.log`. This mixed-version harness run is not the newer package's runtime acceptance; that requires its own completed build and executable.
+
+### Worker-retirement package gate
+
+Commit `51100227f1a584023976ce1639d6a4e863eb7256` passes full Nix build and flake check on x86_64-linux: 606 unit tests (177.17 s), 17 CLI tests (56.67 s), offline; build phase 12 min 29 s and check phase 7 min 28 s. Output: `/nix/store/16lrzmqpmznz9k3i9hxf8qlbgxhyw361-herdr-supervisor-0.1.0`. Logs: `.direnv/retirement-nix-build.log` and `.direnv/retirement-nix-check.log`. It predates verification retirement and the symbolic-ref correction in `4381921`; that newer gate is still running. Other systems were not built.
+
 ### Terminal code-verification retirement
 
 Controller schema 12 records exact owner decisions, scope hashes and prepared/removing/removed phases. SQLite audit events commit with each transition. The execution lease, terminal run, released repository, exact clean detached checkout and operator process/retention attestations precede non-force Git removal. Results, reviews and check receipts are retained. Retired checkout history is distinct from unresolved creation when checking cancelled repository reuse.
@@ -216,7 +230,7 @@ The large-record checkpoint passes strict all-target Clippy (35.45 s, `.direnv/r
 
 The bounded operator/receipt checkpoint also passes strict all-target Clippy (39.89 s, `.direnv/operator-reads-full.log`) and `nix fmt` (no changes, `.direnv/operator-reads-fmt.log`). Its full Nix build/check remains pending.
 
-**Last completed full Nix gate:** commit `f1d19112665c6e56df7741751f451ec5390e5177`, with 598 unit and 16 CLI tests offline on x86_64-linux, as recorded above. It includes verifier completion recovery and prior cancellation renewal, node-event recovery, node lifecycle, local diagnosis/onboarding, event subscriptions/reconnection and pagination/navigation. Worker and verification checkout retirement are newer; this gate does not establish other platforms or completion of the remaining feature scope.
+**Last completed full Nix gate:** commit `51100227f1a584023976ce1639d6a4e863eb7256`, with 606 unit and 17 CLI tests offline on x86_64-linux, as recorded above. It includes worker retirement, verifier completion recovery and prior cancellation renewal, node-event recovery, node lifecycle, local diagnosis/onboarding, event subscriptions/reconnection and pagination/navigation. Verification retirement and the symbolic-ref correction are newer; this gate does not establish other platforms or completion of the remaining feature scope.
 
 The worker-navigation checkpoint passed **540 unit tests and 10 CLI tests** (local suite with four test threads), including the inherited Projects suite; later checkpoint results are recorded above. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
 
