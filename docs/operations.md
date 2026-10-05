@@ -15,6 +15,7 @@ State paths are explicit. No startup command edits global agent configuration, i
 | Controller `admin.token` | Local owner capability; never given to workers |
 | Controller `control.sock` | Private controller API |
 | Controller `coordinators/<run>/<generation>.token` | Run-scoped coordinator capability; retired when replaced |
+| Controller `coordinators/<run>/<generation>/` | Owned coordinator home, mailer token/config and durable registration receipt |
 | Node `node.key` | Delegated node signing key |
 | Node `node.sqlite` | Commands, jobs, resource checkpoints and outgoing event receipts |
 | Node `worker.sock` | Scoped worker API |
@@ -56,7 +57,7 @@ The create-run operation records a logical repository identity. Node preparation
 
 ## Connect a native coordinator
 
-The coordinator currently runs on the controller host and uses its private API. Execution nodes can be remote over NATS. This command attaches an **already registered** Codex, Claude or Pi session in the local mailer; automatic coordinator creation and launch from Projects are still pending.
+The coordinator currently runs on the controller host and uses its private API. Execution nodes can be remote over NATS. This command attaches an **already registered** Codex, Claude or Pi session in the local mailer; Projects can instead request an owned coordinator using the launcher configuration below.
 
 Enable the durable notifier by adding `--coordinator-config coordinator.json` to `run-controller`. Its configuration contains absolute paths:
 
@@ -92,6 +93,39 @@ Replacing the coordinator revokes the old capability and retires its pending not
 
 The context still inherits the snapshot API's aggregate size limit; large-run pagination remains required. Pending memory proposals are limited to ten per context. This integration has isolated IPC/broker tests with mocked mailer replies, not proof of a live coordinator model consuming its bootstrap.
 
+## Launch a coordinator from Projects
+
+Keep `run-controller --coordinator-config coordinator.json` running with the notifier configuration above. The controller runs the coordinator launcher independently of the Git verifier and notifier. Herdr and mailer must already be available on the controller host. Create a launch configuration containing absolute paths:
+
+```json
+{
+  "herdr_binary": "/absolute/path/to/herdr",
+  "herdr_socket": "/private/herdr.sock",
+  "supervisor_binary": "/absolute/path/to/herdr-supervisor",
+  "mailer_state": "/private/mailer",
+  "mailer_admin_credential": "/private/mailer/admin.token",
+  "codex_binary": "/absolute/path/to/codex",
+  "mailer_runtime_binary": "/absolute/path/to/herdr-mailer-runtime",
+  "claude_development_channel": false
+}
+```
+
+The launcher and notifier must name the same mailer state. The launcher uses mailer admin authority only to register its receiver; the native child receives that receiver's credential, its generation-scoped controller capability and explicit run context. No inherited worker attempt/epoch or mailer context is passed through. Set `claude_development_channel` to `true` explicitly when choosing a Claude profile. Codex uses Auto with `workspace-write`; Pi and Claude use mailer's packaged runtime bridge.
+
+Attach the operator view with an **owner** credential and add `--launch-config /absolute/path/to/launch.json`. Then run:
+
+```bash
+herdr-supervisor --root PROJECTS_DIR open demo --profile implementation
+```
+
+Choose a profile from the run policy, not the legacy Projects profile store. If the policy has only one profile, `--profile` is optional. This submits an owner-only `start_coordinator` mutation with the displayed run revision and a stable operation ID. It does not launch inside the popup or invoke the legacy scheduler. The same mutation can be submitted through `control apply` with `run`, `expected_revision`, `profile` and `config` fields.
+
+SQLite reserves one generation before external effects. An owner mutation that races a launch effect returns a retryable busy error before changing state; retry the same operation ID and content after the launcher releases its lease. Controller paths are normalized before generating commands for the child workspace. Herdr creates a separate workspace rooted in the coordinator's private home; workers still receive isolated Git worktrees. The generated `AGENTS.md` directs the coordinator to scoped context. The one-shot wrapper owns its native process. Codex's UUID is observed on the exact pane; Claude/Pi receive a UUID before launch. The controller verifies workspace, pane, terminal, runtime and UUID, then activates that generation's mailer route and durable bootstrap. `bound` and `model_ready: false` report resource binding without claiming model processing.
+
+`managed status` and the popup's Settings section expose launch state, errors and process exit receipts. Reopening a pending launch reports its state. Lost workspace or pane-run replies trigger inspection without repeating creation or launch. A lost mailer registration response stays uncertain and needs reconciliation; it never silently rotates a possibly live receiver. A missing wrapper exit receipt also stays unresolved. No stored PID is signalled during recovery.
+
+Run cancellation, deadline expiry or generation retirement stop a process still owned by its wrapper. To replace an owned coordinator without cancelling the run, the owner can submit `bind_supervisor` for the current run revision; this retires the old generation. Wait until its launch state is `exited`, then open again. `--new` cannot override an active or unresolved coordinator. Existing manually attached sessions are not process-owned by this launcher. Resource deletion and automatic orphan recovery remain pending.
+
 ## Attach the Projects view
 
 Create a fresh project folder, create a controller run whose `project` field equals its slug, and attach it **before** using the inherited `open` command:
@@ -114,15 +148,15 @@ Attachment requires no legacy threads, recorded coordinator or task entries; it 
 | Threads | Attempts, role, node and state; `s` requests stop with the displayed epoch |
 | Tasks | Task contracts, integration/check/review evidence; `r` requests repair of interrupted/rejected tasks |
 | Inbox | Native coordinator notices and their receipts; `a` acknowledges an inspected notice |
-| Settings | Objective, policy, nodes and native coordinator; `p` pauses/resumes, `x` cancels |
+| Settings | Objective, policy, nodes, native coordinator and launch receipts; `p` pauses/resumes, `x` cancels |
 | Memory | Approved topics with versions and pending proposals with evidence; `a` approves, `w` withdraws |
 | Routines | Displays the controller scheduling policy; legacy routines are not executed |
 
 Enter shows the selected record. Destructive decisions and memory changes display the captured record for confirmation. Requests keep the displayed revision/epoch and a stable operation ID; stale decisions fail rather than silently applying to newer state. The `project_apply` API checks run membership and applies/replays the operation in one transaction, including already-decided memory proposals. It cannot use an owner view credential to act on another run or enroll nodes.
 
-The equivalent CLI is `managed apply SLUG --operation ID --request JSON_FILE` (`-` reads stdin). `managed status SLUG` and `context SLUG` return current controller context. Existing `pause` and `resume` plugin actions use that same authority. `open SLUG` and the popup's `c` key focus an existing coordinator only after observing its exact native UUID/runtime and matching terminal in the selected Herdr server. Neither starts a replacement when the session is missing.
+The equivalent CLI is `managed apply SLUG --operation ID --request JSON_FILE` (`-` reads stdin). `managed status SLUG` and `context SLUG` return current controller context. Existing `pause` and `resume` plugin actions use that same authority. `open SLUG` and the popup's `c` key focus an existing coordinator only after observing its exact native UUID/runtime and matching terminal in the selected Herdr server. If no coordinator is bound or pending, an owner view with `--launch-config` can reserve a new coordinator. A missing registered session never triggers an automatic replacement.
 
-Automatic coordinator launch/onboarding, task/profile editing forms, resource focus across hosts and asynchronous refresh for large/offline project collections remain pending. This first projection reads local controller IPC synchronously; it inherits the snapshot API's aggregate bounds. The popup itself must run on the controller host; workers may execute remotely over NATS.
+Full onboarding, task/profile editing forms, resource focus across hosts and asynchronous refresh for large/offline project collections remain pending. This first projection reads local controller IPC synchronously; it inherits the snapshot API's aggregate bounds. The popup itself must run on the controller host; workers may execute remotely over NATS.
 
 ## Enroll a node and provision NATS
 

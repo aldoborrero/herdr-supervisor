@@ -2,6 +2,7 @@
 pub mod api;
 pub mod cli;
 pub mod coordinator;
+pub mod coordinator_launch;
 pub mod executor;
 pub mod git_pipeline;
 pub mod identity;

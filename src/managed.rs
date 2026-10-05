@@ -70,6 +70,8 @@ pub struct Binding {
     pub controller: PathBuf,
     pub credential: PathBuf,
     pub run: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_config: Option<PathBuf>,
 }
 
 pub fn binding(project: &Project) -> Result<Binding> {
@@ -90,7 +92,11 @@ pub fn binding(project: &Project) -> Result<Binding> {
     ensure!(
         binding.version == 1
             && binding.controller.is_absolute()
-            && binding.credential.is_absolute(),
+            && binding.credential.is_absolute()
+            && binding
+                .launch_config
+                .as_ref()
+                .is_none_or(|p| p.is_absolute()),
         "unsupported managed binding"
     );
     identifier(&binding.run)?;
@@ -127,6 +133,10 @@ pub fn context(project: &Project) -> Result<Value> {
 }
 
 pub fn attach(root: &Path, slug: &str, binding: Binding) -> Result<()> {
+    if let Some(path) = &binding.launch_config {
+        ensure!(path.is_absolute(), "launch config path must be absolute");
+        crate::control::coordinator_launch::read_config(path)?;
+    }
     let project = Project::load_unlocked(root, slug)?;
     let _lease = authority_lease(&project, true)?;
     let context = binding.context()?;
@@ -218,6 +228,78 @@ pub fn overview(project: &Project) -> Result<String> {
     Ok(format!("{}\n", lines.join("\n")))
 }
 
+/// Launch requests go through the controller; opening an uncertain launch never
+/// creates another workspace or invokes the old Projects scheduler.
+pub fn open_coordinator(
+    ctx: &Ctx,
+    project: &Project,
+    options: &crate::coordinator::OpenOptions,
+) -> Result<()> {
+    ensure!(
+        !options.rebind,
+        "managed coordinator identity is bound by the controller"
+    );
+    let binding = binding(project)?;
+    let context = binding.context()?;
+    if !context["native_coordinator"].is_null() {
+        ensure!(
+            !options.new && options.profile.is_none(),
+            "coordinator exists; retire its generation and wait for the owned process exit before replacement"
+        );
+        return focus_coordinator(ctx, project, &options.session);
+    }
+    if let Some(launch) = context["coordinator_launches"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|l| l["state"] != "exited")
+    {
+        ensure!(
+            !options.new && options.profile.is_none(),
+            "coordinator launch is pending or unresolved; replacement refused"
+        );
+        println!(
+            "coordinator {} · {}{}",
+            launch["id"].as_str().unwrap_or_default(),
+            launch["state"].as_str().unwrap_or("unknown"),
+            launch["last_error"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .map(|s| format!(" · {}", display(s)))
+                .unwrap_or_default()
+        );
+        return Ok(());
+    }
+    let config = crate::control::coordinator_launch::read_config(binding.launch_config.as_ref().context("automatic launch needs managed attach --launch-config and run-controller --coordinator-config")?)?;
+    let profiles = context["run"]["policy"]["profiles"]
+        .as_object()
+        .context("run profiles missing")?;
+    let profile = match &options.profile {
+        Some(name) => name.clone(),
+        None if profiles.len() == 1 => profiles.keys().next().unwrap().clone(),
+        None => bail!("choose a run-authorized coordinator profile with --profile"),
+    };
+    ensure!(
+        profiles.contains_key(&profile),
+        "coordinator profile is not authorized by this run"
+    );
+    let command = Mutation::StartCoordinator {
+        run: binding.run.clone(),
+        expected_revision: context["run"]["revision"]
+            .as_u64()
+            .context("run revision missing")?,
+        profile,
+        config,
+    };
+    let operation = format!("ui-{}", digest(&serde_json::to_vec(&command)?));
+    let result = binding.apply(&operation, command)?;
+    println!(
+        "coordinator {} reserved; run-controller advances launch and native bootstrap",
+        result["id"].as_str().context("launch ID missing")?
+    );
+    Ok(())
+}
+
 pub fn focus_coordinator(
     ctx: &Ctx,
     project: &Project,
@@ -227,7 +309,7 @@ pub fn focus_coordinator(
     let endpoint = &context["native_coordinator"]["endpoint"];
     let uuid = endpoint["native_session"]
         .as_str()
-        .context("no native coordinator is attached; automatic launch is not available yet")?;
+        .context("no native coordinator is attached")?;
     let runtime = endpoint["runtime"]
         .as_str()
         .context("coordinator runtime missing")?;
@@ -318,6 +400,9 @@ enum ManagedAction {
         credential: PathBuf,
         #[arg(long)]
         run: String,
+        /// Owner-approved controller-host launcher configuration
+        #[arg(long)]
+        launch_config: Option<PathBuf>,
     },
     /// Show current controller context; unavailable authority never falls back to files
     Status { slug: String },
@@ -340,11 +425,13 @@ pub fn run(ctx: &Ctx, args: ManagedArgs) -> Result<()> {
             controller,
             credential,
             run,
+            launch_config,
         } => {
             let binding = Binding {
                 version: 1,
                 controller: std::fs::canonicalize(controller)?,
                 credential: std::fs::canonicalize(credential)?,
+                launch_config: launch_config.map(std::fs::canonicalize).transpose()?,
                 run,
             };
             attach(&ctx.root, &slug, binding)?;
@@ -590,6 +677,17 @@ fn panel_rows(
             }
             add("Run objective and policy".into(), c["run"].clone(), actions);
             add("Execution nodes".into(), c["nodes"].clone(), vec![]);
+            for launch in c["coordinator_launches"].as_array().into_iter().flatten() {
+                add(
+                    format!(
+                        "Coordinator {} · {}",
+                        launch["runtime"].as_str().unwrap_or_default(),
+                        launch["state"].as_str().unwrap_or_default()
+                    ),
+                    launch.clone(),
+                    vec![],
+                );
+            }
             add(
                 "Native coordinator".into(),
                 c["native_coordinator"].clone(),

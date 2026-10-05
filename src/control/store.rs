@@ -123,6 +123,7 @@ impl Store {
             2 => (),
             3 => (),
             4 => (),
+            5 => (),
             _ => bail!("unsupported controller schema {version}; no migration applied"),
         }
         if version <= 2 {
@@ -133,10 +134,15 @@ impl Store {
             tx.execute_batch(include_str!("migration4.sql"))?;
             tx.pragma_update(None, "user_version", 4)?;
         }
+        if version <= 4 {
+            tx.execute_batch(include_str!("migration5.sql"))?;
+            tx.pragma_update(None, "user_version", 5)?;
+        }
         tx.commit()?;
         Ok(Self {
             connection,
-            dir: dir.into(),
+            // Native processes change cwd; persist absolute controller paths.
+            dir: std::fs::canonicalize(dir)?,
         })
     }
 
@@ -147,6 +153,7 @@ impl Store {
     }
 
     pub fn apply(&mut self, request: &Request) -> Result<Value> {
+        let _launch_fence = super::coordinator_launch::fence(&self.dir, &request.command)?;
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -159,6 +166,7 @@ impl Store {
     /// mutation. Validate scope against retained records in the same transaction
     /// as operation replay, including proposals already approved/withdrawn.
     pub fn apply_in_run(&mut self, run: &str, request: &Request) -> Result<Value> {
+        let _launch_fence = super::coordinator_launch::fence(&self.dir, &request.command)?;
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -173,6 +181,7 @@ impl Store {
             | Mutation::WithdrawMemory { run, .. }
             | Mutation::ProposeMemory { run, .. }
             | Mutation::CreateTask { run, .. } => run.clone(),
+            Mutation::StartCoordinator { run, .. } => run.clone(),
             command => {
                 let (table, id) = match command {
                     Mutation::StopAttempt { attempt, .. }
@@ -622,6 +631,7 @@ fn add_dependency(c: &Connection, task: &Task, predecessor: &str) -> Result<()> 
 
 pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) -> Result<Value> {
     match command {
+        Mutation::StartCoordinator { .. } => super::coordinator_launch::reserve(tx, p, command),
         Mutation::BindCoordinator { .. } | Mutation::AcknowledgeNotices { .. } => {
             super::coordinator::mutate(tx, p, command)
         }

@@ -4,7 +4,7 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
-The local implementation suite currently passes **387 unit tests and 6 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
+The local implementation suite currently passes **398 unit tests and 6 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
 
 | Requirement | Evidence | Limit |
 | --- | --- | --- |
@@ -22,7 +22,7 @@ The local implementation suite currently passes **387 unit tests and 6 CLI tests
 | Receipt replay after cancellation | Worker-boundary test: exact accepted envelope can be acknowledged; a new envelope with the retired token is refused | Node signature/epoch must still be valid |
 | Monotonic receipts | Worker-boundary test sends a late publisher ACK after `controller_applied` | Model processing remains separate |
 | Lease release with inherited file descriptions | `lease_release_is_not_delayed_by_an_inherited_file_description` | Explicit unlock prevents fork/exec inheritance from delaying release |
-| Coordinator context and scoped acknowledgement | `coordinator_context_is_scoped_and_exposes_memory_evidence_without_secrets`, `context_drains_unacknowledged_notices_across_multiple_pages`; CLI test connects twice with one operation and reads private context | Attaches an existing local native session; automatic launch and large-run pagination pending |
+| Coordinator context and scoped acknowledgement | `coordinator_context_is_scoped_and_exposes_memory_evidence_without_secrets`, `context_drains_unacknowledged_notices_across_multiple_pages`; CLI test connects twice with one operation and reads private context | Manual attachment and scoped context; large-run pagination pending |
 | Durable coordinator wakeups | `journal_cursor_and_notices_roll_back_together_and_restart_deduplicates`, `lost_mailer_response_or_sql_receipt_reuses_exact_target_and_frozen_body`, `rebinding_retires_old_capability_and_never_redirects_old_notice`, `wrong_recipient_receipt_is_unresolved_and_idle_notifier_needs_no_mailer`, `uncertain_send_cannot_be_retried_from_a_different_logical_author` | Mock mailer persistence/response loss; no model consumption claim |
 | Notifier service wiring | `controller_service_delivers_coordinator_bootstrap_with_real_broker` | One-cycle service, real NATS and mocked mailer |
 | Managed Projects authority and UI | `managed_projects_render_controller_records_and_decisions_use_exact_revisions`, `managed_binding_blocks_legacy_effects_and_rejects_foreign_owner_decisions`, `project_authority_transition_excludes_existing_operations_and_clones`, `failed_priming_keeps_managed_fence_and_retry_repairs_only_the_view` | Real Unix API/SQLite; legacy Herdr effects observed with a fake runner |
@@ -47,6 +47,20 @@ The local implementation suite currently passes **387 unit tests and 6 CLI tests
 | Repair and reviewer replacement | `stopped_reviewer_can_be_replaced_and_rejected_task_retries_with_new_evidence` | Does not abandon in-flight check or Git intents |
 | Run completion | Combined-candidate test refuses completion while processes remain, then completes, replays and releases the repository binding | Cancelled-run binding reconciliation remains pending |
 
+## Owned coordinator launch
+
+| Invariant | Evidence | Limit |
+| --- | --- | --- |
+| Owner authorization, replay and no unresolved replacement | `coordinator_reservation_is_owner_only_replayed_and_rejects_unresolved_replacement` | Run-authorized profile; no legacy profile imports |
+| API contention and relative state paths | `coordinator_owner_decision_is_retryable_without_blocking_during_launch_effect`, `relative_controller_state_keeps_absolute_coordinator_home_and_capability_paths` | Busy mutations have no effects; retry the identical operation after the launch lease is released |
+| Lost Herdr replies do not duplicate effects | `coordinator_lost_create_and_launch_replies_never_duplicate_effects` | Simulated Herdr; uncertain absence needs reconciliation |
+| Lost registration does not rotate a receiver | `coordinator_lost_registration_stays_uncertain_without_rotating_mailer_session` | Simulated mailer; automatic registration recovery remains pending |
+| Native binding, process ownership and generation retirement | `three_coordinator_runtimes_bind_exact_native_sessions_bootstrap_and_stop_on_retirement` | Real harmless child processes and Unix IPC, mocked Herdr/mailer; no authenticated models |
+| Late wrapper is fenced after cancellation | `fenced_unclaimed_coordinator_cannot_start_late` | No process spawned for the retired generation |
+| Schema migration preserves prior authority | `schema_four_migration_preserves_active_coordinator_routes_and_memory` | SQLite schema 4 to 5; routes, notices and approved memory retained |
+| Service restart reconciles launch intents | `controller_service_pumps_coordinator_intents_and_reconciles_after_restart` | Real NATS and stub Herdr executable; two service cycles, one create attempt |
+| Projects submits once and displays pending state | `managed_open_reserves_once_and_displays_pending_launch_without_legacy_effects` | Real controller API; owner launch configuration required |
+
 ## Commands
 
 ```bash
@@ -67,7 +81,7 @@ Mailer protocol-2 support is an independent local commit **`7a12d5a`** on `feat/
 - Cancelled-run repository binding reconciliation and conservative verification checkout cleanup.
 - Recovery after loss of the native wrapper; detached-descendant audit and conservative resource cleanup.
 - Idempotent/reconcilable mailer registration after a lost registration response.
-- Automatic coordinator launch/onboarding, task/profile forms, cross-host resource focus and asynchronous managed view refresh.
+- Full onboarding, task/profile forms, cross-host resource focus and asynchronous managed view refresh.
 - Aggregate API/wire bounds and large-run context pagination.
 - NATS backoff/expiry handling, node lifecycle operations and deployment ACL examples.
 - Live memory change consumption and optional Markdown projection.

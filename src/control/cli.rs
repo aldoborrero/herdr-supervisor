@@ -71,6 +71,9 @@ enum ControlCommand {
     /// Internal one-shot pane wrapper; refuses replay or cancelled attempts
     #[command(hide = true)]
     RunRuntime { attempt: String },
+    /// Internal one-shot coordinator process owner
+    #[command(hide = true)]
+    RunCoordinatorRuntime { launch: String },
     /// Node-local authenticated worker API; no controller/admin credential is exposed
     ServeWorkers {
         #[arg(long)]
@@ -343,6 +346,10 @@ pub fn run(args: ControlArgs) -> Result<()> {
                 super::runtime::read_config(&runtime_config)?,
                 once,
             ))?
+        }
+        ControlCommand::RunCoordinatorRuntime { launch } => {
+            super::coordinator_launch::run_owned(&args.state, &launch)?;
+            json!({"launch":launch,"wrapper_finished":true})
         }
         ControlCommand::RunRuntime { attempt } => {
             super::runtime::run_owned(&args.state, &attempt)?;

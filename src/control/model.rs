@@ -315,6 +315,12 @@ pub enum Mutation {
         run: String,
         expected_revision: u64,
     },
+    StartCoordinator {
+        run: String,
+        expected_revision: u64,
+        profile: String,
+        config: super::coordinator_launch::Config,
+    },
     CreateTask {
         run: String,
         expected_revision: u64,

@@ -1789,3 +1789,6 @@ mod lifecycle_tests;
 mod managed_tests;
 #[path = "verification_tests.rs"]
 mod verification_tests;
+
+#[path = "coordinator_launch_tests.rs"]
+mod coordinator_launch_tests;

@@ -82,13 +82,46 @@ pub fn run(
     attempt: &str,
     epoch: u64,
     deadline: i64,
-    mut command: Command,
+    command: Command,
 ) -> Result<()> {
+    run_owned(c, lease, attempt, epoch, deadline, command, false)
+}
+
+pub fn run_coordinator(
+    c: Connection,
+    lease: super::api::Lease,
+    launch: &str,
+    generation: u64,
+    deadline: i64,
+    command: Command,
+) -> Result<()> {
+    run_owned(c, lease, launch, generation, deadline, command, true)
+}
+
+fn run_owned(
+    c: Connection,
+    lease: super::api::Lease,
+    attempt: &str,
+    epoch: u64,
+    deadline: i64,
+    mut command: Command,
+    coordinator: bool,
+) -> Result<()> {
+    let (table, key, version) = if coordinator {
+        ("coordinator_processes", "launch", "generation")
+    } else {
+        ("runtime_processes", "attempt", "epoch")
+    };
     let started = super::store::now();
     let mut receipt = json!({"attempt":attempt,"epoch":epoch,"wrapper_pid":std::process::id(),
         "started_at":started,"deadline":deadline,"scope":"native_process"});
+    if coordinator {
+        receipt.as_object_mut().unwrap().remove("attempt");
+        receipt["launch"] = json!(attempt);
+        receipt["generation"] = json!(epoch);
+    }
     c.execute(
-        "INSERT INTO runtime_processes VALUES (?1,?2,'spawn_started',?3)",
+        &format!("INSERT INTO {table} VALUES (?1,?2,'spawn_started',?3)"),
         params![attempt, epoch, serde_json::to_string(&receipt)?],
     )?;
     command.process_group(0);
@@ -100,7 +133,7 @@ pub fn run(
             receipt["error"] = json!(error.to_string());
             receipt["finished_at"] = json!(super::store::now());
             c.execute(
-                "UPDATE runtime_processes SET state='exited',doc=?2 WHERE attempt=?1",
+                &format!("UPDATE {table} SET state='exited',doc=?2 WHERE {key}=?1"),
                 params![attempt, serde_json::to_string(&receipt)?],
             )?;
             return Err(error.into());
@@ -111,7 +144,7 @@ pub fn run(
     // A failed running receipt does not abandon the child. Keep watching it and
     // retry the durable terminal receipt after wait; never infer exit from PID absence.
     if let Err(error) = c.execute(
-        "UPDATE runtime_processes SET state='running',doc=?2 WHERE attempt=?1",
+        &format!("UPDATE {table} SET state='running',doc=?2 WHERE {key}=?1"),
         params![attempt, serde_json::to_string(&receipt)?],
     ) {
         eprintln!("runtime start receipt: {error}");
@@ -124,7 +157,12 @@ pub fn run(
         if let Some(status) = child.try_wait()? {
             break status;
         }
-        let state = c.query_row("SELECT epoch,state FROM jobs WHERE id=?1", [attempt], |r| {
+        let query = if coordinator {
+            "SELECT l.generation,CASE WHEN r.state IN ('cancelling','cancelled','completed') OR NOT EXISTS(SELECT 1 FROM principals p WHERE p.run=l.run AND p.role='supervisor' AND p.generation=l.generation AND p.active=1) THEN 'cancelling' ELSE l.state END FROM coordinator_launches l JOIN runs r ON r.id=l.run WHERE l.id=?1"
+        } else {
+            "SELECT epoch,state FROM jobs WHERE id=?1"
+        };
+        let state = c.query_row(query, [attempt], |r| {
             Ok((r.get::<_, u64>(0)?, r.get::<_, String>(1)?))
         });
         let reason = match state {
@@ -162,7 +200,7 @@ pub fn run(
     receipt["signal"] = json!(status.signal());
     receipt["kill_escalated"] = json!(killed);
     let changed = c.execute(
-        "UPDATE runtime_processes SET state='exited',doc=?3 WHERE attempt=?1 AND epoch=?2",
+        &format!("UPDATE {table} SET state='exited',doc=?3 WHERE {key}=?1 AND {version}=?2"),
         params![attempt, epoch, serde_json::to_string(&receipt)?],
     )?;
     ensure!(changed == 1, "exit receipt lost its process identity");

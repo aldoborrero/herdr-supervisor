@@ -219,11 +219,7 @@ fn here_pane(ctx: &Ctx, options: &OpenOptions, socket: &str, agents: &[Agent]) -
 pub fn open(ctx: &Ctx, slug: &str, options: &OpenOptions) -> Result<()> {
     let project = Project::load_view(&ctx.root, slug)?;
     if crate::managed::present(&project) {
-        anyhow::ensure!(
-            !options.new && !options.rebind && options.profile.is_none(),
-            "managed open only focuses its exact registered coordinator; use controller configuration to change its runtime"
-        );
-        return crate::managed::focus_coordinator(ctx, &project, &options.session);
+        return crate::managed::open_coordinator(ctx, &project, options);
     }
     if project.status() == Status::Archived {
         bail!("`{slug}` is archived; run `unarchive {slug}` first");

@@ -88,13 +88,15 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
                 },
             )?;
             let generation = response["generation"].as_u64().context("generation")?;
-            let cursor: i64 =
-                tx.query_row("SELECT COALESCE(MAX(sequence),0) FROM journal", [], |r| {
-                    r.get(0)
-                })?;
-            tx.execute("INSERT INTO coordinator_routes VALUES (?1,?2,?3,?4,?5,1) ON CONFLICT(run) DO UPDATE SET generation=excluded.generation,endpoint=excluded.endpoint,credential=excluded.credential,cursor=excluded.cursor,active=1",
-                params![run,generation,serde_json::to_string(endpoint)?,response["credential"].as_str(),cursor])?;
-            notice(tx, run, generation, 0, "coordinator_bound", run, endpoint)?;
+            activate(
+                tx,
+                run,
+                generation,
+                response["credential"]
+                    .as_str()
+                    .context("coordinator credential")?,
+                endpoint,
+            )?;
             Ok(response)
         }
         Mutation::AcknowledgeNotices { run, ids } => {
@@ -120,6 +122,21 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
         }
         _ => bail!("not a coordinator decision"),
     }
+}
+
+pub(super) fn activate(
+    tx: &Transaction<'_>,
+    run: &str,
+    generation: u64,
+    credential: &str,
+    endpoint: &Endpoint,
+) -> Result<()> {
+    endpoint.validate()?;
+    let cursor: i64 = tx.query_row("SELECT COALESCE(MAX(sequence),0) FROM journal", [], |r| {
+        r.get(0)
+    })?;
+    tx.execute("INSERT INTO coordinator_routes VALUES (?1,?2,?3,?4,?5,1) ON CONFLICT(run) DO UPDATE SET generation=excluded.generation,endpoint=excluded.endpoint,credential=excluded.credential,cursor=excluded.cursor,active=1",params![run,generation,serde_json::to_string(endpoint)?,credential,cursor])?;
+    notice(tx, run, generation, 0, "coordinator_bound", run, endpoint)
 }
 
 fn notice(
@@ -212,6 +229,8 @@ pub fn context(store: &Store, token: &str, run: &str) -> Result<Value> {
     let mut q=store.connection.prepare("SELECT n.id,n.max_active,(SELECT count(*) FROM attempts a WHERE a.node=n.id AND a.active=1) FROM nodes n WHERE n.active=1 ORDER BY n.id")?;
     let nodes:Vec<Value>=q.query_map([],|r|Ok(json!({"id":r.get::<_,String>(0)?,"max_active":r.get::<_,u32>(1)?,"active_attempts":r.get::<_,u32>(2)?})))?.collect::<rusqlite::Result<_>>()?;
     snapshot["nodes"] = json!(nodes);
+    snapshot["coordinator_launches"] =
+        super::coordinator_launch::summaries(&store.connection, run)?;
     let mut q=store.connection.prepare("SELECT d.task,d.predecessor FROM dependencies d JOIN tasks t ON t.id=d.task WHERE t.run=?1 ORDER BY d.task,d.predecessor")?;
     let dependencies: Vec<Value> = q
         .query_map([run], |r| {

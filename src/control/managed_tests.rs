@@ -34,6 +34,7 @@ fn binding(f: &Fixture) -> managed::Binding {
         controller: f.store.dir.clone(),
         credential: f.store.dir.join("admin.token"),
         run: f.run.clone(),
+        launch_config: None,
     }
 }
 
@@ -372,5 +373,56 @@ async fn failed_priming_keeps_managed_fence_and_retry_repairs_only_the_view() {
             .contains(&f.run)
     );
     let _ = stop.send(());
+    api.await.unwrap().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn managed_open_reserves_once_and_displays_pending_launch_without_legacy_effects() {
+    let f = Fixture::new();
+    let world = World::new();
+    drop(project::create(&world.root, "demo", "", vec![]).unwrap());
+    let config = super::coordinator_launch_tests::config(&f);
+    let file = f.dir.path().join("launch.json");
+    std::fs::write(&file, serde_json::to_vec(&config).unwrap()).unwrap();
+    let mut binding = binding(&f);
+    binding.launch_config = Some(file);
+    let (stop, api) = server(&f).await;
+    managed::attach(&world.root, "demo", binding).unwrap();
+    let mut options = crate::coordinator::OpenOptions {
+        session: Default::default(),
+        rebind: false,
+        profile: Some("forbidden".into()),
+        new: false,
+        here: false,
+    };
+    assert!(
+        crate::coordinator::open(&world.ctx(), "demo", &options)
+            .unwrap_err()
+            .to_string()
+            .contains("not authorized")
+    );
+    options.profile = None;
+    crate::coordinator::open(&world.ctx(), "demo", &options).unwrap();
+    crate::coordinator::open(&world.ctx(), "demo", &options).unwrap();
+    options.new = true;
+    assert!(crate::coordinator::open(&world.ctx(), "demo", &options).is_err());
+    assert_eq!(
+        f.store
+            .connection
+            .query_row("SELECT COUNT(*) FROM coordinator_launches", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    let rows = popup::build(&world.ctx(), Section::Settings, Some("demo"));
+    assert!(
+        rows.iter()
+            .any(|r| r.text.contains("Coordinator codex · reserved"))
+    );
+    assert!(
+        world.runner.calls.borrow().is_empty(),
+        "managed open submits intent, never runs a legacy command"
+    );
+    stop.send(()).unwrap();
     api.await.unwrap().unwrap();
 }

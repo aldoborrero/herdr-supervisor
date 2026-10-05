@@ -77,7 +77,7 @@ fn save(store: &NodeStore, attempt: &str, plan: &LaunchPlan) -> Result<()> {
     Ok(())
 }
 
-fn ensure_file(path: &Path, contents: &[u8]) -> Result<()> {
+pub(super) fn ensure_file(path: &Path, contents: &[u8]) -> Result<()> {
     if path.try_exists()? {
         use std::os::unix::fs::PermissionsExt;
         let meta = std::fs::symlink_metadata(path)?;
@@ -124,7 +124,7 @@ pub fn validate_args(runtime: &str, args: &[String]) -> Result<()> {
 pub fn invocation(state: &Path, order: &ExecuteOrder, plan: &LaunchPlan) -> Result<Invocation> {
     validate_args(&order.profile.runtime, &order.profile.argv)?;
     let dir = state.join("workers").join(&order.attempt.id);
-    let mut environment = BTreeMap::from([
+    let environment = BTreeMap::from([
         (
             "HERDR_SUPERVISOR_STATE".into(),
             state.to_string_lossy().into(),
@@ -147,21 +147,48 @@ pub fn invocation(state: &Path, order: &ExecuteOrder, plan: &LaunchPlan) -> Resu
             dir.join("mailer.token").to_string_lossy().into(),
         ),
     ]);
-    let (program, mut argv) = match order.profile.runtime.as_str() {
+    native_invocation(
+        &order.profile,
+        &Programs {
+            codex_binary: plan.config.codex_binary.clone(),
+            mailer_runtime_binary: plan.config.mailer_runtime_binary.clone(),
+            claude_development_channel: plan.config.claude_development_channel,
+        },
+        &dir,
+        &plan.checkout.worktree,
+        environment,
+    )
+}
+
+pub struct Programs {
+    pub codex_binary: PathBuf,
+    pub mailer_runtime_binary: PathBuf,
+    pub claude_development_channel: bool,
+}
+
+pub fn native_invocation(
+    profile: &super::model::Profile,
+    programs: &Programs,
+    dir: &Path,
+    cwd: &Path,
+    mut environment: BTreeMap<String, String>,
+) -> Result<Invocation> {
+    validate_args(&profile.runtime, &profile.argv)?;
+    let (program, mut argv) = match profile.runtime.as_str() {
         "codex" => (
-            plan.config.codex_binary.clone(),
+            programs.codex_binary.clone(),
             vec![
                 "--approve-for-me".into(),
                 "--sandbox".into(),
                 "workspace-write".into(),
                 "--cd".into(),
-                plan.checkout.worktree.to_string_lossy().into(),
+                cwd.to_string_lossy().into(),
             ],
         ),
         "claude" | "pi" => {
-            if order.profile.runtime == "claude" {
+            if profile.runtime == "claude" {
                 ensure!(
-                    plan.config.claude_development_channel,
+                    programs.claude_development_channel,
                     "Claude development channel requires owner opt-in"
                 );
             }
@@ -170,8 +197,8 @@ pub fn invocation(state: &Path, order: &ExecuteOrder, plan: &LaunchPlan) -> Resu
                 dir.join("mailer.json").to_string_lossy().into(),
             );
             (
-                plan.config.mailer_runtime_binary.clone(),
-                if order.profile.runtime == "claude" {
+                programs.mailer_runtime_binary.clone(),
+                if profile.runtime == "claude" {
                     vec!["--development-channel".into()]
                 } else {
                     vec![]
@@ -180,12 +207,12 @@ pub fn invocation(state: &Path, order: &ExecuteOrder, plan: &LaunchPlan) -> Resu
         }
         _ => bail!("unsupported runtime"),
     };
-    argv.extend(order.profile.argv.clone());
+    argv.extend(profile.argv.clone());
     ensure!(program.is_absolute(), "runtime binary must be absolute");
     Ok(Invocation {
         program,
         argv,
-        cwd: plan.checkout.worktree.clone(),
+        cwd: cwd.to_path_buf(),
         environment,
     })
 }
@@ -518,20 +545,7 @@ pub fn run_owned(state: &Path, attempt: &str) -> Result<()> {
         "UPDATE jobs SET checkpoint=?2 WHERE id=?1",
         params![attempt, serde_json::to_string(&plan)?],
     )?;
-    let mut cmd = std::process::Command::new(invocation.program);
-    cmd.args(invocation.argv).current_dir(invocation.cwd);
-    for key in [
-        "HERDR_MAILER_CONFIG",
-        "HERDR_MAILER_CREDENTIAL",
-        "HERDR_MAILER_STATE",
-        "HERDR_SUPERVISOR_CREDENTIAL",
-        "HERDR_SUPERVISOR_STATE",
-        "HERDR_SUPERVISOR_ATTEMPT",
-        "HERDR_SUPERVISOR_EPOCH",
-    ] {
-        cmd.env_remove(key);
-    }
-    cmd.envs(invocation.environment);
+    let cmd = command(invocation);
     super::process::run(
         connection,
         _lease,
@@ -548,4 +562,24 @@ pub fn read_config(path: &Path) -> Result<RuntimeConfig> {
         "runtime config too large"
     );
     Ok(serde_json::from_slice(&std::fs::read(path)?)?)
+}
+
+pub fn command(invocation: Invocation) -> std::process::Command {
+    let mut cmd = std::process::Command::new(invocation.program);
+    cmd.args(invocation.argv).current_dir(invocation.cwd);
+    for key in [
+        "HERDR_MAILER_CONFIG",
+        "HERDR_MAILER_CREDENTIAL",
+        "HERDR_MAILER_STATE",
+        "HERDR_SUPERVISOR_CREDENTIAL",
+        "HERDR_SUPERVISOR_STATE",
+        "HERDR_SUPERVISOR_ATTEMPT",
+        "HERDR_SUPERVISOR_EPOCH",
+        "HERDR_SUPERVISOR_RUN",
+        "HERDR_SUPERVISOR_GENERATION",
+    ] {
+        cmd.env_remove(key);
+    }
+    cmd.envs(invocation.environment);
+    cmd
 }

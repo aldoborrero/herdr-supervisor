@@ -116,6 +116,32 @@ pub async fn controller(
     let api = tokio::spawn(super::api::serve(state.clone(), async {
         let _ = stopped.await;
     }));
+    let (launch_stop, launch_stopped) = tokio::sync::oneshot::channel();
+    let launch_state = state.clone();
+    let launch_config = coordinator.clone();
+    let launcher = tokio::spawn(async move {
+        if let Some(config) = launch_config {
+            let mut stopped = launch_stopped;
+            loop {
+                let path = launch_state.clone();
+                let config = config.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    super::coordinator_launch::advance_all(
+                        &mut super::store::Store::open(&path)?,
+                        &config,
+                        &crate::runner::RealRunner,
+                    )
+                })
+                .await;
+                match result {
+                    Ok(Ok(_)) => (),
+                    Ok(Err(e)) => eprintln!("coordinator launch: {e}"),
+                    Err(e) => eprintln!("coordinator launcher task: {e}"),
+                }
+                tokio::select! {_=&mut stopped=>break,_=tokio::time::sleep(Duration::from_millis(500))=>()}
+            }
+        }
+    });
     let (notify_stop, notify_stopped) = tokio::sync::oneshot::channel();
     let notify_state = state.clone();
     let notifier = tokio::spawn(async move {
@@ -189,8 +215,10 @@ pub async fn controller(
     }.await;
     let _ = stop.send(());
     let _ = notify_stop.send(());
+    let _ = launch_stop.send(());
     let api_result = api.await;
     notifier.await?;
+    launcher.await?;
     api_result??;
     outcome
 }

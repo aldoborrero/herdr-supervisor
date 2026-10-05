@@ -728,7 +728,7 @@ fn migration_preserves_v2_authority_credentials_and_operation_replays() {
         .query_row("SELECT count(*) FROM journal", [], |r| r.get(0))
         .unwrap();
     // Restore the actual v2 schema, retaining the authoritative rows and signed outbox.
-    f.store.connection.execute_batch("DROP TABLE coordinator_notices; DROP TABLE coordinator_routes; DROP TABLE verification_worktrees; DROP TABLE check_runs; DROP TABLE review_assignments; DROP TABLE repository_bindings; DROP INDEX active_integration; PRAGMA user_version=2;").unwrap();
+    f.store.connection.execute_batch("DROP TABLE coordinator_processes; DROP TABLE coordinator_launches; DROP TABLE coordinator_notices; DROP TABLE coordinator_routes; DROP TABLE verification_worktrees; DROP TABLE check_runs; DROP TABLE review_assignments; DROP TABLE repository_bindings; DROP INDEX active_integration; PRAGMA user_version=2;").unwrap();
     let state = f.store.dir.clone();
     f.store = Store::open(&state).unwrap();
     assert_eq!(f.store.snapshot(&f.supervisor, &f.run).unwrap(), before);
