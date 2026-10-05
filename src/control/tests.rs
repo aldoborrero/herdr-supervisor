@@ -21,6 +21,9 @@ mod node_lifecycle_tests;
 #[path = "event_recovery_tests.rs"]
 mod event_recovery_tests;
 
+#[path = "storage_fault_tests.rs"]
+mod storage_fault_tests;
+
 fn policy() -> Policy {
     Policy {
         max_active: 2,
@@ -842,11 +845,8 @@ async fn real_jetstream_offline_node_restart_and_ack_after_persistence() {
     .await
     .unwrap();
     let mut node = node_store(&f);
-    node.connection
-        .execute_batch(
-            "CREATE TRIGGER full BEFORE INSERT ON jobs BEGIN SELECT RAISE(ABORT,'full'); END;",
-        )
-        .unwrap();
+    let original_limit = storage_fault_tests::limit_pages_at(&node.connection, "jobs");
+    let before = storage_fault_tests::rows(&node.connection);
     let mut consumer = node_broker.consumer("local").await.unwrap();
     let mut messages = consumer
         .fetch()
@@ -857,14 +857,16 @@ async fn real_jetstream_offline_node_restart_and_ack_after_persistence() {
         .unwrap();
     let msg = messages.next().await.unwrap().unwrap();
     let record = decode(&msg.payload).unwrap();
-    assert!(node.receive(&record).is_err());
+    storage_fault_tests::assert_disk_full(node.receive(&record).unwrap_err());
+    assert!(node.connection.is_autocommit());
+    assert_eq!(storage_fault_tests::rows(&node.connection), before);
     assert_eq!(consumer.info().await.unwrap().num_ack_pending, 1);
     let count: i64 = node
         .connection
         .query_row("SELECT count(*) FROM commands", [], |r| r.get(0))
         .unwrap();
     assert_eq!(count, 0);
-    node.connection.execute_batch("DROP TRIGGER full;").unwrap();
+    storage_fault_tests::restore_pages(&node.connection, original_limit);
     node.receive(&record).unwrap();
     msg.double_ack().await.unwrap();
     assert_eq!(consumer.info().await.unwrap().num_ack_pending, 0);
