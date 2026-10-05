@@ -447,8 +447,16 @@ pub fn advance(
             quote(attempt),
             epoch
         );
+        let assignment = if let Some(review) = &order.review {
+            format!(
+                "You are the independent reviewer, not the author of this task. Inspect the exact candidate {} from base {} and assess every criterion in the original contract. Do not edit or integrate it. Submit method submit_review with attempt, epoch, integration {}, candidate_oid, contract_hash, approve (boolean), criteria (one object per zero-based criterion index, with passed and evidence), and actionable findings. The check receipt digest for this assignment is {}.",
+                review.candidate_oid, review.base_oid, review.integration, review.checks_digest
+            )
+        } else {
+            "Execute only the assigned contract. Submit a result with its exact contract_hash and commit/artifact hashes; do not integrate or decide other tasks. You may propose memory with evidence; approval belongs to the supervisor.".into()
+        };
         let body = format!(
-            "You are a supervised worker. Read your immutable contract and selected memory with: {prefix} context\nReport readiness using worker apply with method worker_ready, attempt {attempt}, epoch {epoch}, session {} and a stable operation ID. Then execute only that contract. Submit a result with its exact contract_hash and commit/artifact hashes; do not integrate or decide other tasks. Use {prefix} receipt EVENT to distinguish queued from controller-applied. Worker apply accepts --operation ID --request JSON_FILE. You may propose memory with evidence; approval belongs to the supervisor.",
+            "Read your immutable assignment and selected memory with: {prefix} context\nReport readiness using worker apply with method worker_ready, attempt {attempt}, epoch {epoch}, session {} and a stable operation ID. {assignment} Use {prefix} receipt EVENT to distinguish queued from controller-applied. Worker apply accepts --operation ID --request JSON_FILE.",
             plan.expected_session.as_ref().unwrap()
         );
         plan.bootstrap = Some(super::api::call_json(

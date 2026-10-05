@@ -4,13 +4,14 @@
 
 A Rust adaptation of [Herdr Projects](https://github.com/eliasstravik/herdr-projects) for supervising coding agents across isolated Git worktrees. Herdr owns the workspaces and panes, **herdr-mailer delivers messages to native sessions**, and a SQLite controller owns task contracts, permissions and decisions. NATS JetStream carries coordination between the controller and execution nodes.
 
-**In development.** The controller, signed node protocol, curated memory, scoped worker API and native launch path are implemented. Independent review, exact-commit checks/integration, automatic stop/recovery and the managed UI are still being completed. Do not treat the inherited Projects actions as the managed supervisor workflow. The full delivery contract is in [IMPLEMENTATION.md](IMPLEMENTATION.md).
+**In development.** The controller, signed node protocol, curated memory, scoped worker API, native launch path and code review/integration pipeline are implemented. Artifact verification, automatic stop/recovery and the managed UI are still being completed. Do not treat the inherited Projects actions as the managed supervisor workflow. The full delivery contract is in [IMPLEMENTATION.md](IMPLEMENTATION.md).
 
 ## What is different
 
 - **An assignment is a contract.** Each attempt binds a task revision, base commit, node, runtime, session UUID and epoch. Old sessions cannot submit new decisions after cancellation.
 - **Retries preserve identity.** State, operation receipts and outgoing intents commit together. A lost creation or launch response triggers inspection of the intended resources, never a blind second launch.
 - **Delivery has distinct receipts.** Broker storage, controller application, native runtime submission and a model's readiness/result are separate facts.
+- **Review targets the actual integration candidate.** The controller combines the author's commit with the current integration base, runs configured checks in a separate checkout and assigns an independent reviewer to that exact candidate. Integration advances an owned branch with a compare-and-swap operation.
 - **Memory is curated.** Workers propose text with evidence; the supervisor approves or withdraws revisions. Each assignment carries a bounded selection of approved topics.
 - **Local execution uses the node protocol.** Moving an executor to another host changes connectivity and repository mappings, not task ownership. NetBird can supply private connectivity; signed records and broker ACLs still enforce application routes.
 
@@ -45,7 +46,7 @@ See [operations](docs/operations.md) for the request shape, node enrollment and 
 | Claude Code | Explicit development-channel opt-in; assigned UUID; mailer's MCP channel bridge | Channel write; Claude provides no delivery ACK |
 | Pi | Assigned UUID; mailer's extension and `sendMessage` | API submission; not model completion |
 
-A worker receives its assignment only after the controller accepts the exact resource binding. Its private API/CLI/MCP permits reading its contract and selected memory, reporting readiness/results, proposing memory and inspecting its own event receipts. It cannot dispatch agents, approve memory or alter run policy.
+A worker receives its assignment only after the controller accepts the exact resource binding. Its private API/CLI/MCP permits reading its contract and selected memory, reporting readiness/results, proposing memory and inspecting its own event receipts. A reviewer receives the exact candidate and reports criterion-by-criterion findings through the same scoped transport. Neither role can dispatch agents, approve memory or alter run policy.
 
 The launch tests execute harmless stub processes and use fake Herdr/mailer responses alongside real Git and Unix sockets. They do **not** prove authenticated model processing. See [validation](docs/validation.md) for evidence and current gaps.
 

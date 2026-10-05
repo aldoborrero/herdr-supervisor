@@ -97,7 +97,7 @@ pub fn handle(store: &mut NodeStore, identity: &Identity, request: WorkerRequest
         } => {
             let (order, state) = authorized(store, &token, &attempt, Some(epoch))?;
             Ok(
-                json!({"attempt":order.attempt,"state":state,"contract":order.contract,"memory":order.memory}),
+                json!({"attempt":order.attempt,"state":state,"contract":order.contract,"memory":order.memory,"review":order.review}),
             )
         }
         WorkerRequest::Apply {
@@ -108,12 +108,15 @@ pub fn handle(store: &mut NodeStore, identity: &Identity, request: WorkerRequest
             identifier(&operation_id)?;
             let (attempt, epoch) = match command.as_ref() {
                 Mutation::WorkerReady { attempt, epoch, .. }
-                | Mutation::SubmitResult { attempt, epoch, .. } => (attempt, Some(*epoch)),
+                | Mutation::SubmitResult { attempt, epoch, .. }
+                | Mutation::SubmitReview { attempt, epoch, .. } => (attempt, Some(*epoch)),
                 Mutation::ProposeMemory {
                     source_attempt: Some(attempt),
                     ..
                 } => (attempt, None),
-                _ => bail!("workers may only report readiness, results or memory proposals"),
+                _ => {
+                    bail!("workers may only report readiness, results, reviews or memory proposals")
+                }
             };
             let (order, _) = authorized(store, &token, attempt, epoch)?;
             if let Mutation::ProposeMemory { run, .. } = command.as_ref() {
@@ -191,7 +194,7 @@ pub fn mcp(
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({"tools":[
                 {"name":"worker_context","description":"Read your exact assigned contract and approved memory.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}},
-                {"name":"worker_apply","description":"Queue readiness, result or memory proposal with a stable operation_id. Queueing is not controller acceptance; inspect the receipt.","inputSchema":{"type":"object","properties":{"operation_id":{"type":"string"},"command":{"type":"object"}},"required":["operation_id","command"],"additionalProperties":false}},
+                {"name":"worker_apply","description":"Queue readiness, an author result, an assigned review or a memory proposal with a stable operation_id. Queueing is not controller acceptance; inspect the receipt.","inputSchema":{"type":"object","properties":{"operation_id":{"type":"string"},"command":{"type":"object"}},"required":["operation_id","command"],"additionalProperties":false}},
                 {"name":"worker_receipt","description":"Read controller application receipt for your event.","inputSchema":{"type":"object","properties":{"event":{"type":"string"}},"required":["event"],"additionalProperties":false}}
             ]})),
             "tools/call" => {

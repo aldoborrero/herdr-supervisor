@@ -20,6 +20,9 @@ use super::node::{ExecuteOrder, NodeStore};
 pub struct ExecutorConfig {
     /// Controller repository identifiers map to explicitly authorized local checkouts.
     pub repositories: BTreeMap<String, PathBuf>,
+    /// Owner-approved remotes for exact base/candidate objects absent on this node.
+    #[serde(default)]
+    pub base_remotes: BTreeMap<String, String>,
     pub worktree_root: PathBuf,
     pub herdr_binary: String,
     pub herdr_socket: PathBuf,
@@ -56,7 +59,14 @@ fn git(runner: &dyn Runner, repo: &Path, args: &[&str]) -> Result<String> {
             .env_remove("GIT_DIR")
             .env_remove("GIT_WORK_TREE")
             .env_remove("GIT_INDEX_FILE")
-            .env_remove("GIT_COMMON_DIR"),
+            .env_remove("GIT_COMMON_DIR")
+            .env_remove("GIT_OBJECT_DIRECTORY")
+            .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
+            .env_remove("GIT_NAMESPACE")
+            .env_remove("GIT_CONFIG_COUNT")
+            .env_remove("GIT_CONFIG_PARAMETERS")
+            .env("GIT_NO_REPLACE_OBJECTS", "1")
+            .env("GIT_TERMINAL_PROMPT", "0"),
     )?;
     ensure!(
         out.success(),
@@ -216,7 +226,7 @@ pub fn prepare(
             ],
         )?;
         ensure!(existing.is_empty(), "refusing to adopt an existing branch");
-        let base = git(
+        let base_observation = git(
             runner,
             &repo,
             &[
@@ -224,7 +234,42 @@ pub fn prepare(
                 "--verify",
                 &format!("{}^{{commit}}", order.attempt.base_oid),
             ],
-        )?;
+        );
+        let base = match base_observation {
+            Ok(base) => base,
+            Err(error) => {
+                let Some(remote) = config.base_remotes.get(&order.repo) else {
+                    return Err(error
+                        .context("base object unavailable; configure an authorized base_remote"));
+                };
+                let target = format!(
+                    "{}:refs/herdr-supervisor/inputs/{attempt}",
+                    order.attempt.base_oid
+                );
+                git(
+                    runner,
+                    &repo,
+                    &[
+                        "fetch",
+                        "--no-tags",
+                        "--no-write-fetch-head",
+                        "--no-recurse-submodules",
+                        "--",
+                        remote,
+                        &target,
+                    ],
+                )?;
+                git(
+                    runner,
+                    &repo,
+                    &[
+                        "rev-parse",
+                        "--verify",
+                        &format!("{}^{{commit}}", order.attempt.base_oid),
+                    ],
+                )?
+            }
+        };
         ensure!(
             base == order.attempt.base_oid,
             "base object is not an exact commit"

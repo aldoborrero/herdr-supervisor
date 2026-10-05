@@ -4,7 +4,7 @@ This guide covers the new `control` commands. The [inherited Projects guide](ups
 
 ## Processes and authority
 
-Run a controller API (`control serve`) and controller relay (`control relay-controller`) against one private controller state directory. Each execution node has a different private directory, its own signing key, and a `control run-node` process combining its relay, worker API and executor. The node's SQLite inbox/outbox survives process restarts. The separate mailer daemon must already be running locally on that node.
+Run `control run-controller --broker BROKER_JSON --repositories REPOSITORIES_JSON` against one private controller state directory. It combines the API, relay and Git verifier. `control serve` and `control relay-controller` expose the first two components independently; they do not execute checks or integration intents. Each execution node has a different private directory, its own signing key, and a `control run-node` process combining its relay, worker API and executor. The node's SQLite inbox/outbox survives process restarts. The separate mailer daemon must already be running locally on that node.
 
 State paths are explicit. No startup command edits global agent configuration, installs Herdr plugins or restarts shared sessions. Service modules and a complete onboarding command remain pending.
 
@@ -51,7 +51,7 @@ Initialize the controller, then submit this shape with `control --state DIR appl
 
 The API returns a run ID and revision. `bind_supervisor` with that run and `expected_revision` issues a run-scoped credential; persist it privately. Rebinding retires the previous supervisor credential. Mutating decisions use explicit aggregate revisions; retry the *same* operation ID and content after an uncertain response. Reusing an ID with different content fails.
 
-The current create-run operation does not canonicalize or verify a controller-side Git path. Node repository authorization and preparation verify the actual local Git checkout. Repository aliases and controller integration still need completion.
+The create-run operation records a logical repository identity. Node preparation and controller verification resolve it through their respective owner-supplied mappings. Controller verification binds the canonical Git common directory and refuses concurrent authority through a second alias. The owned integration branch must not preexist on first binding.
 
 ## Enroll a node and provision NATS
 
@@ -60,7 +60,7 @@ The current create-run operation does not canonicalize or verify a controller-si
 1. Issue `control --state CONTROLLER_DIR grant NODE_ID NODE_DID --epoch 1 --expires-at UNIX_SECONDS`. Transfer this signed JSON grant to the node. Pin the expected owner DID independently.
 1. Configure a private NATS server with JetStream and credentials scoped to each node. Broker provisioning needs an administrator credential; runtime nodes must not have it.
 1. Run `control --state CONTROLLER_DIR provision --broker BROKER_JSON --target NODE_ID`. It provisions the owner stream, controller consumer and named node consumers.
-1. Start the controller API and `relay-controller --broker BROKER_JSON`. Start the node command below.
+1. Start `run-controller --broker BROKER_JSON --repositories REPOSITORIES_JSON`. Start the node command below.
 
 Broker JSON contains `url`, `credentials` (an absolute private `.creds` or JSON user/password file), and optional `private_network_plaintext`. TLS is required by default. Plaintext requires an explicit private-network choice. NetBird addresses can provide reachability without changing record authorization.
 
@@ -75,11 +75,14 @@ Executor configuration maps controller repository identities to authorized local
 ```json
 {
   "repositories": { "/repos/demo": "/home/user/src/demo" },
+  "base_remotes": { "/repos/demo": "controller" },
   "worktree_root": "/home/user/.local/state/herdr-supervisor/worktrees",
   "herdr_binary": "/absolute/path/to/herdr",
   "herdr_socket": "/absolute/path/to/herdr.sock"
 }
 ```
+
+`base_remotes` is optional. If an assigned base/candidate is absent locally, the node fetches that exact OID from the configured Git remote into an owned input ref. This is needed for reviewers on a different host. Configure Git access separately; NATS transports assignments, not Git objects.
 
 Runtime configuration uses private credential **paths**:
 
@@ -124,6 +127,39 @@ A command reply, broker ACK or runtime API submission never completes steps 6–
 Lost create/launch replies do not reset the effect marker. Existing resources can prove success; absence leaves uncertainty. A lost mailer **registration** response without a durable local receipt remains unresolved; idempotent registration/reconciliation is a remaining gap. Send retries already use mailer operation IDs.
 
 Cancellation increments the attempt epoch and retires its capability. It fences further worker decisions and node launch/preparation. Automatic process stop, verification that a native model turn has stopped, and cleanup are **not implemented yet**. Cancellation therefore keeps capacity reserved until an authorized node submits a confirmed `observe_stopped`. Never infer stopped from an absent pane alone.
+
+## Verify, review and integrate code
+
+Controller repository configuration authorizes both the local checkout and optional sources for commits produced by remote nodes:
+
+```json
+{
+  "repositories": {
+    "/repos/demo": {
+      "path": "/home/controller/src/demo",
+      "node_remotes": { "worker-a": "worker-a" }
+    }
+  },
+  "check_timeout_secs": 300
+}
+```
+
+Git remote names/URLs come from this owner configuration, never from worker output. The controller requires the submitted commit to descend from its assigned base. It combines that commit with the run's current integration base using Git's merge machinery, preserving both parents in a deterministic candidate. Conflicts become explicit `conflict` records without modifying the author's or user's checkout.
+
+Use the authenticated `apply` API/CLI/MCP for these decisions:
+
+1. `request_verification`: `attempt`, `expected_revision` of the **task**. The controller service builds the candidate and runs the contract's named checks using argv approved in the run policy.
+1. `request_review`: `integration`, its current `expected_revision`, `node`, `profile`. When review is required and checks pass, this reserves a separate reviewer attempt with its own worktree/session. Reserved review capacity is available even when the author still occupies a worker slot.
+1. The assigned reviewer sends `submit_review`: `attempt`, `epoch`, `integration`, `candidate_oid`, `contract_hash`, `approve`, `criteria` and `findings`. Each criterion needs its zero-based `criterion` index, `passed` boolean and nonempty `evidence`. Rejection requires actionable findings. The author cannot approve its own candidate.
+1. `apply_integration`: `integration` and its current `expected_revision`. The controller revalidates review/check receipts and advances `refs/heads/hs/integration/<run>` only if its old OID equals the verified base. It refuses a checked-out or symbolic integration ref.
+
+Checks run in a controller-owned detached checkout under `verification/<integration>/checkout`. Receipts retain exact candidate/tree, policy hash, argv, resolved executable and hash, environment digest, timeout, exit status and output hashes/excerpts. Logs are private. An author saying tests passed does not create a check receipt. A check that changes tracked files fails; a started check without a durable outcome is not rerun automatically.
+
+For one explicit reconciliation, the owner can use `control verify --credential ADMIN_TOKEN --repositories REPOSITORIES_JSON INTEGRATION_ID`. This is not a dry run. `run-controller --once` runs one service cycle. Continuous mode keeps IPC and transport active while checks execute and rotates pending candidates so an unavailable repository does not monopolize selection.
+
+If Git advances but the SQLite receipt fails, a later reconciliation recognizes the exact candidate at the owned ref and records the existing effect. It does not apply it a second time. Keep the controller's integration refs reserved for this service: independent Git clients do not participate in its SQLite lock.
+
+This pipeline currently supports `code` contracts. Artifact verification, automated repair/replanning, replacement of failed reviewers, release of repository bindings at run completion and conservative worktree cleanup remain pending. A submitted review or integrated task does not prove that either runtime has stopped.
 
 ## Memory
 

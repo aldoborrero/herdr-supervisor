@@ -17,7 +17,7 @@ pub struct Store {
     pub dir: PathBuf,
 }
 
-fn now() -> i64 {
+pub(super) fn now() -> i64 {
     jiff::Timestamp::now().as_second()
 }
 
@@ -121,7 +121,12 @@ impl Store {
                 tx.pragma_update(None, "user_version", 2)?;
             }
             2 => (),
+            3 => (),
             _ => bail!("unsupported controller schema {version}; no migration applied"),
+        }
+        if version <= 2 {
+            tx.execute_batch(include_str!("migration3.sql"))?;
+            tx.pragma_update(None, "user_version", 3)?;
         }
         tx.commit()?;
         Ok(Self {
@@ -192,9 +197,12 @@ impl Store {
                 );
                 attempt
             }
-            Mutation::WorkerReady { attempt, .. } | Mutation::SubmitResult { attempt, .. } => {
+            Mutation::WorkerReady { attempt, .. }
+            | Mutation::SubmitResult { attempt, .. }
+            | Mutation::SubmitReview { attempt, .. } => {
                 ensure!(
-                    p.role == "worker" && p.attempt.as_deref() == Some(attempt),
+                    ["worker", "reviewer"].contains(&p.role.as_str())
+                        && p.attempt.as_deref() == Some(attempt),
                     "foreign worker capability"
                 );
                 attempt
@@ -308,7 +316,26 @@ impl Store {
             .query_map([run_id], |r| r.get::<_, String>(0))?
             .map(|r| Ok(serde_json::from_str(&r?)?))
             .collect::<Result<_>>()?;
-        Ok(json!({"run":run,"tasks":tasks,"attempts":attempts}))
+        let mut query = self
+            .connection
+            .prepare("SELECT doc FROM integrations WHERE run=?1 ORDER BY rowid")?;
+        let integrations: Vec<Value> = query
+            .query_map([run_id], |r| r.get::<_, String>(0))?
+            .map(|v| Ok(serde_json::from_str(&v?)?))
+            .collect::<Result<_>>()?;
+        let mut query=self.connection.prepare("SELECT c.doc FROM check_runs c JOIN integrations i ON i.id=c.integration WHERE i.run=?1 ORDER BY c.rowid")?;
+        let checks: Vec<Value> = query
+            .query_map([run_id], |r| r.get::<_, String>(0))?
+            .map(|v| Ok(serde_json::from_str(&v?)?))
+            .collect::<Result<_>>()?;
+        let mut query=self.connection.prepare("SELECT v.doc FROM reviews v JOIN tasks t ON t.id=v.task WHERE t.run=?1 ORDER BY v.rowid")?;
+        let reviews: Vec<Value> = query
+            .query_map([run_id], |r| r.get::<_, String>(0))?
+            .map(|v| Ok(serde_json::from_str(&v?)?))
+            .collect::<Result<_>>()?;
+        Ok(
+            json!({"run":run,"tasks":tasks,"attempts":attempts,"integrations":integrations,"checks":checks,"reviews":reviews}),
+        )
     }
 
     pub fn pending(&self, credential: &str, target: &str) -> Result<Vec<Effect>> {
@@ -416,16 +443,17 @@ fn own(p: &Principal) -> Result<()> {
     ensure!(p.role == "owner", "owner capability required");
     Ok(())
 }
-fn supervise(p: &Principal, run: &str) -> Result<()> {
+pub(super) fn supervise(p: &Principal, run: &str) -> Result<()> {
     ensure!(
         p.role == "owner" || p.role == "supervisor" && p.run.as_deref() == Some(run),
         "supervisor scope denied"
     );
     Ok(())
 }
-fn worker(p: &Principal, a: &Attempt, epoch: u64) -> Result<()> {
+pub(super) fn worker(p: &Principal, a: &Attempt, epoch: u64) -> Result<()> {
     ensure!(
-        p.role == "worker"
+        ["worker", "reviewer"].contains(&p.role.as_str())
+            && p.role == a.role
             && p.attempt.as_deref() == Some(&a.id)
             && p.generation == epoch
             && a.epoch == epoch,
@@ -444,14 +472,14 @@ fn node(p: &Principal, a: &Attempt, epoch: u64) -> Result<()> {
     );
     Ok(())
 }
-fn revision(actual: u64, expected: u64) -> Result<()> {
+pub(super) fn revision(actual: u64, expected: u64) -> Result<()> {
     ensure!(
         actual == expected,
         "stale revision: expected {expected}, current {actual}"
     );
     Ok(())
 }
-fn active_run(run: &Run) -> Result<()> {
+pub(super) fn active_run(run: &Run) -> Result<()> {
     ensure!(
         run.state == "active" && now() < run.deadline,
         "run is paused, expired or closed"
@@ -459,14 +487,14 @@ fn active_run(run: &Run) -> Result<()> {
     Ok(())
 }
 
-fn save_run(c: &Connection, run: &Run) -> Result<()> {
+pub(super) fn save_run(c: &Connection, run: &Run) -> Result<()> {
     c.execute(
         "UPDATE runs SET state=?2,revision=?3,doc=?4 WHERE id=?1",
         params![run.id, run.state, run.revision, serde_json::to_string(run)?],
     )?;
     Ok(())
 }
-fn save_task(c: &Connection, task: &Task) -> Result<()> {
+pub(super) fn save_task(c: &Connection, task: &Task) -> Result<()> {
     c.execute(
         "UPDATE tasks SET state=?2,revision=?3,doc=?4 WHERE id=?1",
         params![
@@ -478,14 +506,14 @@ fn save_task(c: &Connection, task: &Task) -> Result<()> {
     )?;
     Ok(())
 }
-fn save_attempt(c: &Connection, a: &Attempt) -> Result<()> {
+pub(super) fn save_attempt(c: &Connection, a: &Attempt) -> Result<()> {
     c.execute(
         "UPDATE attempts SET state=?2,epoch=?3,doc=?4 WHERE id=?1",
         params![a.id, a.state, a.epoch, serde_json::to_string(a)?],
     )?;
     Ok(())
 }
-fn issue(
+pub(super) fn issue(
     c: &Connection,
     role: &str,
     run: Option<&str>,
@@ -509,7 +537,7 @@ fn issue(
     Ok(secret)
 }
 
-fn effect(
+pub(super) fn effect(
     c: &Connection,
     target: &str,
     kind: &str,
@@ -538,6 +566,10 @@ fn add_dependency(c: &Connection, task: &Task, predecessor: &str) -> Result<()> 
 
 fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) -> Result<Value> {
     match command {
+        Mutation::RequestVerification { .. }
+        | Mutation::RequestReview { .. }
+        | Mutation::SubmitReview { .. }
+        | Mutation::ApplyIntegration { .. } => super::verification::mutate(tx, p, command),
         Mutation::EnrollNode {
             id: node_id,
             key,
@@ -850,6 +882,7 @@ fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) -> Result<Val
         } => {
             let mut a: Attempt = document(tx, "attempts", attempt)?;
             worker(p, &a, *epoch)?;
+            ensure!(a.role == "worker", "reviewers cannot submit author results");
             ensure!(
                 a.state == "running" && a.contract_hash == *contract_hash,
                 "result is stale or attempt not ready"
@@ -1110,7 +1143,12 @@ fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) -> Result<Val
     }
 }
 
-fn memory_snapshot(c: &Connection, run: &str, topics: &[String], budget: usize) -> Result<Value> {
+pub(super) fn memory_snapshot(
+    c: &Connection,
+    run: &str,
+    topics: &[String],
+    budget: usize,
+) -> Result<Value> {
     let mut q=c.prepare("SELECT m.topic,m.revision,m.text,m.proposal FROM memory_revisions m WHERE m.run=?1 AND m.withdrawn=0 AND m.revision=(SELECT max(n.revision) FROM memory_revisions n WHERE n.run=m.run AND n.topic=m.topic) ORDER BY m.topic")?;
     let rows = q.query_map([run], |r| {
         Ok((

@@ -1100,6 +1100,7 @@ fn executor_reconciles_lost_creation_reply_and_fences_cancelled_work() {
             terminal: Cell::new(1),
         };
         let config = super::executor::ExecutorConfig {
+            base_remotes: BTreeMap::new(),
             repositories: BTreeMap::from([("/repo".into(), repo)]),
             worktree_root: root,
             herdr_binary: "fake-herdr".into(),
@@ -1718,3 +1719,6 @@ async fn worker_socket_and_mcp_expose_only_scoped_assignment() {
     server.await.unwrap().unwrap();
     assert!(!path.join("worker.sock").exists());
 }
+
+#[path = "verification_tests.rs"]
+mod verification_tests;

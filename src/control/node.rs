@@ -20,6 +20,8 @@ pub struct ExecuteOrder {
     pub repo: String,
     pub credential: String,
     pub memory: Value,
+    #[serde(default)]
+    pub review: Option<super::model::ReviewContext>,
 }
 
 pub struct NodeStore {
@@ -165,6 +167,22 @@ impl NodeStore {
             }
             "execute" => {
                 let order: ExecuteOrder = serde_json::from_value(body.clone())?;
+                ensure!(
+                    ["worker", "reviewer"].contains(&order.attempt.role.as_str()),
+                    "unknown execution role"
+                );
+                if order.attempt.role == "reviewer" {
+                    let review = order.review.as_ref().context("review assignment missing")?;
+                    ensure!(
+                        review.candidate_oid == order.attempt.base_oid,
+                        "review base differs from assigned candidate"
+                    );
+                } else {
+                    ensure!(
+                        order.review.is_none(),
+                        "author assignment contains reviewer scope"
+                    );
+                }
                 ensure!(
                     order.attempt.node == self.node_id && order.attempt.epoch > 0,
                     "foreign attempt"

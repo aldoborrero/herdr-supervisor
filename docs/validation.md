@@ -4,11 +4,11 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
-The local implementation suite currently passes **352 unit tests and 5 CLI tests**, including the inherited Projects suite. The new controller tests use private temporary state; real Git, SQLite, sockets and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
+The local implementation suite currently passes **362 unit tests and 5 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
 
 | Requirement | Evidence | Limit |
 | --- | --- | --- |
-| Atomic capacity, DAG/revisions and operation replay | `src/control/tests.rs`: concurrent dispatch, dependency cycles, retired supervisors and transaction rollback | Independent reviewer scheduling remains pending |
+| Atomic capacity, DAG/revisions and operation replay | `src/control/tests.rs`: concurrent dispatch, dependency cycles, retired supervisors and transaction rollback; candidate tests schedule a reviewer while the author occupies the worker slot | Replacement of failed reviewers and repair attempts pending |
 | Unknown remote branch, inventory corruption and project polling | `src/coordinator_review.rs` plus inherited suite | Managed UI is not connected to the controller |
 | Signed origin and route authorization | Identity tampering/expiry tests, controller receive tests, real NATS ACL test | Explicit node rotation/revocation commands and production ACL template pending |
 | Durable offline transport | Real JetStream restart/offline test; ACK follows SQLite acceptance | Retry/backoff, poison-record policy and expiry handling need further work |
@@ -24,6 +24,14 @@ The local implementation suite currently passes **352 unit tests and 5 CLI tests
 | Lease release with inherited file descriptions | `lease_release_is_not_delayed_by_an_inherited_file_description` | Explicit unlock prevents fork/exec inheritance from delaying release |
 | Curated memory | `memory_is_curated_versioned_scoped_and_budgeted` | Run scope; live change delivery and project memory pending |
 | CLI bootstrap usability | `managed_control_help_and_bootstrap_are_usable_without_herdr` | Does not deploy services |
+| Combined candidate, independent review and owned Git CAS | `combined_candidate_review_and_checks_gate_owned_branch_for_sha1_and_sha256` uses real Git repositories, a divergent accepted base and an untouched dirty user checkout | Model review content simulated; code contracts only |
+| Conflicts and check evidence | `conflicts_are_explicit_and_do_not_change_either_checkout`, `failing_or_mutating_checks_cannot_be_replaced_by_an_author_claim`, `started_check_is_not_rerun_after_unknown_execution_outcome` | Repair/replanning needs explicit lifecycle support |
+| Git effect followed by SQLite failure | `git_cas_after_sql_failure_is_reconciled_once_without_reapplying` injects SQL failure after real Git CAS, reopens the store and verifies one final receipt | Owned refs must remain reserved from independent Git writers |
+| Ref protection | `checked_out_integration_branch_and_changed_base_are_never_overwritten` | Git clients outside the controller do not participate in its lock |
+| Remote result import and ancestry | `remote_result_requires_configured_node_source_and_exact_ancestry` clones a separate repository and imports only from the configured node source | Local Git transport; SSH credentials/connectivity are deployment configuration |
+| Schema migration | `migration_preserves_v2_authority_credentials_and_operation_replays` retains live v2 rows, signed outbox and operation replay across migration | No downgrade supported |
+| Controller service | `continuous_controller_verifies_without_blocking_api_and_applies_owned_ref` runs the service with real NATS and Git; a gated check keeps running while a Unix API snapshot succeeds | One-cycle service mode; no authenticated models |
+| Reviewer transport | `assigned_reviewer_uses_signed_node_transport_and_receives_controller_receipt` uses a restricted NATS node account and the worker boundary | The review decision is simulated; broker ACK cannot approve it |
 
 ## Commands
 
@@ -41,8 +49,8 @@ Mailer protocol-2 support is an independent local commit **`7a12d5a`** on `feat/
 
 ## Still required
 
-- Controller-owned Git repository identity and immutable result verification.
-- Independent reviewer attempts; check receipts tied to exact candidate commits; CAS integration on an owned branch.
+- Artifact verification without a synthetic code commit; repair/replanning and replacement of failed reviewers.
+- Release of controller repository bindings at run completion and conservative verification checkout cleanup.
 - Confirmed native stop, uncertain-process recovery and conservative cleanup.
 - Idempotent/reconcilable mailer registration after a lost registration response.
 - Managed Projects UI/actions and prevention of legacy scheduler bypass.

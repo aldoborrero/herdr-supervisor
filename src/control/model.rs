@@ -219,6 +219,44 @@ pub struct Principal {
     pub generation: u64,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Integration {
+    pub id: String,
+    pub run: String,
+    pub task: String,
+    pub attempt: String,
+    pub base_oid: String,
+    pub result_oid: String,
+    pub candidate_oid: Option<String>,
+    pub tree_oid: Option<String>,
+    pub contract_hash: String,
+    pub policy_hash: String,
+    pub checks_digest: Option<String>,
+    pub state: String,
+    pub revision: u64,
+    pub created_at: i64,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewContext {
+    pub integration: String,
+    pub candidate_oid: String,
+    pub base_oid: String,
+    pub result_oid: String,
+    pub checks_digest: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CriterionReview {
+    pub criterion: usize,
+    pub passed: bool,
+    pub evidence: String,
+}
+
 /// Every mutation is journaled under an operation ID; explicit revisions fence decisions.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(
@@ -228,6 +266,30 @@ pub struct Principal {
     deny_unknown_fields
 )]
 pub enum Mutation {
+    RequestVerification {
+        attempt: String,
+        expected_revision: u64,
+    },
+    RequestReview {
+        integration: String,
+        expected_revision: u64,
+        node: String,
+        profile: String,
+    },
+    SubmitReview {
+        attempt: String,
+        epoch: u64,
+        integration: String,
+        candidate_oid: String,
+        contract_hash: String,
+        approve: bool,
+        criteria: Vec<CriterionReview>,
+        findings: Vec<String>,
+    },
+    ApplyIntegration {
+        integration: String,
+        expected_revision: u64,
+    },
     EnrollNode {
         id: String,
         key: String,

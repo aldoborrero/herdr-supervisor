@@ -19,6 +19,23 @@ pub struct ControlArgs {
 
 #[derive(Subcommand)]
 enum ControlCommand {
+    /// Run controller API, NATS relay and durable Git/check executor together
+    RunController {
+        #[arg(long)]
+        broker: PathBuf,
+        #[arg(long)]
+        repositories: PathBuf,
+        #[arg(long)]
+        once: bool,
+    },
+    /// Execute one durable verification/integration intent using an owner-approved repository map
+    Verify {
+        #[arg(long)]
+        credential: PathBuf,
+        #[arg(long)]
+        repositories: PathBuf,
+        integration: String,
+    },
     /// Run the node relay, worker API and durable executor continuously
     RunNode {
         #[arg(long)]
@@ -203,6 +220,34 @@ fn credential(path: &Path) -> Result<String> {
 
 pub fn run(args: ControlArgs) -> Result<()> {
     let result = match args.command {
+        ControlCommand::RunController {
+            broker,
+            repositories,
+            once,
+        } => runtime()?.block_on(super::service::controller(
+            args.state,
+            broker,
+            super::git_pipeline::read_config(&repositories)?,
+            once,
+        ))?,
+        ControlCommand::Verify {
+            credential: path,
+            repositories,
+            integration,
+        } => {
+            let mut store = Store::open(&args.state)?;
+            let principal = super::store::authenticate(&store.connection, &credential(&path)?)?;
+            ensure!(
+                principal.role == "owner",
+                "local verifier execution requires the owner capability"
+            );
+            serde_json::to_value(super::git_pipeline::advance(
+                &mut store,
+                &super::git_pipeline::read_config(&repositories)?,
+                &integration,
+                &crate::runner::RealRunner,
+            )?)?
+        }
         ControlCommand::RunNode {
             broker,
             executor,
