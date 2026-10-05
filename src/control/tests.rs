@@ -1392,6 +1392,15 @@ impl Drop for WrapperChild {
 
 #[test]
 fn three_native_launchers_bind_exact_sessions_before_idempotent_bootstrap() {
+    native_launchers(false);
+}
+
+#[test]
+fn registration_recovery_workers_resume_native_launch_after_lost_preregistration_response() {
+    native_launchers(true);
+}
+
+fn native_launchers(recover_registration: bool) {
     use super::executor::{CheckoutPlan, PaneBinding};
     use super::runtime::{LaunchPlan, RuntimeConfig};
     use crate::runner::{Cmd, Output, RealRunner, Runner};
@@ -1560,6 +1569,7 @@ fn three_native_launchers_bind_exact_sessions_before_idempotent_bootstrap() {
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let done = stop.clone();
         let server = std::thread::spawn(move || {
+            let mut registrations = 0;
             while !done.load(std::sync::atomic::Ordering::SeqCst) {
                 let (mut socket, _) = match listener.accept() {
                     Ok(v) => v,
@@ -1580,7 +1590,11 @@ fn three_native_launchers_bind_exact_sessions_before_idempotent_bootstrap() {
                 captured.lock().unwrap().push(r.clone());
                 let data = match r["op"].as_str().unwrap() {
                     "register" => {
-                        json!({"session":{"id":id(),"epoch":1,"agent":r["agent"],"runtime":r["runtime"],"location":r["location"]},"token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
+                        registrations += 1;
+                        if recover_registration && runtime != "codex" && registrations == 1 {
+                            continue;
+                        }
+                        json!({"session":{"id":id(),"epoch":registrations,"agent":r["agent"],"runtime":r["runtime"],"location":r["location"]},"token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
                     }
                     "capabilities" => json!({"idempotentSend":true,"recipientPrecondition":true}),
                     "send" => {
@@ -1597,6 +1611,41 @@ fn three_native_launchers_bind_exact_sessions_before_idempotent_bootstrap() {
             session: RefCell::new(String::new()),
             launches: RefCell::new(vec![]),
         };
+        if recover_registration && runtime != "codex" {
+            assert!(
+                super::runtime::advance(&mut node, &config, &a.id, &f.node_key, &runner).is_err()
+            );
+            assert!(
+                super::runtime::advance(&mut node, &config, &a.id, &f.node_key, &runner).is_err()
+            );
+            assert!(runner.launches.borrow().is_empty());
+            let registered = requests
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|r| r["op"] == "register")
+                .count();
+            assert_eq!(registered, 1);
+            let receipt = super::registration_recovery::recover(
+                &node.dir,
+                true,
+                &a.id,
+                a.epoch,
+                "recover-native",
+            )
+            .unwrap();
+            assert_eq!(
+                super::registration_recovery::recover(
+                    &node.dir,
+                    true,
+                    &a.id,
+                    a.epoch,
+                    "recover-native"
+                )
+                .unwrap(),
+                receipt
+            );
+        }
         assert_eq!(
             super::runtime::advance(&mut node, &config, &a.id, &f.node_key, &runner).unwrap()["state"],
             "launching"
@@ -1688,7 +1737,14 @@ fn three_native_launchers_bind_exact_sessions_before_idempotent_bootstrap() {
         let messages = requests.lock().unwrap();
         let send = messages.iter().find(|r| r["op"] == "send").unwrap();
         assert!(send["recipientSession"].as_str().is_some());
-        assert_eq!(send["recipientEpoch"], 1);
+        assert_eq!(
+            send["recipientEpoch"],
+            if recover_registration && runtime != "codex" {
+                2
+            } else {
+                1
+            }
+        );
         assert!(send["body"].as_str().unwrap().contains(&session));
         assert!(!send["body"].as_str().unwrap().contains(&worker));
         assert_eq!(messages.iter().filter(|r| r["op"] == "send").count(), 1);
@@ -1834,3 +1890,6 @@ mod task_amend_tests;
 
 #[path = "run_profiles_tests.rs"]
 mod run_profiles_tests;
+
+#[path = "registration_recovery_tests.rs"]
+mod registration_recovery_tests;

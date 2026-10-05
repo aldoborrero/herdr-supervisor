@@ -378,13 +378,13 @@ fn schema_five_upgrade_preserves_existing_jobs_and_frozen_outbox() {
         .execute_batch("DROP TABLE artifact_staging;")
         .unwrap();
     for c in [&node.connection, &f.store.connection] {
-        c.execute_batch("DROP TABLE reception_failures; PRAGMA user_version=5;")
+        c.execute_batch("DROP TABLE reception_failures; DROP TABLE registration_recoveries; PRAGMA user_version=5;")
             .unwrap();
     }
     drop(node);
     let node = node_store(&f);
     f.store = Store::open(&f.store.dir).unwrap();
-    for (c, version) in [(&node.connection, 7), (&f.store.connection, 8)] {
+    for (c, version) in [(&node.connection, 8), (&f.store.connection, 9)] {
         assert_eq!(
             c.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
                 .unwrap(),

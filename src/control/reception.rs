@@ -146,7 +146,7 @@ pub fn status(c: &Connection) -> Result<Value> {
     )
 }
 
-fn local_db(dir: &std::path::Path, node: bool, writable: bool) -> Result<Connection> {
+pub(super) fn local_db(dir: &std::path::Path, node: bool, writable: bool) -> Result<Connection> {
     use std::os::unix::fs::PermissionsExt;
     let metadata = std::fs::symlink_metadata(dir)?;
     ensure!(

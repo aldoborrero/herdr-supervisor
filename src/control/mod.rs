@@ -18,6 +18,7 @@ pub mod node;
 pub mod process;
 mod reception;
 mod recovery;
+mod registration_recovery;
 mod run_profiles;
 pub mod runtime;
 pub mod service;

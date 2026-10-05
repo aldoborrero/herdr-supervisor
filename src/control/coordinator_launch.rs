@@ -184,7 +184,7 @@ pub fn files(state: &Path, p: &Plan) -> PathBuf {
         .join(&p.run)
         .join(p.generation.to_string())
 }
-fn current(c: &Connection, p: &Plan) -> Result<bool> {
+pub(super) fn current(c: &Connection, p: &Plan) -> Result<bool> {
     c.query_row("SELECT EXISTS(SELECT 1 FROM principals p JOIN runs r ON r.id=p.run WHERE p.run=?1 AND p.role='supervisor' AND p.generation=?2 AND p.active=1 AND r.state IN ('active','paused') AND json_extract(r.doc,'$.deadline')>?3)",params![p.run,p.generation,now()],|r|r.get(0)).map_err(Into::into)
 }
 pub fn summaries(c: &Connection, run: &str) -> Result<Value> {
@@ -203,7 +203,12 @@ pub fn summaries(c: &Connection, run: &str) -> Result<Value> {
     for row in rows {
         let (id, generation, state, error, doc, receipt) = row?;
         let p: Plan = serde_json::from_str(&doc)?;
-        result.push(json!({"id":id,"generation":generation,"state":state,"profile":p.profile_name,"runtime":p.profile.runtime,"native_session":p.expected_session,"pane":p.pane,"last_error":error,"process_receipt":receipt.map(|s|serde_json::from_str::<Value>(&s)).transpose()?}));
+        let recoveries: u64 = c.query_row(
+            "SELECT count(*) FROM registration_recoveries WHERE target=?1",
+            [&id],
+            |r| r.get(0),
+        )?;
+        result.push(json!({"id":id,"generation":generation,"state":state,"profile":p.profile_name,"runtime":p.profile.runtime,"native_session":p.expected_session,"pane":p.pane,"last_error":error,"process_receipt":receipt.map(|s|serde_json::from_str::<Value>(&s)).transpose()?,"registration_recovery_count":recoveries,"registration_state":if p.registration.is_some(){"registered"}else if p.registration_started{"uncertain"}else if recoveries > 0{"retry_authorized"}else{"not_started"}}));
     }
     Ok(json!(result))
 }

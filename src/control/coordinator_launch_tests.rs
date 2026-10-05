@@ -71,6 +71,7 @@ fn observed(world: &World, p: &launch::Plan, uuid: &str, terminal: &str, home: &
     *world.agents.borrow_mut()=json!([{"workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p1","terminal_id":terminal,"cwd":home,"agent":p.profile.runtime,"agent_session":{"value":uuid}}]).to_string();
 }
 struct Mailer {
+    lose_register: Arc<AtomicBool>,
     requests: Arc<Mutex<Vec<Value>>>,
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
@@ -92,6 +93,8 @@ impl Mailer {
         listener.set_nonblocking(true).unwrap();
         let requests = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
+        let lose_register = Arc::new(AtomicBool::new(lose_register));
+        let lost = lose_register.clone();
         let (r, s) = (requests.clone(), stop.clone());
         let thread = std::thread::spawn(move || {
             while !s.load(Ordering::Relaxed) {
@@ -114,7 +117,7 @@ impl Mailer {
                 r.lock().unwrap().push(req.clone());
                 let data = match req["op"].as_str().unwrap() {
                     "register" => {
-                        if lose_register {
+                        if lost.load(Ordering::Relaxed) {
                             continue;
                         }
                         json!({"session":{"id":id(),"agent":req["agent"],"runtime":req["runtime"],"location":req["location"],"epoch":1},"token":"isolated-receiver-token-000000000000000000"})
@@ -130,6 +133,7 @@ impl Mailer {
             }
         });
         Self {
+            lose_register,
             requests,
             stop,
             thread: Some(thread),
@@ -491,7 +495,7 @@ fn schema_four_migration_preserves_active_coordinator_routes_and_memory() {
         },
     );
     let before = coordinator::context(&f.store, &cap, &f.run).unwrap();
-    f.store.connection.execute_batch("DROP TABLE coordinator_processes; DROP TABLE coordinator_launches; DROP TABLE integration_policies; DROP TABLE attempt_profiles; DROP TABLE artifact_chunks; DROP TABLE artifact_uploads; DROP TABLE reception_failures; PRAGMA user_version=4;").unwrap();
+    f.store.connection.execute_batch("DROP TABLE coordinator_processes; DROP TABLE coordinator_launches; DROP TABLE integration_policies; DROP TABLE attempt_profiles; DROP TABLE artifact_chunks; DROP TABLE artifact_uploads; DROP TABLE reception_failures; DROP TABLE registration_recoveries; PRAGMA user_version=4;").unwrap();
     f.store = Store::open(&f.store.dir).unwrap();
     let after = coordinator::context(&f.store, &cap, &f.run).unwrap();
     assert_eq!(after["native_coordinator"], before["native_coordinator"]);
@@ -635,4 +639,192 @@ fn run_profiles_changes_preserve_coordinator_launch_snapshot() {
     assert_eq!(before.expected_session, after.expected_session);
     assert_eq!(before.credential, after.credential);
     assert!(!after.launch_started);
+}
+
+#[test]
+fn registration_recovery_coordinator_retries_only_after_explicit_prelaunch_authorization() {
+    let mut f = Fixture::new();
+    runtime(&mut f, "pi");
+    let mailer = Mailer::new(&f, true);
+    let cfg = config(&f);
+    let id = start(&mut f, cfg);
+    let p = plan(&f, &id);
+    let world = World::new();
+    let home = launch::files(&f.store.dir, &p).join("home");
+    shell(&world, &home, false);
+    assert!(launch::advance(&mut f.store, &id, &world.runner).is_err());
+    let before = plan(&f, &id);
+    let recover = || {
+        crate::control::registration_recovery::recover(
+            &f.store.dir,
+            false,
+            &id,
+            p.generation,
+            "recover-first",
+        )
+    };
+    let receipt = recover().unwrap();
+    assert_eq!(recover().unwrap(), receipt);
+    assert_eq!(
+        mailer.count("register"),
+        1,
+        "authorization performs no registration"
+    );
+    let after = plan(&f, &id);
+    assert!(!after.registration_started);
+    assert_eq!(after.expected_session, before.expected_session);
+    assert_eq!(after.pane, before.pane);
+    assert_eq!(after.credential, before.credential);
+    assert_eq!(
+        f.store
+            .connection
+            .query_row("SELECT count(*) FROM registration_recoveries", [], |r| r
+                .get::<_, u64>(0))
+            .unwrap(),
+        1
+    );
+    mailer.lose_register.store(false, Ordering::Relaxed);
+    assert_eq!(
+        launch::advance(&mut f.store, &id, &world.runner).unwrap()["state"],
+        "launching"
+    );
+    assert_eq!(mailer.count("register"), 2);
+    assert_eq!(world.runner.count("pane run"), 1);
+    assert_eq!(world.runner.count("workspace create"), 1);
+    assert_eq!(
+        crate::control::registration_recovery::recover(
+            &f.store.dir,
+            false,
+            &id,
+            p.generation,
+            "recover-first"
+        )
+        .unwrap(),
+        receipt
+    );
+    assert!(
+        plan(&f, &id).registration_started,
+        "replaying authorization cannot reset a launched receiver"
+    );
+    assert!(
+        crate::control::registration_recovery::recover(
+            &f.store.dir,
+            false,
+            &id,
+            p.generation,
+            "recover-again"
+        )
+        .is_err()
+    );
+    let journal: u64 = f
+        .store
+        .connection
+        .query_row(
+            "SELECT count(*) FROM journal WHERE kind='registration_recovery_authorized'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(journal, 1);
+    assert!(!receipt.to_string().contains("token"));
+}
+
+#[test]
+fn registration_recovery_coordinator_fences_files_processes_generation_and_rolls_back_journal_failure()
+ {
+    let mut f = Fixture::new();
+    runtime(&mut f, "claude");
+    let mut cfg = config(&f);
+    cfg.claude_development_channel = true;
+    let id = start(&mut f, cfg);
+    let mut p = plan(&f, &id);
+    p.registration_started = true;
+    let original = serde_json::to_string(&p).unwrap();
+    f.store
+        .connection
+        .execute(
+            "UPDATE coordinator_launches SET state='launching',doc=?2 WHERE id=?1",
+            rusqlite::params![id, original],
+        )
+        .unwrap();
+    let state = f.store.dir.clone();
+    let recover = |epoch| {
+        crate::control::registration_recovery::recover(&state, false, &id, epoch, "recover")
+    };
+    assert!(recover(p.generation + 1).is_err());
+    let lock = crate::control::api::lock(&state, "coordinator-launch.lock").unwrap();
+    assert!(recover(p.generation).is_err());
+    drop(lock);
+    let dir = launch::files(&state, &p);
+    std::fs::create_dir_all(&dir).unwrap();
+    for name in [
+        "registration.json",
+        "mailer.token",
+        "mailer.json",
+        "native-receipts",
+    ] {
+        let file = dir.join(name);
+        std::os::unix::fs::symlink("missing-evidence", &file).unwrap();
+        assert!(
+            recover(p.generation)
+                .unwrap_err()
+                .to_string()
+                .contains("receiver evidence")
+        );
+        std::fs::remove_file(file).unwrap();
+    }
+    f.store
+        .connection
+        .execute(
+            "INSERT INTO coordinator_processes VALUES (?1,?2,'spawn_started','{}')",
+            rusqlite::params![id, p.generation],
+        )
+        .unwrap();
+    assert!(recover(p.generation).is_err());
+    f.store
+        .connection
+        .execute("DELETE FROM coordinator_processes WHERE launch=?1", [&id])
+        .unwrap();
+    for field in ["launch_started", "wrapper_started"] {
+        let mut changed = serde_json::to_value(&p).unwrap();
+        changed[field] = json!(true);
+        f.store
+            .connection
+            .execute(
+                "UPDATE coordinator_launches SET doc=?2 WHERE id=?1",
+                rusqlite::params![id, changed.to_string()],
+            )
+            .unwrap();
+        assert!(recover(p.generation).is_err());
+    }
+    f.store
+        .connection
+        .execute(
+            "UPDATE coordinator_launches SET doc=?2 WHERE id=?1",
+            rusqlite::params![id, original],
+        )
+        .unwrap();
+    f.store.connection.execute_batch("CREATE TRIGGER reject_recovery_journal BEFORE INSERT ON journal WHEN NEW.kind='registration_recovery_authorized' BEGIN SELECT RAISE(ABORT,'injected journal failure'); END;").unwrap();
+    assert!(recover(p.generation).is_err());
+    assert!(plan(&f, &id).registration_started);
+    assert_eq!(
+        f.store
+            .connection
+            .query_row("SELECT count(*) FROM registration_recoveries", [], |r| r
+                .get::<_, u64>(0))
+            .unwrap(),
+        0
+    );
+    f.store
+        .connection
+        .execute_batch("DROP TRIGGER reject_recovery_journal")
+        .unwrap();
+    f.store
+        .connection
+        .execute(
+            "UPDATE principals SET active=0 WHERE run=?1 AND role='supervisor'",
+            [&p.run],
+        )
+        .unwrap();
+    assert!(recover(p.generation).is_err());
 }

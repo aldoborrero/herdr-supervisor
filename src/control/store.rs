@@ -127,6 +127,7 @@ impl Store {
             6 => (),
             7 => (),
             8 => (),
+            9 => (),
             _ => bail!("unsupported controller schema {version}; no migration applied"),
         }
         if version <= 2 {
@@ -149,6 +150,11 @@ impl Store {
         }
         if version <= 7 {
             super::run_profiles::migrate(&tx)?;
+        }
+        if version <= 8 {
+            // Recovery receipts are independent of mutable launch checkpoints.
+            tx.execute_batch(super::registration_recovery::SCHEMA)?;
+            tx.pragma_update(None, "user_version", 9)?;
         }
         tx.commit()?;
         Ok(Self {

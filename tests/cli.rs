@@ -258,6 +258,70 @@ fn managed_create_publishes_one_bound_view_through_real_controller_ipc_without_l
     assert_eq!(view["actor_role"], "owner");
     assert_eq!(view["active_attempts"], 0);
     assert_eq!(view["tasks"][0], edited);
+    let reserve = json!({"method":"start_coordinator","params":{
+        "run":receipt["run"],"expected_revision":view["run"]["revision"],"profile":"reviewer",
+        "config":{"herdr_binary":"/unused/herdr","herdr_socket":home.path().join("herdr.sock"),
+            "supervisor_binary":"/unused/supervisor","mailer_state":home.path().join("mailer"),
+            "mailer_admin_credential":home.path().join("mailer-admin"),"codex_binary":"/unused/codex",
+            "mailer_runtime_binary":"/unused/runtime","claude_development_channel":false}}}).to_string();
+    let reserved = hp(
+        home.path(),
+        &[
+            "--root",
+            root_arg,
+            "managed",
+            "apply",
+            "managed-demo",
+            "--operation",
+            "reserve-recovery",
+            "--request-json",
+            &reserve,
+        ],
+    );
+    assert!(
+        reserved.status.success(),
+        "{}",
+        String::from_utf8_lossy(&reserved.stderr)
+    );
+    let reserved: Value = serde_json::from_slice(&reserved.stdout).unwrap();
+    // Seed only the local lost-response checkpoint; no Herdr/mailer process is started.
+    let db = rusqlite::Connection::open(state.join("control.sqlite")).unwrap();
+    db.execute("UPDATE coordinator_launches SET state='launching',doc=json_set(doc,'$.registration_started',json('true')) WHERE id=?1",[reserved["id"].as_str().unwrap()]).unwrap();
+    let epoch = reserved["generation"].to_string();
+    let recovery = [
+        "control",
+        "--state",
+        state_arg,
+        "recover-registration",
+        "--operation",
+        "recover-cli",
+        "--expected-epoch",
+        &epoch,
+        reserved["id"].as_str().unwrap(),
+    ];
+    let recovered = hp(home.path(), &recovery);
+    assert!(
+        recovered.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recovered.stderr)
+    );
+    assert_eq!(hp(home.path(), &recovery).stdout, recovered.stdout);
+    let recovered_json: Value = serde_json::from_slice(&recovered.stdout).unwrap();
+    assert_eq!(
+        recovered_json["recorded_state"],
+        "registration_retry_authorized"
+    );
+    assert_eq!(recovered_json["registration_attempted"], false);
+    let journal: u64 = db
+        .query_row(
+            "SELECT count(*) FROM journal WHERE kind='registration_recovery_authorized'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(journal, 1);
+    let secret = std::fs::read_to_string(state.join("admin.token")).unwrap();
+    assert!(!String::from_utf8_lossy(&recovered.stdout).contains(secret.trim()));
 }
 
 #[test]

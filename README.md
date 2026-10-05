@@ -85,7 +85,7 @@ Worktrees isolate Git checkouts. Credentials and private state operate within a 
 
 ## Run as a service
 
-The flake exports opt-in NixOS and Home Manager modules for a controller and independently configured execution nodes. Each service uses the initialized runtime owner/state and configuration file paths; keys and tokens stay in private runtime files. See [service setup](docs/services.md) for examples, dependencies and shutdown behavior.
+The flake exports opt-in NixOS and Home Manager modules for a controller and independently configured execution nodes. Each service uses the initialized runtime owner/state and configuration file paths; keys and tokens stay in private runtime files. See [service setup](docs/services.md) for examples, dependencies and shutdown behavior. A lost Claude/Pi registration response before native launch can be recovered with an explicit, replayable [local maintenance command](docs/operations.md#recover-a-lost-prelaunch-registration).
 
 Rejected broker deliveries have a bounded, durable local queue with automatic retries and metadata-only inspection. See [incoming delivery recovery](docs/operations.md#rejected-incoming-deliveries) for TERM semantics, storage limits and explicit pruning.
 

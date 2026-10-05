@@ -686,7 +686,7 @@ fn artifact_pipeline_node_schema_upgrade_preserves_jobs_and_pending_signed_event
         .query_row("SELECT wire FROM events", [], |r| r.get(0))
         .unwrap();
     node.connection
-        .execute_batch("DROP TABLE artifact_staging; PRAGMA user_version=6;")
+        .execute_batch("DROP TABLE artifact_staging; DROP TABLE registration_recoveries; PRAGMA user_version=6;")
         .unwrap();
     drop(node);
     let node = node_store(&f);
@@ -694,7 +694,7 @@ fn artifact_pipeline_node_schema_upgrade_preserves_jobs_and_pending_signed_event
         node.connection
             .pragma_query_value(None, "user_version", |r| r.get::<_, u64>(0))
             .unwrap(),
-        7
+        8
     );
     assert_eq!(
         node.connection

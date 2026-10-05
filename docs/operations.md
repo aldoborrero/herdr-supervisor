@@ -122,7 +122,7 @@ Choose a profile from the run policy, not the legacy Projects profile store. If 
 
 SQLite reserves one generation before external effects. An owner mutation that races a launch effect returns a retryable busy error before changing state; retry the same operation ID and content after the launcher releases its lease. Controller paths are normalized before generating commands for the child workspace. Herdr creates a separate workspace rooted in the coordinator's private home; workers still receive isolated Git worktrees. The generated `AGENTS.md` directs the coordinator to scoped context. The one-shot wrapper owns its native process. Codex's UUID is observed on the exact pane; Claude/Pi receive a UUID before launch. The controller verifies workspace, pane, terminal, runtime and UUID, then activates that generation's mailer route and durable bootstrap. `bound` and `model_ready: false` report resource binding without claiming model processing.
 
-`managed status` and the popup's Settings section expose launch state, errors and process exit receipts. Reopening a pending launch reports its state. Lost workspace or pane-run replies trigger inspection without repeating creation or launch. A lost mailer registration response stays uncertain and needs reconciliation; it never silently rotates a possibly live receiver. A missing wrapper exit receipt also stays unresolved. No stored PID is signalled during recovery.
+`managed status` and the popup's Settings section expose launch state, errors and process exit receipts. Reopening a pending launch reports its state. Lost workspace or pane-run replies trigger inspection without repeating creation or launch. A lost mailer registration response stays uncertain. Before any Claude/Pi launch, the local owner can explicitly authorize one retry with [registration recovery](#recover-a-lost-prelaunch-registration); a possibly live receiver is never silently rotated. A missing wrapper exit receipt also stays unresolved. No stored PID is signalled during recovery.
 
 Run cancellation, deadline expiry or generation retirement stop a process still owned by its wrapper. To replace an owned coordinator without cancelling the run, the owner can submit `bind_supervisor` for the current run revision; this retires the old generation. Wait until its launch state is `exited`, then open again. `--new` cannot override an active or unresolved coordinator. Existing manually attached sessions are not process-owned by this launcher. Resource deletion and automatic orphan recovery remain pending.
 
@@ -192,7 +192,7 @@ Submit through `managed apply` or the owner controller API with a stable operati
 
 Changes apply to future reservations. Authors, reviewers and coordinator launch plans retain their assigned runtime/arguments even if their profile is changed or removed. The controller snapshot exposes each attempt's `profile_snapshot`. Limits count all active attempts with the same profile name, including ones reserved under earlier settings. Lowering a limit blocks new reservations while at capacity; it does not stop existing agents. The coordinator receives a profile-change notice and must reread current profiles before dispatch; its scoped credential cannot change them.
 
-Verification candidates retain their original policy and policy hash, so editing profiles does not invalidate existing check/review receipts. Every other policy field and the exact contract still participate in the verification gate. Controller schema 8 stores these policy snapshots and immutable attempt profiles; node schema remains 7. Migration recovers profiles from original execute intents, verifies retained signed records and preserves their bytes. A missing legacy execute intent stays explicitly unavailable instead of borrowing the current profile. An old candidate whose policy no longer matches its original hash remains unresolved. No downgrade is supported; older controller binaries must not open schema 8.
+Verification candidates retain their original policy and policy hash, so editing profiles does not invalidate existing check/review receipts. Every other policy field and the exact contract still participate in the verification gate. Controller schema 8 introduced these policy snapshots and immutable attempt profiles. The current controller/node schemas are 9/8 to retain registration recovery receipts. Migration recovers profiles from original execute intents, verifies retained signed records and preserves their bytes. A missing legacy execute intent stays explicitly unavailable instead of borrowing the current profile. An old candidate whose policy no longer matches its original hash remains unresolved. No downgrade is supported; use the binaries matching the current controller/node schemas.
 
 ## Amend a planned task
 
@@ -313,6 +313,25 @@ Low-level `prepare`, `launch`, `relay-node` and `serve-workers` commands expose 
 
 Profiles accept model selection and a limited set of runtime tuning flags. Session, root, config/profile switching and permission overrides are reserved to the launcher. Codex uses the installed CLI's `--approve-for-me --sandbox workspace-write`; this requires a CLI supporting those options. See [official CLI reference](https://learn.chatgpt.com/docs/developer-commands?surface=cli) and the local `codex --help` when updating supported versions.
 
+## Recover a lost prelaunch registration
+
+If Claude/Pi registration reached mailer but its response was lost before any native launch, the local owner can authorize one more registration attempt. Run this on the node for a worker/reviewer, or on the controller for an owned coordinator:
+
+```bash
+herdr-supervisor control --state NODE_DIR recover-registration --node \
+  --operation RECOVERY_ID --expected-epoch ATTEMPT_EPOCH ATTEMPT_ID
+herdr-supervisor control --state CONTROLLER_DIR recover-registration \
+  --operation RECOVERY_ID --expected-epoch COORDINATOR_GENERATION LAUNCH_ID
+```
+
+This is local maintenance using access to the private state directory, like reception pruning. It is not exposed through worker or supervisor capabilities. The command does not contact mailer, create resources or start a model. It records `registration_retry_authorized` and clears only the pending registration marker. The ordinary node/controller launcher subsequently repeats registration, revalidates the exact pane and authority, then proceeds with its normal one-shot launch. Recovery preserves the native UUID, attempt/generation, worktree, credentials and assignment. Mailer may issue a new receiver token/epoch; no prior receiver token could have reached a native process on this path.
+
+Use the same operation ID and epoch after an uncertain CLI response. Replays return the original authorization receipt even if the launcher has since progressed, and never reset another registration. A genuinely new lost response requires another explicit operation; at most 32 authorizations are retained per launch. The returned `recorded_state` describes that historical authorization, not current runtime health. Coordinator status also exposes `registration_state` and `registration_recovery_count`.
+
+Recovery requires the exact current epoch/generation, an eligible unexpired assignment, a lost registration response, no native launch/wrapper marker, and no process row. Any existing `registration.json`, `mailer.token`, `mailer.json` or `native-receipts` entry blocks it, including partial files and dangling symlinks. Preserve that evidence: a valid saved registration is consumed by normal launch reconciliation. On nodes, recovery also verifies the retained signed execute record, its owner/recipient/epoch/hash and the complete normalized assignment. Cancellation and recovery serialize with launch under the same local lease and SQLite transaction. No expired record or grant is renewed.
+
+Codex registrations occur after native launch and are not eligible. Lost wrappers, uncertain launched receivers and malformed retained evidence still require separate reconciliation; this command does not infer exit or release capacity. Controller schema 9 and node schema 8 store recovery receipts in a separate SQLite table and fence older service binaries. Upgrade services before using the command; the maintenance command itself does not migrate or create databases. Migration preserves existing signed commands, jobs, snapshots and receipts. Downgrade is unsupported.
+
 ## Worker lifecycle and recovery
 
 1. Dispatch reserves capacity and records an immutable contract/memory snapshot.
@@ -325,7 +344,7 @@ Profiles accept model selection and a limited set of runtime tuning flags. Sessi
 
 A command reply, broker ACK or runtime API submission never completes steps 6–7 by itself. The worker CLI and MCP expose receipts with `queued`, `broker_stored` and `controller_applied` states.
 
-Lost create/launch replies do not reset the effect marker. Existing resources can prove success; absence leaves uncertainty. A lost mailer **registration** response without a durable local receipt remains unresolved; idempotent registration/reconciliation is a remaining gap. Send retries already use mailer operation IDs.
+Lost create/launch replies do not reset the effect marker. Existing resources can prove success; absence leaves uncertainty. A lost mailer **registration** response without a durable local receipt stops automatic launch. Claude/Pi registrations made before launch support the explicit recovery below. Codex registration happens after native launch and remains unresolved when its response is lost. Send retries already use mailer operation IDs.
 
 The pane wrapper now remains alive around the native runtime. It gives the child its own process group and the foreground terminal, then restores the terminal when the child exits. It records spawn intent and a durable native-process exit receipt in the node's `runtime_processes` table. The node service forwards `observe_stopped` through its signed outbox; capacity is released only after the controller applies that event. Normal exit preserves an already-submitted result. An author that exits without a result leaves an `interrupted` task.
 

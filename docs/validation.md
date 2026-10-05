@@ -4,9 +4,9 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
-**Last completed full Nix gate:** commit `f05d59c48dc6613279c91b1e52c87d2f1477bc73` passes package build and `nix flake check` on x86_64-linux, with 477 unit and 10 CLI tests offline. It includes planned-task amendment and planning notices. Owner-managed profiles pass locally and still require their package gate. This does not establish other platforms or completion of the remaining feature scope.
+**Last completed full Nix gate:** commit `010cbd7b47fc31e1ef62646a8ad243491ddd8cd8` passes package build and `nix flake check` on x86_64-linux, with 489 unit and 10 CLI tests offline. It includes owner profile editing and immutable assignments/policy snapshots. Prelaunch registration recovery still requires its package gate. This does not establish other platforms or completion of the remaining feature scope.
 
-The local implementation suite currently passes **489 unit tests and 10 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
+The local implementation suite currently passes **497 unit tests and 10 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
 
 | Requirement | Evidence | Limit |
 | --- | --- | --- |
@@ -90,7 +90,7 @@ The local implementation suite currently passes **489 unit tests and 10 CLI test
 | Owner authorization, replay and no unresolved replacement | `coordinator_reservation_is_owner_only_replayed_and_rejects_unresolved_replacement` | Run-authorized profile; no legacy profile imports |
 | API contention and relative state paths | `coordinator_owner_decision_is_retryable_without_blocking_during_launch_effect`, `relative_controller_state_keeps_absolute_coordinator_home_and_capability_paths` | Busy mutations have no effects; retry the identical operation after the launch lease is released |
 | Lost Herdr replies do not duplicate effects | `coordinator_lost_create_and_launch_replies_never_duplicate_effects` | Simulated Herdr; uncertain absence needs reconciliation |
-| Lost registration does not rotate a receiver | `coordinator_lost_registration_stays_uncertain_without_rotating_mailer_session` | Simulated mailer; automatic registration recovery remains pending |
+| Lost registration does not rotate a receiver | `coordinator_lost_registration_stays_uncertain_without_rotating_mailer_session` | Simulated mailer; explicit prelaunch recovery is covered below, post-launch recovery remains pending |
 | Native binding, process ownership and generation retirement | `three_coordinator_runtimes_bind_exact_native_sessions_bootstrap_and_stop_on_retirement` | Real harmless child processes and Unix IPC, mocked Herdr/mailer; no authenticated models |
 | Late wrapper is fenced after cancellation | `fenced_unclaimed_coordinator_cannot_start_late` | No process spawned for the retired generation |
 | Schema migration preserves prior authority | `schema_four_migration_preserves_active_coordinator_routes_and_memory` | SQLite schema 4 to 5; routes, notices and approved memory retained |
@@ -138,7 +138,7 @@ Mailer protocol-2 support is an independent local commit **`7a12d5a`** on `feat/
 - Broader replanning and abandonment of an uncertain verifier.
 - Recovery/abandonment of uncertain cancelled-run effects and conservative verification checkout cleanup.
 - Recovery after loss of the native wrapper; detached-descendant audit and conservative resource cleanup.
-- Idempotent/reconcilable mailer registration after a lost registration response.
+- Reconciliation of lost mailer registration responses after native launch. Prelaunch Claude/Pi recovery is implemented as explicit local maintenance.
 - Service onboarding and cross-host resource focus. Managed project creation now has a form and resumable CLI.
 - Aggregate API/wire bounds and large-run context pagination.
 - Recovery/requeue of terminal outgoing records and grant/node lifecycle operations.
@@ -282,4 +282,24 @@ Commit `f05d59c48dc6613279c91b1e52c87d2f1477bc73` passes full Nix build and flak
 | Popup owner/stale fencing, failure replay and captured removal revision | `run_profiles_popup_fences_owner_edits_and_freezes_failures_and_removal_revision` |
 | Actual CLI mutation/replay through private IPC | Extended `managed_create_publishes_one_bound_view_through_real_controller_ipc_without_launching_agents` |
 
-The full local suite passes 489 unit tests (8.07 s), 10 CLI tests (26.54 s) and strict all-target Clippy (12.33 s). Log: `.direnv/run-profiles-full.log`. Tests use real SQLite/Git/IPC and controlled runtime boundaries, not live model sessions. Controller schema is 8; node schema remains 7. The profile checkpoint still requires its full Nix package gate. Original policy hashes and receipts are retained; compatibility excludes only the profiles map, not checks, review requirements or budgets.
+The full local suite passes 489 unit tests (8.07 s), 10 CLI tests (26.54 s) and strict all-target Clippy (12.33 s). Log: `.direnv/run-profiles-full.log`. Tests use real SQLite/Git/IPC and controlled runtime boundaries, not live model sessions. Controller schema is 8; node schema remains 7. Commit `010cbd7` subsequently passed its full Nix package gate, as recorded below. Original policy hashes and receipts are retained; compatibility excludes only the profiles map, not checks, review requirements or budgets.
+
+## Prelaunch registration recovery
+
+| Requirement | Evidence |
+| --- | --- |
+| Explicit coordinator authorization followed by one launch, no automatic rotation | `registration_recovery_coordinator_retries_only_after_explicit_prelaunch_authorization` |
+| Coordinator files/symlinks, process evidence, generation/lease fencing and rollback | `registration_recovery_coordinator_fences_files_processes_generation_and_rolls_back_journal_failure` |
+| Node restart and exact operation replay without assignment/native UUID changes | `registration_recovery_node_is_durable_idempotent_and_preserves_original_assignment` |
+| Node launch/process/file/epoch/cancellation fences | `registration_recovery_node_rejects_process_files_stale_epoch_and_launch_markers` |
+| Atomic checkpoint failure and bounded retained history | `registration_recovery_node_rolls_back_failed_checkpoint_and_bounds_history` |
+| Schema migration preserves prior checkpoint bytes | `registration_recovery_schema_upgrade_preserves_prior_receipts_and_rejects_older_recovery` |
+| Original signed command expiry, owner route, node epoch and content integrity | `registration_recovery_node_requires_unexpired_original_owner_route_and_content` |
+| Lost preregistration response followed by real wrapper/bootstrap with new mailer epoch | `registration_recovery_workers_resume_native_launch_after_lost_preregistration_response` |
+| Actual local CLI and replay with no secret output | Extended `managed_create_publishes_one_bound_view_through_real_controller_ipc_without_launching_agents` |
+
+These tests use private SQLite/IPC and harmless native subprocesses. Herdr/mailer/model behavior is simulated; they do not prove live model consumption. Codex remains covered by the ordinary bootstrap regression, but its post-launch registration cannot use this recovery. The CLI records authorization without performing a remote registration, and its replay is historical rather than a current health claim. Controller schema 9 and node schema 8 add a separate SQLite recovery ledger and fence older service binaries. The full local suite passes 497 unit tests (8.12 s), 10 CLI tests (23.05 s) and strict all-target Clippy (12.62 s). The additional receipt-write fault checks that authorization rolls back with its missing receipt. The full package gate remains pending. Logs: `.direnv/registration-recovery-focused.log` and `.direnv/registration-recovery-full.log`.
+
+## Owner-profile package gate
+
+Commit `010cbd7b47fc31e1ef62646a8ad243491ddd8cd8` passes full Nix build and flake check on x86_64-linux. Compilation took 7 min 12 s and check phase 6 min 46 s, including 489 unit tests (95.79 s) and 10 CLI tests (48.81 s). Formatter/service-module checks pass; incompatible platforms were omitted. Output: `/nix/store/7ahyvkcwyaaiznk0agb8phv2l89lplgs-herdr-supervisor-0.1.0`. Logs: `.direnv/run-profiles-nix-build.log` and `.direnv/run-profiles-nix-check.log`. This package predates the registration-recovery change and its schemas.

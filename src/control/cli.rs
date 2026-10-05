@@ -19,6 +19,18 @@ pub struct ControlArgs {
 
 #[derive(Subcommand)]
 enum ControlCommand {
+    /// Local owner maintenance: authorize one registration retry before any native launch
+    RecoverRegistration {
+        /// Recover a worker/reviewer in node.sqlite; otherwise recover a coordinator
+        #[arg(long)]
+        node: bool,
+        #[arg(long)]
+        operation: String,
+        /// Exact worker epoch or coordinator generation from the saved launch
+        #[arg(long)]
+        expected_epoch: u64,
+        id: String,
+    },
     /// Delete only terminal local rejection records older than an explicit Unix timestamp
     ReceptionPrune {
         #[arg(long)]
@@ -592,6 +604,18 @@ pub fn run(args: ControlArgs) -> Result<()> {
             grant.verify(jiff::Timestamp::now().as_second())?;
             serde_json::to_value(grant)?
         }
+        ControlCommand::RecoverRegistration {
+            node,
+            operation,
+            expected_epoch,
+            id,
+        } => super::registration_recovery::recover(
+            &args.state,
+            node,
+            &id,
+            expected_epoch,
+            &operation,
+        )?,
         ControlCommand::ReceptionPrune { node, before } => {
             super::reception::prune(&args.state, node, before)?
         }
