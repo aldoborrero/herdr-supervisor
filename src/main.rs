@@ -14,6 +14,7 @@ mod grouping;
 mod herdr;
 mod inbox;
 mod lifecycle;
+mod managed;
 mod names;
 mod notify;
 mod overview;

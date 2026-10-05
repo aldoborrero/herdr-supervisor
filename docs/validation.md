@@ -4,12 +4,12 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
-The local implementation suite currently passes **380 unit tests and 6 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
+The local implementation suite currently passes **387 unit tests and 6 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
 
 | Requirement | Evidence | Limit |
 | --- | --- | --- |
 | Atomic capacity, DAG/revisions and operation replay | `src/control/tests.rs`: concurrent dispatch, dependency cycles, retired supervisors and transaction rollback; candidate tests schedule a reviewer while the author occupies the worker slot | Broader replanning/abandonment of an uncertain verifier pending |
-| Unknown remote branch, inventory corruption and project polling | `src/coordinator_review.rs` plus inherited suite | Managed UI is not connected to the controller |
+| Unknown remote branch, inventory corruption and project polling | `src/coordinator_review.rs` plus inherited suite | Managed projection now tested separately; automated onboarding still pending |
 | Signed origin and route authorization | Identity tampering/expiry tests, controller receive tests, real NATS ACL test | Explicit node rotation/revocation commands and production ACL template pending |
 | Durable offline transport | Real JetStream restart/offline test; ACK follows SQLite acceptance | Retry/backoff, poison-record policy and expiry handling need further work |
 | One resource after a lost creation response | `executor_reconciles_lost_creation_reply_and_fences_cancelled_work` | Real Git; Herdr response/inventory simulated |
@@ -25,6 +25,9 @@ The local implementation suite currently passes **380 unit tests and 6 CLI tests
 | Coordinator context and scoped acknowledgement | `coordinator_context_is_scoped_and_exposes_memory_evidence_without_secrets`, `context_drains_unacknowledged_notices_across_multiple_pages`; CLI test connects twice with one operation and reads private context | Attaches an existing local native session; automatic launch and large-run pagination pending |
 | Durable coordinator wakeups | `journal_cursor_and_notices_roll_back_together_and_restart_deduplicates`, `lost_mailer_response_or_sql_receipt_reuses_exact_target_and_frozen_body`, `rebinding_retires_old_capability_and_never_redirects_old_notice`, `wrong_recipient_receipt_is_unresolved_and_idle_notifier_needs_no_mailer`, `uncertain_send_cannot_be_retried_from_a_different_logical_author` | Mock mailer persistence/response loss; no model consumption claim |
 | Notifier service wiring | `controller_service_delivers_coordinator_bootstrap_with_real_broker` | One-cycle service, real NATS and mocked mailer |
+| Managed Projects authority and UI | `managed_projects_render_controller_records_and_decisions_use_exact_revisions`, `managed_binding_blocks_legacy_effects_and_rejects_foreign_owner_decisions`, `project_authority_transition_excludes_existing_operations_and_clones`, `failed_priming_keeps_managed_fence_and_retry_repairs_only_the_view` | Real Unix API/SQLite; legacy Herdr effects observed with a fake runner |
+| Managed memory and actions | `managed_memory_actions_preserve_provenance_revision_and_withdrawal`, `managed_keys_confirm_and_submit_captured_epoch_without_legacy_actions`; extended CLI test attaches, reads, pauses/replays and rejects legacy commands | Popup key test uses the command fixture; CLI test runs the actual binary |
+| Native coordinator focus | `managed_open_focuses_only_the_exact_observed_native_coordinator` | Exact UUID/runtime/terminal checked against simulated Herdr; no model launch |
 | Curated memory | `memory_is_curated_versioned_scoped_and_budgeted` | Run scope; live change delivery and project memory pending |
 | CLI bootstrap usability | `managed_control_help_and_bootstrap_are_usable_without_herdr` | Does not deploy services |
 | Combined candidate, independent review and owned Git CAS | `combined_candidate_review_and_checks_gate_owned_branch_for_sha1_and_sha256` uses real Git repositories, a divergent accepted base and an untouched dirty user checkout | Model review content simulated; code contracts only |
@@ -64,7 +67,7 @@ Mailer protocol-2 support is an independent local commit **`7a12d5a`** on `feat/
 - Cancelled-run repository binding reconciliation and conservative verification checkout cleanup.
 - Recovery after loss of the native wrapper; detached-descendant audit and conservative resource cleanup.
 - Idempotent/reconcilable mailer registration after a lost registration response.
-- Automatic coordinator launch, managed Projects UI/actions and prevention of legacy scheduler bypass.
+- Automatic coordinator launch/onboarding, task/profile forms, cross-host resource focus and asynchronous managed view refresh.
 - Aggregate API/wire bounds and large-run context pagination.
 - NATS backoff/expiry handling, node lifecycle operations and deployment ACL examples.
 - Live memory change consumption and optional Markdown projection.

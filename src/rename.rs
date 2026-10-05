@@ -656,6 +656,9 @@ enum Next {
 fn advance(ctx: &Ctx, pending: &Pending) -> Result<Option<Next>> {
     let (from, to) = (pending.from.as_str(), pending.to.as_str());
     if let Some(notify) = &pending.notify {
+        // A delayed notification must hold the same authority gate as a new
+        // command; the destination may have become managed since the rename.
+        let _project = Project::load(&ctx.root, to)?;
         let herdr = crate::herdr::Herdr::new(ctx.env.herdr_bin(), &notify.socket, ctx.runner);
         let agent = herdr
             .agent_list()

@@ -184,6 +184,97 @@ fn connect_native_coordinator_publishes_private_capability_and_context_without_p
             .contains("independent reviewer")
     );
     assert!(!context.to_string().contains(&token));
+    let root = home.path().join("projects root");
+    let root_arg = root.to_str().unwrap();
+    assert!(
+        hp(home.path(), &["--root", root_arg, "new", "demo"])
+            .status
+            .success()
+    );
+    let attach_args = [
+        "--root",
+        root_arg,
+        "managed",
+        "attach",
+        "demo",
+        "--controller",
+        state_arg,
+        "--credential",
+        admin.to_str().unwrap(),
+        "--run",
+        run,
+    ];
+    for _ in 0..2 {
+        let attached = hp(home.path(), &attach_args);
+        assert!(
+            attached.status.success(),
+            "{}",
+            String::from_utf8_lossy(&attached.stderr)
+        );
+    }
+    let ctx = hp(home.path(), &["--root", root_arg, "context", "demo"]);
+    assert!(ctx.status.success());
+    let ctx: Value = serde_json::from_slice(&ctx.stdout).unwrap();
+    assert_eq!(ctx["run"]["id"], run);
+    let pause =
+        json!({"method":"pause","params":{"run":run,"expected_revision":ctx["run"]["revision"]}})
+            .to_string();
+    let pause_args = [
+        "--root",
+        root_arg,
+        "managed",
+        "apply",
+        "demo",
+        "--operation",
+        "panel-pause",
+        "--request-json",
+        &pause,
+    ];
+    let paused = hp(home.path(), &pause_args);
+    assert!(
+        paused.status.success(),
+        "{}",
+        String::from_utf8_lossy(&paused.stderr)
+    );
+    let replay = hp(home.path(), &pause_args);
+    assert!(replay.status.success());
+    assert_eq!(paused.stdout, replay.stdout);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&paused.stdout).unwrap()["state"],
+        "paused"
+    );
+    for args in [
+        vec!["thread", "stop", "demo", "t-0001"],
+        vec!["delete", "demo", "--force"],
+        vec!["set", "demo", "goal", "forged"],
+    ] {
+        let mut full = vec!["--root", root_arg];
+        full.extend(args);
+        let rejected = hp(home.path(), &full);
+        assert!(!rejected.status.success());
+        assert!(String::from_utf8_lossy(&rejected.stderr).contains("managed by the controller"));
+    }
+    assert!(
+        hp(home.path(), &["--root", root_arg, "list"])
+            .status
+            .success()
+    );
+    assert!(
+        hp(home.path(), &["--root", root_arg, "overview", "demo"])
+            .status
+            .success()
+    );
+    api.0.kill().unwrap();
+    api.0.wait().unwrap();
+    std::fs::write(
+        root.join("demo/TASKS.md"),
+        "# Tasks\n\n- [ ] untrusted fallback\n",
+    )
+    .unwrap();
+    let offline = hp(home.path(), &["--root", root_arg, "overview", "demo"]);
+    let text = String::from_utf8(offline.stdout).unwrap();
+    assert!(text.contains("controller unavailable"));
+    assert!(!text.contains("untrusted fallback"));
 }
 
 #[test]

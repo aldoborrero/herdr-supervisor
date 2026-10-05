@@ -155,6 +155,52 @@ impl Store {
         Ok(response)
     }
 
+    /// The Projects facade cannot turn an owner credential into a cross-run
+    /// mutation. Validate scope against retained records in the same transaction
+    /// as operation replay, including proposals already approved/withdrawn.
+    pub fn apply_in_run(&mut self, run: &str, request: &Request) -> Result<Value> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let principal = authenticate(&tx, &request.token)?;
+        supervise(&principal, run)?;
+        let target = match &request.command {
+            Mutation::Pause { run, .. }
+            | Mutation::Resume { run, .. }
+            | Mutation::Cancel { run, .. }
+            | Mutation::CompleteRun { run, .. }
+            | Mutation::AcknowledgeNotices { run, .. }
+            | Mutation::WithdrawMemory { run, .. }
+            | Mutation::ProposeMemory { run, .. }
+            | Mutation::CreateTask { run, .. } => run.clone(),
+            command => {
+                let (table, id) = match command {
+                    Mutation::StopAttempt { attempt, .. }
+                    | Mutation::RequestVerification { attempt, .. } => ("attempts", attempt),
+                    Mutation::RetryTask { task, .. } | Mutation::Dispatch { task, .. } => {
+                        ("tasks", task)
+                    }
+                    Mutation::RequestReview { integration, .. }
+                    | Mutation::ApplyIntegration { integration, .. } => {
+                        ("integrations", integration)
+                    }
+                    Mutation::ApproveMemory { proposal, .. } => ("memory_proposals", proposal),
+                    _ => bail!("decision is outside the Projects facade"),
+                };
+                tx.query_row(&format!("SELECT run FROM {table} WHERE id=?1"), [id], |r| {
+                    r.get::<_, String>(0)
+                })?
+            }
+        };
+        ensure!(
+            target == run,
+            "decision is outside this managed project's scope"
+        );
+        let response = apply_transaction(&tx, request)?;
+        tx.commit()?;
+        Ok(response)
+    }
+
     /// A verified node forwards scoped mutations. Persist record and effects before broker ACK.
     pub fn receive(&mut self, signed: &SignedRecord) -> Result<Value> {
         signed.verify(now())?;
@@ -307,6 +353,11 @@ impl Store {
             "run access denied"
         );
         let run: Run = document(&self.connection, "runs", run_id)?;
+        let active_attempts: u64 = self.connection.query_row(
+            "SELECT count(*) FROM attempts WHERE run=?1 AND active=1",
+            [run_id],
+            |r| r.get(0),
+        )?;
         let mut statement = self
             .connection
             .prepare("SELECT doc FROM tasks WHERE run=?1 ORDER BY id")?;
@@ -339,7 +390,7 @@ impl Store {
             .map(|v| Ok(serde_json::from_str(&v?)?))
             .collect::<Result<_>>()?;
         Ok(
-            json!({"run":run,"tasks":tasks,"attempts":attempts,"integrations":integrations,"checks":checks,"reviews":reviews}),
+            json!({"run":run,"active_attempts":active_attempts,"tasks":tasks,"attempts":attempts,"integrations":integrations,"checks":checks,"reviews":reviews}),
         )
     }
 

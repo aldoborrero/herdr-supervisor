@@ -4,7 +4,7 @@
 
 A Rust adaptation of [Herdr Projects](https://github.com/eliasstravik/herdr-projects) for supervising coding agents across isolated Git worktrees. Herdr owns the workspaces and panes, **herdr-mailer delivers messages to native sessions**, and a SQLite controller owns task contracts, permissions and decisions. NATS JetStream carries coordination between the controller and execution nodes.
 
-**In development.** The controller, signed node protocol, curated memory, scoped worker API, native launch/stop path and code review/integration pipeline are implemented. Artifact verification, recovery after loss of a process wrapper, cleanup and the managed UI are still being completed. Do not treat the inherited Projects actions as the managed supervisor workflow. The full delivery contract is in [IMPLEMENTATION.md](IMPLEMENTATION.md).
+**In development.** The controller, signed node protocol, curated memory, scoped worker API, native worker launch/stop path and code review/integration pipeline are implemented. Projects can now display a bound controller run and submit scoped lifecycle/memory actions. Automatic coordinator launch, artifact verification, recovery and cleanup remain in progress. The full delivery contract is in [IMPLEMENTATION.md](IMPLEMENTATION.md).
 
 ## What is different
 
@@ -49,7 +49,9 @@ See [operations](docs/operations.md) for the request shape, node enrollment and 
 
 A worker receives its assignment only after the controller accepts the exact resource binding. Its private API/CLI/MCP permits reading its contract and selected memory, reporting readiness/results, proposing memory and inspecting its own event receipts. A reviewer receives the exact candidate and reports criterion-by-criterion findings through the same scoped transport. Neither role can dispatch agents, approve memory or alter run policy.
 
-An existing native coordinator session on the controller host can be attached with `control connect-supervisor`. It receives durable notices through mailer and reads current state through `control context` or `supervisor_context`. Replacing it revokes its previous capability; pending notices never change recipients. See [coordinator setup](docs/operations.md#connect-a-native-coordinator). Automatic coordinator launch and the managed Projects UI remain pending.
+An existing native coordinator session on the controller host can be attached with `control connect-supervisor`. It receives durable notices through mailer and reads current state through `control context` or `supervisor_context`. Replacing it revokes its previous capability; pending notices never change recipients. See [coordinator setup](docs/operations.md#connect-a-native-coordinator).
+
+Use `managed attach` to connect a fresh Projects folder to that run. Its popup then shows authoritative tasks, attempts, notices and memory; actions carry explicit revisions, and legacy scheduling is blocked for that project. See [Projects setup and keys](docs/operations.md#attach-the-projects-view). `open` focuses the exact registered coordinator; automatic creation remains pending.
 
 The launch tests execute harmless stub processes and use fake Herdr/mailer responses alongside real Git and Unix sockets. They do **not** prove authenticated model processing. See [validation](docs/validation.md) for evidence and current gaps.
 

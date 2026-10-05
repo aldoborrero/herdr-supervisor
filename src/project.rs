@@ -4,6 +4,7 @@
 use std::fs::File;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -316,6 +317,9 @@ pub struct SafetyLayer {
 pub struct Project {
     pub root: PathBuf,
     pub slug: String,
+    // Keep mode transitions excluded for the complete operation, including
+    // external calls made outside the shorter project data lock.
+    _authority: Option<Arc<crate::managed::AuthorityLease>>,
 }
 
 /// Held while reading and rewriting anything under `threads/`, `inbox/` or
@@ -327,10 +331,25 @@ pub struct ProjectLock {
 impl Project {
     /// An existing project. Validates the slug before building any path.
     pub fn load(root: &Path, slug: &str) -> Result<Project> {
+        let project = Self::load_view(root, slug)?;
+        crate::managed::require_legacy(&project)?;
+        Ok(project)
+    }
+
+    /// Shared inventory entrypoint. Callers must select the managed projection
+    /// before reading legacy task/status files or performing any action.
+    pub fn load_view(root: &Path, slug: &str) -> Result<Project> {
+        let mut project = Self::load_unlocked(root, slug)?;
+        project._authority = Some(Arc::new(crate::managed::authority_lease(&project, false)?));
+        Ok(project)
+    }
+
+    pub(crate) fn load_unlocked(root: &Path, slug: &str) -> Result<Project> {
         validate_slug(slug)?;
         let project = Project {
             root: root.to_path_buf(),
             slug: slug.to_string(),
+            _authority: None,
         };
         if !project.project_md().is_file() {
             bail!("no project `{slug}` in {}", root.display());
@@ -360,6 +379,7 @@ impl Project {
     /// parent directories, and the project is re-checked afterwards, so a
     /// `delete` that lands mid-operation cannot be resurrected by a writer.
     pub fn lock(&self) -> Result<ProjectLock> {
+        crate::managed::require_legacy(self)?;
         let path = self.state_dir().join("lock");
         let file = File::options()
             .create(true)
@@ -731,9 +751,10 @@ pub fn priming_problems(project: &Project, prefix: &str) -> Vec<String> {
 /// project's directories. Fails if the slug exists.
 pub fn create(root: &Path, name: &str, goal: &str, repos: Vec<Repo>) -> Result<Project> {
     let slug = slug_from_name(name)?;
-    let project = Project {
+    let mut project = Project {
         root: root.to_path_buf(),
         slug: slug.clone(),
+        _authority: None,
     };
     let dir = project.dir();
     if dir.exists() {
@@ -766,6 +787,7 @@ pub fn create(root: &Path, name: &str, goal: &str, repos: Vec<Repo>) -> Result<P
     for sub in SUBDIRS {
         std::fs::create_dir_all(dir.join(sub))?;
     }
+    project._authority = Some(Arc::new(crate::managed::authority_lease(&project, false)?));
     write_atomic(
         &dir.join("MEMORY.md"),
         b"# Memory\n\nOne line per memory file: `- [title](memory/file.md): what it holds`.\n",

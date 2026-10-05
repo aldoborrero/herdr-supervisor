@@ -217,7 +217,14 @@ fn here_pane(ctx: &Ctx, options: &OpenOptions, socket: &str, agents: &[Agent]) -
 }
 
 pub fn open(ctx: &Ctx, slug: &str, options: &OpenOptions) -> Result<()> {
-    let project = Project::load(&ctx.root, slug)?;
+    let project = Project::load_view(&ctx.root, slug)?;
+    if crate::managed::present(&project) {
+        anyhow::ensure!(
+            !options.new && !options.rebind && options.profile.is_none(),
+            "managed open only focuses its exact registered coordinator; use controller configuration to change its runtime"
+        );
+        return crate::managed::focus_coordinator(ctx, &project, &options.session);
+    }
     if project.status() == Status::Archived {
         bail!("`{slug}` is archived; run `unarchive {slug}` first");
     }
@@ -660,7 +667,14 @@ pub fn prompt(ctx: &Ctx, slug: &str, text: &str) -> Result<()> {
 }
 
 pub fn context(ctx: &Ctx, slug: &str, peek: bool) -> Result<()> {
-    let project = Project::load(&ctx.root, slug)?;
+    let project = Project::load_view(&ctx.root, slug)?;
+    if crate::managed::present(&project) {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&crate::managed::context(&project)?)?
+        );
+        return Ok(());
+    }
     let prefix = current_prefix(&ctx.root)?;
     let (text, shown) = digest(ctx, &project, &prefix)?;
     print!("{text}");

@@ -45,6 +45,8 @@ impl From<SessionArgs> for SessionFlags {
 enum Command {
     /// Durable supervisor authority: scoped tasks, execution intents and memory
     Control(crate::control::cli::ControlArgs),
+    /// Connect Projects views and actions to an authoritative controller run
+    Managed(crate::managed::ManagedArgs),
     /// Create a project folder with its skeleton files
     New {
         name: String,
@@ -679,6 +681,7 @@ pub fn run() -> Result<()> {
 
     match cli.command {
         Command::Control(args) => crate::control::cli::run(args),
+        Command::Managed(args) => crate::managed::run(&ctx, args),
         Command::New {
             name,
             goal,
@@ -710,7 +713,17 @@ pub fn run() -> Result<()> {
         }
         Command::List { all } => {
             for slug in project::list_slugs(&ctx.root) {
-                let project = Project::load(&ctx.root, &slug)?;
+                let project = Project::load_view(&ctx.root, &slug)?;
+                if crate::managed::present(&project) {
+                    match crate::managed::context(&project) {
+                        Ok(c) => println!("{slug}\tmanaged\t{}", crate::managed::summary(&c)),
+                        Err(e) => println!(
+                            "{slug}\tcontroller unavailable\t{}",
+                            crate::managed::display(&e.to_string())
+                        ),
+                    }
+                    continue;
+                }
                 let status = project.status();
                 if status == Status::Archived && !all {
                     continue;

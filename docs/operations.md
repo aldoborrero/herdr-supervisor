@@ -1,6 +1,6 @@
 # Managed supervisor operations
 
-This guide covers the new `control` commands. The [inherited Projects guide](upstream/operations.md) describes a separate file-based scheduler. Managed UI projection and protection against legacy command bypass are not finished: do not manage the same work through both schedulers.
+This guide covers `control` and the managed Projects view. The [inherited Projects guide](upstream/operations.md) describes the file-based scheduler used by projects that have not been attached to a controller. Attached projects read controller records and reject legacy scheduling commands.
 
 ## Processes and authority
 
@@ -91,6 +91,38 @@ Notice intent and journal cursor commit together in SQLite. Before delivery, the
 Replacing the coordinator revokes the old capability and retires its pending notices. Retired notices keep their original destination; an already accepted or in-flight send cannot be undone. In particular, `superseded` does not prove the old recipient never received it. New generations receive a fresh bootstrap and current SQLite context.
 
 The context still inherits the snapshot API's aggregate size limit; large-run pagination remains required. Pending memory proposals are limited to ten per context. This integration has isolated IPC/broker tests with mocked mailer replies, not proof of a live coordinator model consuming its bootstrap.
+
+## Attach the Projects view
+
+Create a fresh project folder, create a controller run whose `project` field equals its slug, and attach it **before** using the inherited `open` command:
+
+```bash
+herdr-supervisor --root PROJECTS_DIR new demo
+herdr-supervisor --root PROJECTS_DIR managed attach demo \
+  --controller CONTROLLER_DIR --credential CONTROLLER_DIR/admin.token --run RUN_ID
+herdr-supervisor --root PROJECTS_DIR popup demo
+```
+
+`managed attach` validates access through the running controller API. `.state/managed.json` stores the run, controller directory and credential path, never a raw token. An owner or run-scoped supervisor capability can be used for the operator's view. A supervisor credential is retired when that coordinator is replaced; reattach the same run with its new credential path to restore access. Credentials remain private and outside the project repository. Native coordinators use their own generation-scoped credential from the mailer bootstrap, not the operator view's credential; the generated `AGENTS.md` makes that distinction explicit.
+
+Attachment requires no legacy threads, recorded coordinator or task entries; it does not migrate existing work. A shared authority lock spans legacy operations, including their external calls. Attachment takes the exclusive lock and refuses while an operation holds it. The binding is persisted before `AGENTS.md` is replaced, so a failed priming write still blocks the old scheduler; repeat attachment to repair that view. Changing the bound run/controller or silently detaching is not supported yet.
+
+`list`, `overview`, `context`, the project picker and popup use the controller for attached projects. If the controller is unavailable or the binding is malformed, they report that failure instead of displaying legacy task or memory files. Legacy thread/routine/settings/delete/rename commands and ticker processing cannot load a managed project. Delayed rename notifications are fenced too. Files and locks are trusted same-UID state, not isolation from a process that deliberately edits them.
+
+| Popup section | Controller data and actions |
+| --- | --- |
+| Threads | Attempts, role, node and state; `s` requests stop with the displayed epoch |
+| Tasks | Task contracts, integration/check/review evidence; `r` requests repair of interrupted/rejected tasks |
+| Inbox | Native coordinator notices and their receipts; `a` acknowledges an inspected notice |
+| Settings | Objective, policy, nodes and native coordinator; `p` pauses/resumes, `x` cancels |
+| Memory | Approved topics with versions and pending proposals with evidence; `a` approves, `w` withdraws |
+| Routines | Displays the controller scheduling policy; legacy routines are not executed |
+
+Enter shows the selected record. Destructive decisions and memory changes display the captured record for confirmation. Requests keep the displayed revision/epoch and a stable operation ID; stale decisions fail rather than silently applying to newer state. The `project_apply` API checks run membership and applies/replays the operation in one transaction, including already-decided memory proposals. It cannot use an owner view credential to act on another run or enroll nodes.
+
+The equivalent CLI is `managed apply SLUG --operation ID --request JSON_FILE` (`-` reads stdin). `managed status SLUG` and `context SLUG` return current controller context. Existing `pause` and `resume` plugin actions use that same authority. `open SLUG` and the popup's `c` key focus an existing coordinator only after observing its exact native UUID/runtime and matching terminal in the selected Herdr server. Neither starts a replacement when the session is missing.
+
+Automatic coordinator launch/onboarding, task/profile editing forms, resource focus across hosts and asynchronous refresh for large/offline project collections remain pending. This first projection reads local controller IPC synchronously; it inherits the snapshot API's aggregate bounds. The popup itself must run on the controller host; workers may execute remotely over NATS.
 
 ## Enroll a node and provision NATS
 

@@ -21,6 +21,9 @@ pub fn project_for_workspace(ctx: &Ctx, workspace_id: &str, socket: &str) -> Opt
     if workspace_id.is_empty() || socket.is_empty() {
         return None;
     }
+    if let Some(slug) = crate::managed::project_for_workspace(ctx, workspace_id, socket) {
+        return Some(slug);
+    }
     let projects: Vec<(Project, crate::project::Coordinator)> = project::list_slugs(&ctx.root)
         .into_iter()
         .filter_map(|slug| Project::load(&ctx.root, &slug).ok())
@@ -135,7 +138,10 @@ pub fn require_slug(ctx: &Ctx, slug: Option<&str>) -> Result<String> {
 fn visible_slugs(ctx: &Ctx) -> Vec<String> {
     project::list_slugs(&ctx.root)
         .into_iter()
-        .filter(|slug| Project::load(&ctx.root, slug).is_ok_and(|p| p.status() != Status::Archived))
+        .filter(|slug| {
+            Project::load_view(&ctx.root, slug)
+                .is_ok_and(|p| crate::managed::present(&p) || p.status() != Status::Archived)
+        })
         .collect()
 }
 
@@ -219,11 +225,21 @@ pub fn run(ctx: &Ctx, slug: Option<&str>, wait: bool) -> Result<()> {
         println!("there are no projects in {}", ctx.root.display());
     }
     for (index, slug) in slugs.iter().enumerate() {
-        let project = Project::load(&ctx.root, slug)?;
+        let project = Project::load_view(&ctx.root, slug)?;
         if index > 0 {
             println!();
         }
-        print!("{}", render(&project, &threads::rows(ctx, &project)));
+        if crate::managed::present(&project) {
+            match crate::managed::overview(&project) {
+                Ok(text) => print!("{text}"),
+                Err(error) => println!(
+                    "{slug} · controller unavailable: {}",
+                    crate::managed::display(&error.to_string())
+                ),
+            }
+        } else {
+            print!("{}", render(&project, &threads::rows(ctx, &project)));
+        }
     }
     // Only a popup wants to be held open; an agent calling this never waits.
     if wait && std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {

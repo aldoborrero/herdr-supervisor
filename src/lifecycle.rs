@@ -99,7 +99,11 @@ fn close_workspaces(project: &Project, view: &SessionView) -> Vec<String> {
 }
 
 pub fn set_status(ctx: &Ctx, slug: &str, status: Status) -> Result<()> {
-    let project = Project::load(&ctx.root, slug)?;
+    let project = Project::load_view(&ctx.root, slug)?;
+    if crate::managed::present(&project) {
+        println!("{}", crate::managed::change_status(&project, status)?);
+        return Ok(());
+    }
     let current = project.status();
     match (current, status) {
         (Status::Archived, Status::Paused) => bail!("`{slug}` is archived; `unarchive` it first"),

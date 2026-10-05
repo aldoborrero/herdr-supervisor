@@ -18,6 +18,12 @@ const MAX_FRAME: usize = 300000;
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ApiRequest {
+    ProjectApply {
+        token: String,
+        run: String,
+        operation_id: String,
+        command: Box<Mutation>,
+    },
     CoordinatorContext {
         token: String,
         run: String,
@@ -41,6 +47,19 @@ pub enum ApiRequest {
 
 pub fn handle(store: &mut Store, request: ApiRequest) -> Result<Value> {
     match request {
+        ApiRequest::ProjectApply {
+            token,
+            run,
+            operation_id,
+            command,
+        } => store.apply_in_run(
+            &run,
+            &Request {
+                token,
+                operation_id,
+                command: *command,
+            },
+        ),
         ApiRequest::CoordinatorContext { token, run } => {
             super::coordinator::context(store, &token, &run)
         }

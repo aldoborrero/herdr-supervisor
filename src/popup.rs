@@ -101,6 +101,12 @@ pub struct Row {
 #[derive(Debug, Clone)]
 pub enum RowKind {
     None,
+    Managed {
+        slug: String,
+        title: String,
+        doc: serde_json::Value,
+        actions: Vec<crate::managed::Action>,
+    },
     Thread(Box<ThreadRow>),
     Task(TaskRow),
     Inbox {
@@ -227,6 +233,20 @@ pub fn picker_rows(root: &Path) -> Vec<PickerRow> {
             name,
             status,
         });
+    }
+    for slug in project::list_slugs(root) {
+        if let Ok(project) = Project::load_view(root, &slug)
+            && crate::managed::present(&project)
+        {
+            let status = crate::managed::context(&project)
+                .map(|c| crate::managed::summary(&c))
+                .unwrap_or_else(|_| "controller unavailable".into());
+            rows.push(PickerRow {
+                slug: Some(slug.clone()),
+                name: slug,
+                status,
+            });
+        }
     }
     rows
 }
@@ -440,6 +460,19 @@ fn thread_line(r: &ThreadRow, with_project: bool) -> String {
 pub fn build(ctx: &Ctx, section: Section, scope: Option<&str>) -> Vec<Row> {
     let root = ctx.root.as_path();
     let mut rows = Vec::new();
+    for slug in project::list_slugs(root)
+        .into_iter()
+        .filter(|s| scope.is_none_or(|scope| scope == s))
+    {
+        if let Ok(project) = Project::load_view(root, &slug)
+            && crate::managed::present(&project)
+        {
+            rows.extend(crate::managed::panel(&project, section));
+            if scope.is_some() {
+                return rows;
+            }
+        }
+    }
     match section {
         Section::Threads => {
             let threads = thread_rows(root, scope);
@@ -897,6 +930,16 @@ pub fn summary(root: &Path) -> String {
                 .count()
         })
         .sum();
+    let managed = project::list_slugs(root)
+        .into_iter()
+        .filter(|s| Project::load_view(root, s).is_ok_and(|p| crate::managed::present(&p)))
+        .count();
+    if managed > 0 {
+        return format!(
+            "{} projects · {managed} managed · {need} legacy need you",
+            projects.len() + managed
+        );
+    }
     format!(
         "{} project{} · {need} need you",
         projects.len(),
@@ -1660,6 +1703,13 @@ impl<'a> Popup<'a> {
                     c == '/',
                 ))
             }
+            _ if matches!(
+                self.current().map(|r| &r.kind),
+                Some(RowKind::Managed { .. })
+            ) =>
+            {
+                self.managed_key(key)
+            }
             _ => match section {
                 Section::Threads => self.thread_key(key),
                 Section::Tasks => self.task_key(key),
@@ -1682,6 +1732,52 @@ impl<'a> Popup<'a> {
                     }
                 }
             },
+        }
+    }
+
+    fn managed_key(&mut self, key: KeyEvent) {
+        let Some(RowKind::Managed {
+            slug,
+            title,
+            doc,
+            actions,
+        }) = self.current().map(|r| r.kind.clone())
+        else {
+            return;
+        };
+        if key.code == KeyCode::Char('c') {
+            self.run(&["open".into(), slug], None);
+            return;
+        }
+        let lines = serde_json::to_string_pretty(&doc)
+            .unwrap_or_default()
+            .lines()
+            .map(crate::managed::display)
+            .collect::<Vec<_>>();
+        if matches!(key.code, KeyCode::Enter | KeyCode::Char('i')) {
+            self.mode = Mode::Detail {
+                title,
+                lines,
+                files: Vec::new(),
+                selected: 0,
+                scroll: 0,
+            };
+        } else if let KeyCode::Char(c) = key.code
+            && let Some(action) = actions.iter().find(|a| a.key == c)
+        {
+            match action.args(&slug) {
+                Ok(args) if action.confirm => {
+                    self.mode = Mode::Confirm {
+                        question: format!("{}: {}? y/N", action.label, title),
+                        action: args,
+                        lines,
+                    }
+                }
+                Ok(args) => {
+                    self.run(&args, None);
+                }
+                Err(error) => self.message = error.to_string(),
+            }
         }
     }
 
@@ -2527,7 +2623,17 @@ impl<'a> Popup<'a> {
         let hint = match &self.mode {
             Mode::List => format!(
                 "{}  P project  / find  tab section  esc close",
-                SECTIONS[self.section].keys()
+                match self.current().map(|r| &r.kind) {
+                    Some(RowKind::Managed { actions, .. }) => format!(
+                        "↵ details  c coordinator  {}",
+                        actions
+                            .iter()
+                            .map(|a| format!("{} {}", a.key, a.label))
+                            .collect::<Vec<_>>()
+                            .join("  ")
+                    ),
+                    _ => SECTIONS[self.section].keys().into(),
+                }
             ),
             Mode::Projects(Picker {
                 filter: Some(_), ..
@@ -2770,6 +2876,58 @@ pub fn run(ctx: &Ctx, scope: Option<String>, workspace: String) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn managed_keys_confirm_and_submit_captured_epoch_without_legacy_actions() {
+        let world = crate::scenarios::World::new();
+        world.project("demo", "a.sock");
+        world
+            .runner
+            .on("managed apply", crate::runner::fake::ok("accepted"));
+        let ctx = world.ctx();
+        let mut popup = Popup::new(&ctx, Some("demo".into()), String::new());
+        let command = crate::control::model::Mutation::StopAttempt {
+            attempt: "attempt-1".into(),
+            expected_epoch: 7,
+        };
+        popup.rows = vec![Row {
+            header: false,
+            text: "worker".into(),
+            color: None,
+            kind: RowKind::Managed {
+                slug: "demo".into(),
+                title: "worker".into(),
+                doc: serde_json::json!({"epoch":7}),
+                actions: vec![crate::managed::Action {
+                    key: 's',
+                    label: "stop",
+                    command,
+                    confirm: true,
+                }],
+            },
+        }];
+        popup.selected = 0;
+        popup.key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        assert_eq!(world.runner.count("thread restart"), 0);
+        popup.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+        assert!(matches!(popup.mode, Mode::Confirm { .. }));
+        assert_eq!(world.runner.count("managed apply"), 0);
+        popup.key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        let calls = world.runner.calls.borrow();
+        let sent = calls
+            .iter()
+            .find(|c| c.args.iter().any(|a| a == "--request-json"))
+            .unwrap();
+        let index = sent
+            .args
+            .iter()
+            .position(|a| a == "--request-json")
+            .unwrap();
+        let command: serde_json::Value = serde_json::from_str(&sent.args[index + 1]).unwrap();
+        assert_eq!(command["method"], "stop_attempt");
+        assert_eq!(command["params"]["expected_epoch"], 7);
+        assert!(!calls.iter().any(|c| c.display().contains("thread stop")));
+    }
 
     #[test]
     fn tasks_parse_with_lists_owners_and_threads() {

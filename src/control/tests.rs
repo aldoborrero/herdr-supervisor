@@ -1785,5 +1785,7 @@ async fn worker_socket_and_mcp_expose_only_scoped_assignment() {
 mod coordinator_tests;
 #[path = "lifecycle_tests.rs"]
 mod lifecycle_tests;
+#[path = "managed_tests.rs"]
+mod managed_tests;
 #[path = "verification_tests.rs"]
 mod verification_tests;
