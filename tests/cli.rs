@@ -6,6 +6,51 @@ use std::process::Command;
 const BIN: &str = env!("CARGO_BIN_EXE_herdr-supervisor");
 
 #[test]
+fn coordinator_retirement_cli_requires_owner_and_preserves_missing_state() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path();
+    let state = root.join("controller");
+    let decision = root.join("decision.json");
+    let wrong = root.join("wrong.token");
+    std::fs::write(&wrong, "z".repeat(40)).unwrap();
+    std::fs::set_permissions(&wrong, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::write(&decision, serde_json::json!({"operation":uuid::Uuid::new_v4().to_string(),"launch":uuid::Uuid::new_v4().to_string(),"expected_generation":1,"expected_binding":{"workspace":"w1","pane":"p1","terminal":"t1"},"processes_confirmed_stopped":true,"retain_files_close_workspace":true,"reason":"isolated test"}).to_string()).unwrap();
+    let run = || {
+        hp(
+            root,
+            &[
+                "control",
+                "--state",
+                state.to_str().unwrap(),
+                "cleanup-coordinator",
+                "--credential",
+                wrong.to_str().unwrap(),
+                "--request",
+                decision.to_str().unwrap(),
+            ],
+        )
+    };
+    assert!(!run().status.success());
+    assert!(!state.exists());
+    assert!(
+        hp(
+            root,
+            &["control", "--state", state.to_str().unwrap(), "init"]
+        )
+        .status
+        .success()
+    );
+    let denied = run();
+    assert!(!denied.status.success());
+    assert!(String::from_utf8_lossy(&denied.stderr).contains("credential"));
+    assert!(!String::from_utf8_lossy(&denied.stderr).contains(&"z".repeat(40)));
+    assert!(!state.join("coordinators").exists());
+    std::fs::write(&decision, " ".repeat(16385)).unwrap();
+    assert!(String::from_utf8_lossy(&run().stderr).contains("16 KiB"));
+}
+
+#[test]
 fn verification_retirement_cli_requires_owner_and_never_initializes_missing_state() {
     use std::os::unix::fs::PermissionsExt;
     let home = tempfile::tempdir().unwrap();

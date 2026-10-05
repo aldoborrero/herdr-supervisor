@@ -220,7 +220,7 @@ fn verification_retirement_migrates_schema_and_never_deletes_recreated_path() {
     let (mut x, i) = ready("sha1");
     x.f.store
         .connection
-        .execute_batch("DROP TABLE verification_retirements; PRAGMA user_version=11")
+        .execute_batch("DROP TABLE coordinator_retirements; DROP TABLE verification_retirements; PRAGMA user_version=11")
         .unwrap();
     x.f.store = Store::open(&x.f.store.dir).unwrap();
     let r = request(&i);

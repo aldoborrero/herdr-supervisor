@@ -170,7 +170,7 @@ SQLite reserves one generation before external effects. An owner mutation that r
 
 `managed status` and the popup's Settings section expose launch state, errors and process exit receipts. Reopening a pending launch reports its state. Lost workspace or pane-run replies trigger inspection without repeating creation or launch. A lost mailer registration response stays uncertain. The local owner can explicitly authorize one retry with [registration recovery](#recover-a-lost-registration): before Claude/Pi launch, or for an exactly observed, still-owned Codex before receiver binding. A missing wrapper exit receipt stays unresolved unless the passive Linux recovery below establishes the original native process has exited. No stored PID is signalled during recovery.
 
-Run cancellation, deadline expiry or generation retirement stop a process still owned by its wrapper. To replace an owned coordinator without cancelling the run, the owner can submit `bind_supervisor` for the current run revision; this retires the old generation. Wait until its launch state is `exited`, then open again. `--new` cannot override an active or unresolved coordinator. Existing manually attached sessions are not process-owned by this launcher. Resource deletion and stopping a still-live orphan remain pending.
+Run cancellation, deadline expiry or generation retirement stop a process still owned by its wrapper. To replace an owned coordinator without cancelling the run, the owner can submit `bind_supervisor` for the current run revision; this retires the old generation. Wait until its launch state is `exited`, then open again. `--new` cannot override an active or unresolved coordinator. Existing manually attached sessions are not process-owned by this launcher. An exited owned coordinator workspace can be retired with `cleanup-coordinator` below; stopping a still-live orphan remains pending.
 
 ## Create a managed project and view
 
@@ -573,7 +573,7 @@ The execution lease excludes plugin launch/cancellation effects. A durable SQLit
 
 `state: removed` requires filesystem absence, absence from Git's worktree inventory, absence of the saved native resources, preserved refs and unchanged local authority. An ambiguous native response or partial removal returns `state: removing`, `outcome: unresolved`; **exit success does not mean removal succeeded**. Repeating the identical decision only observes an already-issued removal and never sends it again. A crash before native issuance can also leave that unresolved state: inspect and finish the specific resource manually, then repeat the same request to record the result. Changed operation contents are refused; completed replay returns its historical receipt and touches no resources. Keep the decision file for recovery.
 
-This path retires an explicitly selected worker/reviewer checkout. Automatic descendant containment, unattended cleanup and coordinator resource retirement remain pending. Neither a successful task nor this operator attestation is presented as automatic proof that detached descendants exited. Retention references must be direct: symbolic references are refused, including when their target currently has the expected commit. Creation never follows a reference into another branch.
+This path retires an explicitly selected worker/reviewer checkout. Automatic descendant containment and unattended cleanup remain pending; coordinator workspaces have a separate owner retirement command below. Neither a successful task nor this operator attestation is presented as automatic proof that detached descendants exited. Retention references must be direct: symbolic references are refused, including when their target currently has the expected commit. Creation never follows a reference into another branch.
 
 ### Retire a code-verification checkout
 
@@ -600,7 +600,34 @@ herdr-supervisor control --state /private/controller cleanup-verification \
 
 Upgrade controller consumers together to schema 12. The owner capability is checked again in the intent and completion transactions. SQLite records the decision before side effects; each phase and its audit entry commit together. `git worktree remove` receives no force option. The candidate remains reachable through `refs/herdr-supervisor/retained-verification/<integration>` in addition to existing candidate/integration refs. Check receipts, results, reviews and the parent evidence directory are retained.
 
-As with worker retirement, `state: removing` reports an uncertain outcome and `resources_deleted: null`; repeating the same decision observes an already-issued effect without issuing it again. A recreated path is preserved. Successful completion records the checkout as `retired` and appends an audit event; replay returns the historical result after reauthenticating the owner. This known terminal resource state does not make a cancelled repository appear to have an unfinished checkout creation. Sealed artifact inputs, uploaded contents and coordinator workspaces need separate retention paths and are not removed here.
+As with worker retirement, `state: removing` reports an uncertain outcome and `resources_deleted: null`; repeating the same decision observes an already-issued effect without issuing it again. A recreated path is preserved. Successful completion records the checkout as `retired` and appends an audit event; replay returns the historical result after reauthenticating the owner. This known terminal resource state does not make a cancelled repository appear to have an unfinished checkout creation. Sealed artifact inputs and uploaded contents need separate retention paths. Coordinator workspaces have the separate close-only command below; their files are retained.
+
+### Retire an owned coordinator workspace
+
+`cleanup-coordinator` is local owner maintenance for a launcher-owned coordinator whose generation has already exited and lost its capabilities/routes. It closes only the exact saved workspace, pane and terminal. Manually attached sessions have no launch ownership record and cannot be selected. The controller requires a matching native exit receipt or a wrapper that was fenced before claiming its launch. An idle shell alone never proves descendant exit: stop all users and background jobs, keep the workspace exclusive, and explicitly attest quiescence before issuing this command.
+
+Read `coordinator_launches` through `control page` with an owner credential to obtain the launch `id`, `generation` and `pane` binding. Save an explicit decision:
+
+```json
+{
+  "operation": "NEW_OPERATION_UUID",
+  "launch": "LAUNCH_UUID",
+  "expected_generation": 2,
+  "expected_binding": {"workspace": "EXACT_WORKSPACE", "pane": "EXACT_PANE", "terminal": "EXACT_TERMINAL"},
+  "processes_confirmed_stopped": true,
+  "retain_files_close_workspace": true,
+  "reason": "All users and background jobs are stopped; preserve the session files"
+}
+```
+
+```sh
+herdr-supervisor control --state CONTROLLER cleanup-coordinator \
+  --credential OWNER_TOKEN_FILE --request coordinator-retirement.json
+```
+
+The launcher lease serializes this decision with generation changes and launch effects. SQLite records the exact decision and audit before a non-force `workspace close`. Extra panes, worktree-linked workspaces, changed directories/identifiers, active native agents and unknown foreground state are refused. No filesystem contents, credentials, model transcripts or mailer sessions are deleted; the coordinator home and evidence remain available for later retention policy. The CLI is not exposed as an agent API/MCP action.
+
+`state: closing` and `workspace_closed: null` mean the outcome is unresolved. Repeat exactly the same decision to observe the original effect; it never issues a second close after that intent. Missing workspace, pane, terminal and agents together permit the final audit receipt. A resource recreated under the original IDs is retained. `state: closed` is a historical receipt, not a current health claim. Changing the decision or using a non-owner capability is refused even on replay. Unattended containment and automatic orphan termination remain separate work.
 
 ### Passive recovery after wrapper loss
 

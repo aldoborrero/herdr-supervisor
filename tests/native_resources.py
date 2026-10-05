@@ -13,7 +13,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from service_workflow import Fixture, uid, wait_for
+from service_workflow import Fixture, rpc, uid, wait_for
 
 
 class NativeResources(Fixture):
@@ -312,6 +312,149 @@ resume_agents_on_restore = false
         )
         print(
             "PASS: real NATS cancellation, no native process, actual Herdr removal and retained commits",
+            flush=True,
+        )
+        self.coordinator_workflow()
+
+    def coordinator_workflow(self):
+        # Exercise the actual coordinator resource path without a model or
+        # wrapper: the explicitly configured launch command is coreutils false.
+        # Its launch remains unclaimed and is fenced before cleanup.
+        harmless = str(Path(shutil.which("false")).resolve())
+        config = json.loads((self.root / "local-services.json").read_text())["native"]
+        config.update(
+            herdr_binary=self.real_herdr,
+            herdr_socket=str(self.native_socket),
+            supervisor_binary=harmless,
+            codex_binary=harmless,
+            mailer_runtime_binary=harmless,
+        )
+
+        def owner_decision(method, **params):
+            request = {
+                "op": "apply",
+                "token": self.owner_token,
+                "operation_id": uid(),
+                "command": {"method": method, "params": params},
+            }
+            return wait_for(
+                "owner decision outside native launch lease",
+                lambda: rpc(self.controller / "control.sock", request),
+            )
+
+        launch = owner_decision(
+            "start_coordinator",
+            run=self.run,
+            expected_revision=self.snapshot()["run"]["revision"],
+            profile="auto",
+            config=config,
+        )
+
+        def observed():
+            page = self.cli(
+                self.controller,
+                "page",
+                "--credential",
+                self.controller / "admin.token",
+                "--collection",
+                "coordinator_launches",
+                self.run,
+            )
+            return next(
+                (
+                    item["value"]
+                    for item in page["items"]
+                    if item["value"]["id"] == launch["id"]
+                ),
+                None,
+            )
+
+        prepared = wait_for(
+            "owned coordinator workspace without a native wrapper",
+            lambda: (
+                row
+                if (row := observed()) and row["state"] == "launching" and row["pane"]
+                else None
+            ),
+        )
+        owner_decision(
+            "bind_supervisor",
+            run=self.run,
+            expected_revision=self.snapshot()["run"]["revision"],
+        )
+        wait_for(
+            "unclaimed coordinator fenced and exited",
+            lambda: row if (row := observed()) and row["state"] == "exited" else None,
+        )
+        binding = prepared["pane"]
+        directory = (
+            self.controller
+            / "coordinators"
+            / self.run
+            / str(launch["generation"])
+            / "home"
+        )
+        note = directory / "retain.txt"
+        note.write_text("Keep coordinator files after closing its workspace")
+        with sqlite3.connect(
+            f"file:{self.controller / 'control.sqlite'}?mode=ro", uri=True
+        ) as connection:
+            assert (
+                connection.execute(
+                    "SELECT count(*) FROM coordinator_processes"
+                ).fetchone()[0]
+                == 0
+            )
+        assert not self.models and not self.launches and not self.registrations
+        assert self.native("agent", "list")["agents"] == []
+        decision = self.file(
+            "coordinator-retirement.json",
+            {
+                "operation": uid(),
+                "launch": launch["id"],
+                "expected_generation": launch["generation"],
+                "expected_binding": binding,
+                "processes_confirmed_stopped": True,
+                "retain_files_close_workspace": True,
+                "reason": "Owned fixture only; false command exited, no wrapper/model launched",
+            },
+        )
+        args = (
+            "cleanup-coordinator",
+            "--credential",
+            self.controller / "admin.token",
+            "--request",
+            decision,
+        )
+
+        # The harmless command may finish after the API's launch receipt; an idle
+        # foreground observation, never a fixed sleep, gates the close.
+        def idle():
+            info = self.native("pane", "process-info", "--pane", binding["pane"])[
+                "process_info"
+            ]
+            foreground = info.get("foreground_processes", [])
+            return (
+                info.get("shell_pid", 0) > 0
+                and len(foreground) == 1
+                and foreground[0]["pid"] == info["shell_pid"]
+            )
+
+        wait_for("harmless coordinator command has exited", idle)
+        receipt = self.cli(self.controller, *args)
+        assert receipt["state"] == "closed" and receipt["files_deleted"] is False, (
+            receipt
+        )
+        assert self.cli(self.controller, *args) == receipt
+        assert note.read_text() == "Keep coordinator files after closing its workspace"
+        assert (directory / "AGENTS.md").is_file()
+        assert observed()["workspace_retirement"] == "closed"
+        assert all(
+            w["workspace_id"] != binding["workspace"]
+            for w in self.native("workspace", "list")["workspaces"]
+        )
+        print(
+            "PASS: actual owned coordinator workspace closure/replay, no wrapper/model, retained files and paged receipt",
             flush=True,
         )
 

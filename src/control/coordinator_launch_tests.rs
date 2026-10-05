@@ -1,4 +1,6 @@
 use super::*;
+#[path = "coordinator_retirement_tests.rs"]
+mod retirement_tests;
 use crate::control::{coordinator, coordinator_launch as launch};
 use crate::runner::fake::{ok, timeout};
 use crate::scenarios::World;
@@ -544,6 +546,9 @@ fn coordinator_native(recover_registration: bool) {
             serde_json::from_str::<Value>(&receipt).unwrap()["reason"],
             "cancelled"
         );
+        *world.agents.borrow_mut() = "[]".into();
+        *process_observation.borrow_mut() = r#"{"result":{"process_info":{"shell_pid":100,"foreground_process_group_id":100,"foreground_processes":[{"pid":100}]}}}"#.into();
+        retirement_tests::retire_exited(&mut f, &world, &id);
         let cfg = config(&f);
         let next = start(
             &mut f,
@@ -632,7 +637,7 @@ fn schema_four_migration_preserves_active_coordinator_routes_and_memory() {
         },
     );
     let before = coordinator::context(&f.store, &cap, &f.run).unwrap();
-    f.store.connection.execute_batch("DROP TABLE coordinator_processes; DROP TABLE coordinator_launches; DROP TABLE integration_policies; DROP TABLE attempt_profiles; DROP TABLE artifact_chunks; DROP TABLE artifact_uploads; DROP TABLE reception_failures; DROP TABLE event_recoveries; DROP TABLE registration_recoveries; DROP TABLE verification_retirements; ALTER TABLE nodes DROP COLUMN draining; ALTER TABLE nodes DROP COLUMN revision; PRAGMA user_version=4;").unwrap();
+    f.store.connection.execute_batch("DROP TABLE coordinator_processes; DROP TABLE coordinator_launches; DROP TABLE integration_policies; DROP TABLE attempt_profiles; DROP TABLE artifact_chunks; DROP TABLE artifact_uploads; DROP TABLE reception_failures; DROP TABLE event_recoveries; DROP TABLE registration_recoveries; DROP TABLE coordinator_retirements; DROP TABLE verification_retirements; ALTER TABLE nodes DROP COLUMN draining; ALTER TABLE nodes DROP COLUMN revision; PRAGMA user_version=4;").unwrap();
     f.store = Store::open(&f.store.dir).unwrap();
     let after = coordinator::context(&f.store, &cap, &f.run).unwrap();
     assert_eq!(after["native_coordinator"], before["native_coordinator"]);

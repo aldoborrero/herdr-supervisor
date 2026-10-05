@@ -203,12 +203,19 @@ pub fn summaries(c: &Connection, run: &str) -> Result<Value> {
     for row in rows {
         let (id, generation, state, error, doc, receipt) = row?;
         let p: Plan = serde_json::from_str(&doc)?;
+        let retirement: Option<String> = c
+            .query_row(
+                "SELECT state FROM coordinator_retirements WHERE launch=?1",
+                [&id],
+                |row| row.get(0),
+            )
+            .optional()?;
         let recoveries: u64 = c.query_row(
             "SELECT count(*) FROM registration_recoveries WHERE target=?1",
             [&id],
             |r| r.get(0),
         )?;
-        result.push(json!({"id":id,"generation":generation,"state":state,"profile":p.profile_name,"runtime":p.profile.runtime,"native_session":p.expected_session,"pane":p.pane,"last_error":error,"process_receipt":receipt.map(|s|serde_json::from_str::<Value>(&s)).transpose()?,"registration_recovery_count":recoveries,"registration_state":if p.registration.is_some(){"registered"}else if p.registration_started{"uncertain"}else if recoveries > 0{"retry_authorized"}else{"not_started"}}));
+        result.push(json!({"id":id,"generation":generation,"state":state,"workspace_retirement":retirement,"profile":p.profile_name,"runtime":p.profile.runtime,"native_session":p.expected_session,"pane":p.pane,"last_error":error,"process_receipt":receipt.map(|s|serde_json::from_str::<Value>(&s)).transpose()?,"registration_recovery_count":recoveries,"registration_state":if p.registration.is_some(){"registered"}else if p.registration_started{"uncertain"}else if recoveries > 0{"retry_authorized"}else{"not_started"}}));
     }
     Ok(json!(result))
 }

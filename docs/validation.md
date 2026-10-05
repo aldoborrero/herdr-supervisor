@@ -4,6 +4,26 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
+### Owned coordinator workspace retirement
+
+Controller schema 13 adds owner-local `cleanup-coordinator` decisions with exact launch/generation/resource binding and prepared/closing/closed phases. The coordinator launch lease serializes effects and generation changes; authority is rechecked in audit transactions. Native exit or a fenced unclaimed wrapper, explicit operator process quiescence, one exact idle pane and no worktree association precede a non-force workspace close. Home files, transcripts, credentials and database history remain intact. Uncertain close responses reconcile by observation without another close. Public launch summaries and pages expose the retirement phase, without capabilities.
+
+Six focused regressions and the actual CLI denial/bounded-input test pass (0.49 s and 0.11 s), followed by strict all-target Clippy (32.96 s): `.direnv/coordinator-retirement-corrected.log`. The first compile lacked a test-only macro import (`.direnv/coordinator-retirement-focused.log`); the next run passed four of six tests but exposed two incorrectly overridden fake-runner scenarios (`.direnv/coordinator-retirement-focused-final.log`). The runner selects its first matching callback, so the busy-pane and no-effect-close fixtures now mutate their existing callback state. No production assertion was weakened.
+
+| Evidence | Boundary established |
+| --- | --- |
+| `coordinator_retirement_closes_only_owned_workspace_preserves_files_and_replay` | Exact workspace close, retained unsaved notes/instructions, owner-only historical replay and restart, one native effect and public status |
+| `coordinator_retirement_requires_retired_authority_exact_exit_and_confirmations` | Both attestations, generation, retired principals, required wrapper exit and matching native receipt; unresolved/foreign receipt never permits close |
+| `coordinator_retirement_refuses_reused_busy_shared_or_substituted_resources` | Changed pane/terminal/cwd, extra panes, active agents, unknown foreground and substituted home refused without an intent |
+| `coordinator_retirement_rolls_back_audit_failure_and_reconciles_lost_completion` | Initial audit failure prevents close; lost final audit retains uncertainty and reconciles once after restart |
+| `coordinator_retirement_uncertain_close_never_repeats_or_closes_recreated_resources` | No-effect timeout, recreated resources and changed saved endpoint; later observation can reconcile external fixture cleanup without repeating the effect |
+| `coordinator_retirement_migration_preserves_launch_and_lock_fences_effects` | Schema-12 migration retains launch bytes; launch lease prevents concurrent retirement |
+| `coordinator_retirement_cli_requires_owner_and_preserves_missing_state` | Scrubbed actual CLI, missing-state preservation, invalid owner token redaction and bounded JSON |
+
+The extended opt-in `tests/native_resources.py` passes against installed Herdr 0.9.1/protocol 22 using the new debug binary: real owned coordinator workspace creation and close, owner CLI replay, retained files and paged retirement status. The configured launcher/runtime executables are coreutils `false`, so no wrapper or model is launched; the production controller fences the unclaimed generation before cleanup. Worker resource/NATS/subscription acceptance also passes in that run. All server state is fresh and private, and all owned children were stopped. Log: `.direnv/coordinator-retirement-native.log`. This proves actual Herdr resource behavior, not authenticated model behavior or unattended descendant containment.
+
+The final full source suite passes 619 unit tests (64.80 s), 19 CLI tests (27.41 s) and strict all-target Clippy (34.12 s), with four test threads. Log: `.direnv/coordinator-retirement-full.log`. `nix fmt` passes, formatting only the Python driver (`.direnv/coordinator-retirement-fmt.log`). The existing three-runtime coordinator regression now closes each retired workspace after joining its real harmless native process and wrapper, including the Codex registration-recovery route; Herdr/mailer/model identities remain simulated there. A lost native close response still produces one observed completion without repeating the command. Full Nix build/check for this newer source remains pending.
+
 ### Installed Herdr resource acceptance
 
 `tests/native_resources.py` is an opt-in acceptance driver for an explicitly supplied Herdr executable. It creates a named headless server inside fresh private HOME/XDG/socket state, uses real restricted NATS and Git, and changes SQLite only through production commands. No agent or model is launched. The controller's cancellation reaches the node before its executor runs; the test verifies zero runtime process rows and zero mailer registrations or model launches.

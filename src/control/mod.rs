@@ -10,6 +10,7 @@ mod cleanup;
 pub mod cli;
 pub mod coordinator;
 pub mod coordinator_launch;
+mod coordinator_retirement;
 mod delivery;
 mod event_recovery;
 pub mod executor;
