@@ -83,6 +83,10 @@ The service-module checkpoint passes 36 Linux assertions and rendered-unit check
 
 The same source also passes `cargo test --locked --offline` and strict all-target Clippy using a task-local RAM-backed Cargo cache. Earlier `nix flake check --no-build` results established evaluation only; they have now been supplemented by the full package gate. The successful Nix build uses the normal daemon build directory. No shared permissions or daemon settings were changed.
 
+The asynchronous-view commit (`62baee8`) passes the 415 unit/7 CLI tests, strict all-target Clippy and `nix fmt` locally. Its full Nix build compiled the application but failed while compiling the check binaries with `rustc-LLVM ERROR: IO failure on output stream: No space left on device`. The chained flake check did not run. Full package validation for that newer source remains pending; `result` still points to the previously verified cancellation-recovery package.
+
+The next transport audit reproduced a confidentiality gap in the current broker fixtures: their `_INBOX.>` subscription permission lets a restricted node observe another consumer's JetStream pull response, even though that node cannot issue the other consumer's pull request. The reproduction used a temporary loopback NATS server and fictional assignment/credential data, then stopped its owned process. Per-node reply inbox prefixes, matching subscription ACLs and a real-broker regression are required before a deployment ACL example can be treated as complete. Existing publisher-ACL tests establish write restrictions only.
+
 ## Commands
 
 ```bash
