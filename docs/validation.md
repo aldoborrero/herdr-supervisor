@@ -4,7 +4,7 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
-The local implementation suite currently passes **403 unit tests and 7 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
+The local implementation suite currently passes **410 unit tests and 7 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
 
 | Requirement | Evidence | Limit |
 | --- | --- | --- |
@@ -52,7 +52,11 @@ The local implementation suite currently passes **403 unit tests and 7 CLI tests
 | Interactive terminal | `interactive_native_child_gets_foreground_terminal_and_wrapper_restores_it` creates a real PTY and sends input to the foreground native child | Linux host evidence; no live Herdr/model session |
 | Node schema migration | `node_v2_migration_preserves_pending_events_and_does_not_invent_process_receipts` | Old launcher instances remain uncertain without new exit receipts |
 | Repair and reviewer replacement | `stopped_reviewer_can_be_replaced_and_rejected_task_retries_with_new_evidence` | Does not abandon in-flight check or Git intents |
-| Run completion | Combined-candidate test refuses completion while processes remain, then completes, replays and releases the repository binding | Cancelled-run binding reconciliation remains pending |
+| Run completion | Combined-candidate test refuses completion while processes remain, then completes, replays and releases the repository binding; `successful_later_candidate_does_not_hide_an_earlier_check_with_unknown_exit` retains the reservation | Uncertain verifier abandonment remains pending |
+| Cancelled repository reuse | `cancelled_repository_releases_only_after_exit_and_reuses_without_deleting_evidence` verifies exit/lease fencing, transaction rollback on lost journal receipt, idempotent release, retained Git refs/checkouts and a new run using the same canonical repository | No resource deletion |
+| Uncertain cancelled effects | `cancelled_recovery_keeps_ambiguous_checks_checkout_preparation_and_owned_coordinator_blocked`, `cancelled_git_cas_requires_exact_receipt_reconciliation_before_repository_release` | No timeout/PID-based inference or forced abandonment |
+| Cancellation while checking | `cancellation_during_check_drains_receipt_before_releasing_repository` gates an actual shell check, cancels while it runs and releases only after its receipt | Process receipt scope, not a detached-descendant audit |
+| Cancelled intent and automatic service recovery | `cancelled_verification_that_never_started_retires_without_claiming_git_effects`, `controller_service_reconciles_cancelled_repository_and_retains_its_refs` | Real Git and private NATS service cycle; worker exit evidence is a scoped fixture |
 
 ## Owned coordinator launch
 
@@ -72,9 +76,9 @@ The local implementation suite currently passes **403 unit tests and 7 CLI tests
 
 `checks.<system>.service-modules` evaluates the actual exported NixOS and Home Manager modules with the pinned inputs. Linux checks cover disabled imports, the publishing package default, explicit non-root ownership, controller/node commands, multiple nodes, distinct normalized state, absent runtime configuration files, optional coordinator notifications, dependencies, private masks, restart limits, SIGINT/drain behavior and literal systemd argument escaping. It also reads the rendered unit files from both module systems. Darwin checks disabled imports and rejection of enabled Linux services. These are evaluation/rendering checks; no existing host or user manager is activated. See [services](services.md).
 
-The service-module checkpoint passes 36 Linux assertions and rendered-unit checks, plus evaluation for aarch64-linux and the Darwin rejection case. The first full `nix flake check` attempt stopped in Rust dependency staging with `No space left on device`. The following service-workflow checkpoint adds persistent SIGINT receivers and the seventh CLI test. Local compilation and tests use a task-local target directory in `/dev/shm`; complete package/check gates remain pending until recorded below.
+The service-module checkpoint passes 36 Linux assertions and rendered-unit checks, plus evaluation for aarch64-linux and the Darwin rejection case. Full `nix flake check` now passes on x86_64-linux, including package compilation and the 410 unit/7 CLI tests, the service-module checks and the formatter check. This closes the earlier disk-full validation backlog for the modules, continuous workflow, live memory and cancellation recovery. It does not establish builds on the other declared platforms.
 
-For the service-workflow checkpoint, `cargo test --locked --offline` (398 unit/7 CLI tests), strict all-target Clippy, `nix fmt`, the actual `service-modules` and `pkgs-formatter-check` derivations, and `nix flake check --no-build` pass on x86_64-linux. The latter evaluates the flake; it does **not** run the full package gate. Attempts to use a RAM-backed Nix build directory were rejected because `/dev/shm` has a world-writable parent and Nix build users cannot traverse the private `/run/user/1000` parent. No shared permissions or daemon settings were changed. Full Nix package/check validation remains outstanding; local Cargo validation is not a substitute for it.
+The same source also passes `cargo test --locked --offline` and strict all-target Clippy using a task-local RAM-backed Cargo cache. Earlier `nix flake check --no-build` results established evaluation only; they have now been supplemented by the full package gate. The successful Nix build uses the normal daemon build directory. No shared permissions or daemon settings were changed.
 
 ## Commands
 
@@ -101,7 +105,7 @@ Mailer protocol-2 support is an independent local commit **`7a12d5a`** on `feat/
 ## Still required
 
 - Artifact verification without a synthetic code commit; broader replanning and abandonment of an uncertain verifier.
-- Cancelled-run repository binding reconciliation and conservative verification checkout cleanup.
+- Recovery/abandonment of uncertain cancelled-run effects and conservative verification checkout cleanup.
 - Recovery after loss of the native wrapper; detached-descendant audit and conservative resource cleanup.
 - Idempotent/reconcilable mailer registration after a lost registration response.
 - Full onboarding, task/profile forms, cross-host resource focus and asynchronous managed view refresh.

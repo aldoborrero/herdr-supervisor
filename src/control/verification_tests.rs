@@ -38,6 +38,470 @@ struct GitFixture {
     result: String,
     config: git_pipeline::Config,
 }
+
+fn cancel_with_exit(x: &mut GitFixture) {
+    let run: Run = document(&x.f.store.connection, "runs", &x.f.run).unwrap();
+    call(
+        &mut x.f.store,
+        &x.f.supervisor,
+        Mutation::Cancel {
+            run: x.f.run.clone(),
+            expected_revision: run.revision,
+        },
+    );
+    let a: Attempt = document(&x.f.store.connection, "attempts", &x.attempt.id).unwrap();
+    call(
+        &mut x.f.store,
+        &x.f.node,
+        Mutation::ObserveStopped {
+            attempt: a.id,
+            epoch: a.epoch,
+        },
+    );
+}
+
+fn replacement_run(x: &GitFixture) -> Request {
+    let old: Run = document(&x.f.store.connection, "runs", &x.f.run).unwrap();
+    request(
+        &x.f.owner,
+        Mutation::CreateRun {
+            project: "replacement".into(),
+            repo: old.repo,
+            base_oid: old.integration_oid,
+            objective: "Continue after cancelled run".into(),
+            policy: old.policy,
+        },
+    )
+}
+
+#[test]
+fn cancelled_repository_releases_only_after_exit_and_reuses_without_deleting_evidence() {
+    use crate::control::recovery;
+    let mut x = GitFixture::new("sha1", "true", false);
+    x.submit();
+    let i = x.request();
+    let verified = x.advance(&i.id);
+    let reference = x.reference();
+    let original = git(&x.repo, &["rev-parse", &reference]);
+    let checkout =
+        x.f.store
+            .dir
+            .join("verification")
+            .join(&i.id)
+            .join("checkout");
+    let run: Run = document(&x.f.store.connection, "runs", &x.f.run).unwrap();
+    call(
+        &mut x.f.store,
+        &x.f.supervisor,
+        Mutation::Cancel {
+            run: x.f.run.clone(),
+            expected_revision: run.revision,
+        },
+    );
+    let before = x.f.store.snapshot(&x.f.owner, &x.f.run).unwrap();
+    assert_eq!(before["repository_recovery"]["state"], "blocked");
+    assert_eq!(
+        recovery::cancelled(&mut x.f.store).unwrap()["released"],
+        json!([])
+    );
+    let a: Attempt = document(&x.f.store.connection, "attempts", &x.attempt.id).unwrap();
+    call(
+        &mut x.f.store,
+        &x.f.node,
+        Mutation::ObserveStopped {
+            attempt: a.id,
+            epoch: a.epoch,
+        },
+    );
+    let next = replacement_run(&x);
+    assert!(x.f.store.apply(&next).is_err());
+    let lease = crate::control::api::lock(&x.f.store.dir, "git-executor.lock").unwrap();
+    assert!(recovery::cancelled(&mut x.f.store).is_err());
+    drop(lease);
+    x.f.store.connection.execute_batch("CREATE TRIGGER fail_release BEFORE INSERT ON journal WHEN NEW.kind='cancelled_run_reconciled' BEGIN SELECT RAISE(ABORT,'lost release receipt'); END;").unwrap();
+    assert!(recovery::cancelled(&mut x.f.store).is_err());
+    assert_eq!(
+        verification::integration(&x.f.store.connection, &verified.id)
+            .unwrap()
+            .state,
+        "verified"
+    );
+    assert_eq!(
+        x.f.store
+            .connection
+            .query_row("SELECT active FROM repository_bindings", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    x.f.store
+        .connection
+        .execute_batch("DROP TRIGGER fail_release")
+        .unwrap();
+    let released = recovery::cancelled(&mut x.f.store).unwrap();
+    assert_eq!(released["released"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        verification::integration(&x.f.store.connection, &verified.id)
+            .unwrap()
+            .state,
+        "superseded"
+    );
+    assert_eq!(
+        x.f.store.snapshot(&x.f.owner, &x.f.run).unwrap()["repository_recovery"]["state"],
+        "released"
+    );
+    assert_eq!(
+        recovery::cancelled(&mut x.f.store).unwrap()["released"],
+        json!([])
+    );
+    assert!(checkout.exists());
+    assert!(x.author.exists());
+    assert_eq!(git(&x.repo, &["rev-parse", &reference]), original);
+    let old_run = x.f.run.clone();
+    let new = x.f.store.apply(&next).unwrap();
+    x.f.run = text(&new, "id");
+    x.f.supervisor = text(
+        &call(
+            &mut x.f.store,
+            &x.f.owner,
+            Mutation::BindSupervisor {
+                run: x.f.run.clone(),
+                expected_revision: 1,
+            },
+        ),
+        "credential",
+    );
+    let task = x.f.task();
+    let (a, worker) = x.f.dispatch(&task);
+    x.f.ready(&a, &worker);
+    call(
+        &mut x.f.store,
+        &worker,
+        Mutation::SubmitResult {
+            attempt: a.id.clone(),
+            epoch: 1,
+            contract_hash: a.contract_hash,
+            commit: Some(x.result.clone()),
+            artifacts: BTreeMap::new(),
+            summary: "Reuse existing result".into(),
+        },
+    );
+    let task: Task = document(&x.f.store.connection, "tasks", &task).unwrap();
+    let intent = call(
+        &mut x.f.store,
+        &x.f.supervisor,
+        Mutation::RequestVerification {
+            attempt: a.id,
+            expected_revision: task.revision,
+        },
+    );
+    let newer = x.advance(&text(&intent, "id"));
+    assert_eq!(newer.state, "verified");
+    assert_eq!(
+        x.f.store
+            .connection
+            .query_row(
+                "SELECT count(*) FROM repository_bindings WHERE active=1",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        x.f.store
+            .connection
+            .query_row(
+                "SELECT active FROM repository_bindings WHERE run=?1",
+                [old_run],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn cancelled_recovery_keeps_ambiguous_checks_checkout_preparation_and_owned_coordinator_blocked() {
+    use crate::control::recovery;
+    for (sql, reason) in [
+        (
+            "UPDATE check_runs SET state='started'",
+            "check_exit_unresolved",
+        ),
+        (
+            "UPDATE verification_worktrees SET state='creating'",
+            "checkout_creation_unresolved",
+        ),
+        (
+            "UPDATE repository_bindings SET state='creating'",
+            "repository_creation_unresolved",
+        ),
+        (
+            "UPDATE integrations SET state='preparing',doc=json_set(doc,'$.state','preparing')",
+            "candidate_preparation_unresolved",
+        ),
+        (
+            "UPDATE integrations SET state='applying',doc=json_set(doc,'$.state','applying')",
+            "git_apply_unresolved",
+        ),
+    ] {
+        let mut x = GitFixture::new("sha1", "true", false);
+        x.submit();
+        let i = x.request();
+        x.advance(&i.id);
+        cancel_with_exit(&mut x);
+        x.f.store.connection.execute_batch(sql).unwrap();
+        let response = recovery::cancelled(&mut x.f.store).unwrap();
+        assert_eq!(response["released"], json!([]));
+        assert!(
+            response["unresolved"][0]["blockers"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(reason))
+        );
+        let next = replacement_run(&x);
+        assert!(x.f.store.apply(&next).is_err());
+        assert_eq!(
+            x.f.store
+                .connection
+                .query_row("SELECT active FROM repository_bindings", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+    let mut x = GitFixture::new("sha1", "true", false);
+    x.submit();
+    let i = x.request();
+    x.advance(&i.id);
+    cancel_with_exit(&mut x);
+    x.f.store
+        .connection
+        .execute(
+            "INSERT INTO coordinator_launches(id,run,generation,state,doc) VALUES (?1,?2,1,'bound','{}')",
+            rusqlite::params![id(), x.f.run],
+        )
+        .unwrap();
+    assert_eq!(
+        recovery::cancelled(&mut x.f.store).unwrap()["unresolved"][0]["blockers"],
+        json!(["coordinator_exit_unresolved"])
+    );
+}
+
+#[test]
+fn cancellation_during_check_drains_receipt_before_releasing_repository() {
+    use crate::control::recovery;
+    let mut x = GitFixture::new("sha1", "true", false);
+    let started = x.f.dir.path().join("started");
+    let release = x.f.dir.path().join("release");
+    let mut run: Run = document(&x.f.store.connection, "runs", &x.f.run).unwrap();
+    run.policy.checks.insert(
+        "test".into(),
+        vec![
+            "sh".into(),
+            "-c".into(),
+            ": > \"$1\"; while [ ! -f \"$2\" ]; do sleep 0.02; done".into(),
+            "check".into(),
+            started.to_string_lossy().into(),
+            release.to_string_lossy().into(),
+        ],
+    );
+    save_run(&x.f.store.connection, &run).unwrap();
+    x.submit();
+    let i = x.request();
+    let state = x.f.store.dir.clone();
+    let config = x.config.clone();
+    let integration = i.id.clone();
+    let work = std::thread::spawn(move || {
+        git_pipeline::advance(
+            &mut Store::open(&state).unwrap(),
+            &config,
+            &integration,
+            &RealRunner,
+        )
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(4);
+    while !started.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let observed = started.exists();
+    let busy = if observed {
+        cancel_with_exit(&mut x);
+        recovery::cancelled(&mut x.f.store).is_err()
+    } else {
+        false
+    };
+    std::fs::write(&release, "continue").unwrap();
+    let result = work.join().unwrap();
+    assert!(observed, "check did not start");
+    assert!(busy, "live executor must fence release");
+    assert!(result.is_err(), "closed run cannot finish verification");
+    assert_eq!(
+        x.f.store
+            .connection
+            .query_row("SELECT state FROM check_runs", [], |r| r
+                .get::<_, String>(0))
+            .unwrap(),
+        "passed"
+    );
+    assert_eq!(
+        recovery::cancelled(&mut x.f.store).unwrap()["released"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn cancelled_verification_that_never_started_retires_without_claiming_git_effects() {
+    use crate::control::recovery;
+    let mut x = GitFixture::new("sha1", "true", false);
+    x.submit();
+    let i = x.request();
+    cancel_with_exit(&mut x);
+    let next = replacement_run(&x);
+    assert!(x.f.store.apply(&next).is_err());
+    let response = recovery::cancelled(&mut x.f.store).unwrap();
+    assert_eq!(response["released"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        verification::integration(&x.f.store.connection, &i.id)
+            .unwrap()
+            .state,
+        "superseded"
+    );
+    assert_eq!(
+        x.f.store
+            .connection
+            .query_row("SELECT count(*) FROM repository_bindings", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert!(x.f.store.apply(&next).is_ok());
+}
+
+#[test]
+fn cancelled_git_cas_requires_exact_receipt_reconciliation_before_repository_release() {
+    use crate::control::recovery;
+    let mut x = GitFixture::new("sha1", "true", false);
+    x.submit();
+    let i = x.request();
+    let verified = x.advance(&i.id);
+    x.queue_apply(&verified);
+    x.f.store.connection.execute_batch("CREATE TRIGGER fail_cancel_receipt BEFORE UPDATE ON integrations WHEN NEW.state='applied' BEGIN SELECT RAISE(ABORT,'lost SQL receipt'); END;").unwrap();
+    assert!(git_pipeline::advance(&mut x.f.store, &x.config, &i.id, &RealRunner).is_err());
+    x.f.store
+        .connection
+        .execute_batch("DROP TRIGGER fail_cancel_receipt")
+        .unwrap();
+    cancel_with_exit(&mut x);
+    assert_eq!(
+        recovery::cancelled(&mut x.f.store).unwrap()["unresolved"][0]["blockers"],
+        json!(["git_apply_unresolved"])
+    );
+    assert_eq!(x.advance(&i.id).state, "applied");
+    assert_eq!(
+        recovery::cancelled(&mut x.f.store).unwrap()["released"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        git(&x.repo, &["rev-parse", &x.reference()]),
+        verified.candidate_oid.unwrap()
+    );
+}
+
+#[test]
+fn successful_later_candidate_does_not_hide_an_earlier_check_with_unknown_exit() {
+    let mut x = GitFixture::new("sha1", "true", false);
+    x.submit();
+    let first = x.request();
+    x.advance(&first.id);
+    x.f.store
+        .connection
+        .execute(
+            "UPDATE check_runs SET state='started' WHERE integration=?1",
+            [&first.id],
+        )
+        .unwrap();
+    let mut failed = verification::integration(&x.f.store.connection, &first.id).unwrap();
+    failed.state = "checks_failed".into();
+    failed.revision += 1;
+    verification::save(&x.f.store.connection, &failed).unwrap();
+    let mut task: Task = document(&x.f.store.connection, "tasks", &x.attempt.task).unwrap();
+    task.state = "changes_requested".into();
+    task.revision += 1;
+    save_task(&x.f.store.connection, &task).unwrap();
+    let next = x.request();
+    let verified = x.advance(&next.id);
+    x.queue_apply(&verified);
+    x.advance(&next.id);
+    call(
+        &mut x.f.store,
+        &x.f.node,
+        Mutation::ObserveStopped {
+            attempt: x.attempt.id.clone(),
+            epoch: 1,
+        },
+    );
+    let run: Run = document(&x.f.store.connection, "runs", &x.f.run).unwrap();
+    let complete = request(
+        &x.f.supervisor,
+        Mutation::CompleteRun {
+            run: x.f.run.clone(),
+            expected_revision: run.revision,
+        },
+    );
+    assert!(
+        x.f.store
+            .apply(&complete)
+            .unwrap_err()
+            .to_string()
+            .contains("earlier repository/check effects")
+    );
+    assert_eq!(
+        x.f.store
+            .connection
+            .query_row("SELECT active FROM repository_bindings", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn controller_service_reconciles_cancelled_repository_and_retains_its_refs() {
+    use crate::control::{service, transport::Broker};
+    let mut x = GitFixture::new("sha1", "true", false);
+    x.submit();
+    let i = x.request();
+    x.advance(&i.id);
+    cancel_with_exit(&mut x);
+    let owner = x.f.store.owner().unwrap();
+    let server = NatsServer::start(&owner);
+    let config = server.config("admin");
+    let broker = Broker::connect(&config, &owner).await.unwrap();
+    broker
+        .provision(&["controller".into(), "local".into()])
+        .await
+        .unwrap();
+    let path = x.f.dir.path().join("broker.json");
+    std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let result = service::controller(x.f.store.dir.clone(), path, x.config.clone(), true, None)
+        .await
+        .unwrap();
+    assert_eq!(result["recovery"]["released"][0]["run"], x.f.run);
+    assert_eq!(
+        git(&x.repo, &["rev-parse", &x.reference()]),
+        x.attempt.base_oid
+    );
+    let next = replacement_run(&x);
+    assert!(x.f.store.apply(&next).is_ok());
+}
 impl GitFixture {
     fn new(format: &str, check: &str, review: bool) -> Self {
         let mut f = Fixture::new();

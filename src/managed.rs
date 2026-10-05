@@ -215,6 +215,9 @@ pub fn overview(project: &Project) -> Result<String> {
         format!("{} · {}", project.slug, summary(&context)),
         display(context["run"]["objective"].as_str().unwrap_or_default()),
     ];
+    if let Some(recovery) = recovery_summary(&context) {
+        lines.push(recovery);
+    }
     if let Some(tasks) = context["tasks"].as_array() {
         for t in tasks {
             lines.push(format!(
@@ -226,6 +229,44 @@ pub fn overview(project: &Project) -> Result<String> {
         }
     }
     Ok(format!("{}\n", lines.join("\n")))
+}
+
+fn recovery_summary(context: &Value) -> Option<String> {
+    let recovery = &context["repository_recovery"];
+    match recovery["state"].as_str()? {
+        "released" => Some("Repository released; worktrees and refs retained".into()),
+        "awaiting_reconciliation" => Some("Repository awaiting release".into()),
+        "blocked" => {
+            let reasons: Vec<_> = recovery["blockers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|v| match v.as_str() {
+                    Some("worker_exit_unresolved") => "workers have not confirmed exit",
+                    Some("coordinator_exit_unresolved") => "coordinator exit is unconfirmed",
+                    Some("repository_creation_unresolved") => "repository setup is unresolved",
+                    Some("candidate_preparation_unresolved") => {
+                        "candidate preparation is unresolved"
+                    }
+                    Some("git_apply_unresolved") => "Git update is unresolved",
+                    Some("check_exit_unresolved") => "check exit is unconfirmed",
+                    Some("checkout_creation_unresolved") => {
+                        "verification checkout setup is unresolved"
+                    }
+                    _ => "an earlier operation is unresolved",
+                })
+                .collect();
+            Some(format!(
+                "Repository still reserved: {}",
+                if reasons.is_empty() {
+                    "waiting for cancellation to finish".into()
+                } else {
+                    reasons.join(", ")
+                }
+            ))
+        }
+        _ => None,
+    }
 }
 
 /// Launch requests go through the controller; opening an uncertain launch never
@@ -676,6 +717,9 @@ fn panel_rows(
                 )?);
             }
             add("Run objective and policy".into(), c["run"].clone(), actions);
+            if let Some(recovery) = recovery_summary(c) {
+                add(recovery, c["repository_recovery"].clone(), vec![]);
+            }
             add("Execution nodes".into(), c["nodes"].clone(), vec![]);
             for launch in c["coordinator_launches"].as_array().into_iter().flatten() {
                 add(

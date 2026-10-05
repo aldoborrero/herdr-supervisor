@@ -399,7 +399,7 @@ impl Store {
             .map(|v| Ok(serde_json::from_str(&v?)?))
             .collect::<Result<_>>()?;
         Ok(
-            json!({"run":run,"active_attempts":active_attempts,"tasks":tasks,"attempts":attempts,"integrations":integrations,"checks":checks,"reviews":reviews}),
+            json!({"run":run,"active_attempts":active_attempts,"tasks":tasks,"attempts":attempts,"integrations":integrations,"checks":checks,"reviews":reviews,"repository_recovery":super::recovery::status(&self.connection,&run)?}),
         )
     }
 
@@ -669,6 +669,10 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
             identifier(project)?;
             oid(base_oid)?;
             policy.validate()?;
+            ensure!(
+                !super::recovery::blocks_repository(tx, repo)?,
+                "a cancelled run still owns repository effects; wait for reconciliation and inspect repository_recovery"
+            );
             ensure!(
                 Path::new(repo).is_absolute() && !objective.trim().is_empty(),
                 "absolute repository and objective required"
@@ -1146,6 +1150,11 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
             ensure!(
                 !unfinished,
                 "tasks, processes or integration intents remain unfinished"
+            );
+            let uncertain:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM check_runs c JOIN integrations i ON i.id=c.integration WHERE i.run=?1 AND c.state='started') OR EXISTS(SELECT 1 FROM verification_worktrees w JOIN integrations i ON i.id=w.integration WHERE i.run=?1 AND w.state<>'ready') OR EXISTS(SELECT 1 FROM repository_bindings WHERE run=?1 AND state<>'ready')",[run],|r|r.get(0))?;
+            ensure!(
+                !uncertain,
+                "earlier repository/check effects remain unresolved"
             );
             r.state = "completed".into();
             r.revision += 1;

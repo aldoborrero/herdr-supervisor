@@ -150,14 +150,18 @@ fn binding(
     let tx = store
         .connection
         .transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let old: Option<(String, String, String, String)> = tx
+    let old: Option<(String, String, String, String, bool)> = tx
         .query_row(
-            "SELECT path,common_dir,ref,state FROM repository_bindings WHERE run=?1",
+            "SELECT path,common_dir,ref,state,active FROM repository_bindings WHERE run=?1",
             [&r.id],
-            |v| Ok((v.get(0)?, v.get(1)?, v.get(2)?, v.get(3)?)),
+            |v| Ok((v.get(0)?, v.get(1)?, v.get(2)?, v.get(3)?, v.get(4)?)),
         )
         .optional()?;
-    let state = if let Some((path, common, reference, state)) = old {
+    let state = if let Some((path, common, reference, state, active)) = old {
+        ensure!(
+            active,
+            "repository authority was released; this run cannot reacquire it"
+        );
         ensure!(
             Path::new(&path) == repo && Path::new(&common) == dir && reference == name,
             "repository authorization changed for this run"
