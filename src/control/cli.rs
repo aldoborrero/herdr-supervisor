@@ -273,7 +273,7 @@ pub fn run(args: ControlArgs) -> Result<()> {
         }
         ControlCommand::RunRuntime { attempt } => {
             super::runtime::run_owned(&args.state, &attempt)?;
-            unreachable!("successful runtime exec replaces this process");
+            json!({"attempt":attempt,"wrapper_finished":true})
         }
         ControlCommand::Launch {
             runtime_config,

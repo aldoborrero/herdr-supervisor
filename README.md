@@ -4,13 +4,14 @@
 
 A Rust adaptation of [Herdr Projects](https://github.com/eliasstravik/herdr-projects) for supervising coding agents across isolated Git worktrees. Herdr owns the workspaces and panes, **herdr-mailer delivers messages to native sessions**, and a SQLite controller owns task contracts, permissions and decisions. NATS JetStream carries coordination between the controller and execution nodes.
 
-**In development.** The controller, signed node protocol, curated memory, scoped worker API, native launch path and code review/integration pipeline are implemented. Artifact verification, automatic stop/recovery and the managed UI are still being completed. Do not treat the inherited Projects actions as the managed supervisor workflow. The full delivery contract is in [IMPLEMENTATION.md](IMPLEMENTATION.md).
+**In development.** The controller, signed node protocol, curated memory, scoped worker API, native launch/stop path and code review/integration pipeline are implemented. Artifact verification, recovery after loss of a process wrapper, cleanup and the managed UI are still being completed. Do not treat the inherited Projects actions as the managed supervisor workflow. The full delivery contract is in [IMPLEMENTATION.md](IMPLEMENTATION.md).
 
 ## What is different
 
 - **An assignment is a contract.** Each attempt binds a task revision, base commit, node, runtime, session UUID and epoch. Old sessions cannot submit new decisions after cancellation.
 - **Retries preserve identity.** State, operation receipts and outgoing intents commit together. A lost creation or launch response triggers inspection of the intended resources, never a blind second launch.
 - **Delivery has distinct receipts.** Broker storage, controller application, native runtime submission and a model's readiness/result are separate facts.
+- **A result does not free a process slot.** The pane wrapper waits for its native process and persists an exit receipt. The node reports it to the controller before capacity is released. Cancellation fences credentials immediately; a missing exit receipt remains uncertain.
 - **Review targets the actual integration candidate.** The controller combines the author's commit with the current integration base, runs configured checks in a separate checkout and assigns an independent reviewer to that exact candidate. Integration advances an owned branch with a compare-and-swap operation.
 - **Memory is curated.** Workers propose text with evidence; the supervisor approves or withdraws revisions. Each assignment carries a bounded selection of approved topics.
 - **Local execution uses the node protocol.** Moving an executor to another host changes connectivity and repository mappings, not task ownership. NetBird can supply private connectivity; signed records and broker ACLs still enforce application routes.

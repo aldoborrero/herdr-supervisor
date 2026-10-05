@@ -129,12 +129,15 @@ impl Fixture {
         )
     }
     fn dispatch(&mut self, task: &str) -> (Attempt, String) {
+        let revision = document::<Task>(&self.store.connection, "tasks", task)
+            .unwrap()
+            .revision;
         let a: Attempt = serde_json::from_value(call(
             &mut self.store,
             &self.supervisor,
             Mutation::Dispatch {
                 task: task.into(),
-                expected_revision: 1,
+                expected_revision: revision,
                 node: "local".into(),
                 profile: "auto".into(),
             },
@@ -157,8 +160,8 @@ impl Fixture {
             worktree: format!("/worktrees/{}", a.id),
             branch: format!("hs/{}/{}", a.run, a.id),
             workspace: "w1".into(),
-            pane: "w1:p1".into(),
-            terminal: "term1".into(),
+            pane: format!("w1:{}", a.id),
+            terminal: format!("term-{}", a.id),
             session: id(),
             runtime: "codex".into(),
             mailer_agent: format!("worker-{}", a.id),
@@ -1323,6 +1326,42 @@ fn native_wrapper_child() {
     super::runtime::run_owned(std::path::Path::new(&state), &attempt).unwrap();
 }
 
+struct WrapperChild(std::process::Child);
+impl WrapperChild {
+    fn wait(&mut self) -> std::process::ExitStatus {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if let Some(status) = self.0.try_wait().unwrap() {
+                return status;
+            }
+            assert!(
+                std::time::Instant::now() < until,
+                "test wrapper failed to exit"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+}
+impl Drop for WrapperChild {
+    fn drop(&mut self) {
+        if self.0.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        unsafe {
+            libc::kill(self.0.id() as libc::pid_t, libc::SIGTERM);
+        }
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < until {
+            if self.0.try_wait().ok().flatten().is_some() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 #[test]
 fn three_native_launchers_bind_exact_sessions_before_idempotent_bootstrap() {
     use super::executor::{CheckoutPlan, PaneBinding};
@@ -1467,9 +1506,9 @@ fn three_native_launchers_bind_exact_sessions_before_idempotent_bootstrap() {
                 rusqlite::params![a.id, serde_json::to_string(&checkpoint).unwrap()],
             )
             .unwrap();
-        // A real exec target records arguments/environment and exits; no model is contacted.
+        // A real child records argv/environment and waits for release; no model is contacted.
         let stub = f.dir.path().join("fake runtime");
-        std::fs::write(&stub,b"#!/bin/sh\nprintf '%s\\n' \"$HERDR_SUPERVISOR_ATTEMPT\" \"$HERDR_SUPERVISOR_EPOCH\" \"$HERDR_MAILER_STATE\" \"$HERDR_MAILER_CREDENTIAL\" \"$HERDR_MAILER_CONFIG\" \"$@\" > \"$HS_TEST_CAPTURE\"\n").unwrap();
+        std::fs::write(&stub,b"#!/bin/sh\nprintf '%s\\n' \"$HERDR_SUPERVISOR_ATTEMPT\" \"$HERDR_SUPERVISOR_EPOCH\" \"$HERDR_MAILER_STATE\" \"$HERDR_MAILER_CREDENTIAL\" \"$HERDR_MAILER_CONFIG\" \"$@\" > \"$HS_TEST_CAPTURE\"\nwhile [ ! -f \"$HS_TEST_CAPTURE.release\" ]; do sleep 0.02; done\n").unwrap();
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
         let maildir = f.dir.path().join("mailer");
         private_dir(&maildir).unwrap();
@@ -1542,7 +1581,8 @@ fn three_native_launchers_bind_exact_sessions_before_idempotent_bootstrap() {
         );
         let capture = f.dir.path().join("invocation");
         let child = || {
-            std::process::Command::new(std::env::current_exe().unwrap())
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
                 .args([
                     "--exact",
                     "control::tests::native_wrapper_child",
@@ -1553,17 +1593,20 @@ fn three_native_launchers_bind_exact_sessions_before_idempotent_bootstrap() {
                 .env("HS_TEST_CAPTURE", &capture)
                 .env("HERDR_MAILER_CONFIG", "wrong-parent")
                 .env("HERDR_MAILER_CREDENTIAL", "wrong-parent")
-                .env("HERDR_MAILER_STATE", "wrong-parent")
-                .output()
-                .unwrap()
+                .env("HERDR_MAILER_STATE", "wrong-parent");
+            command
         };
-        let launched = child();
+        let mut launched =
+            WrapperChild(child().stdout(std::process::Stdio::null()).spawn().unwrap());
+        let until = std::time::Instant::now() + Duration::from_secs(5);
+        while !capture.exists() {
+            assert!(std::time::Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(10));
+        }
         assert!(
-            launched.status.success(),
-            "{}",
-            String::from_utf8_lossy(&launched.stderr)
+            !child().output().unwrap().status.success(),
+            "wrapper cannot launch twice"
         );
-        assert!(!child().status.success(), "wrapper cannot launch twice");
         let invocation = std::fs::read_to_string(&capture).unwrap();
         assert!(!invocation.contains("wrong-parent"));
         assert!(invocation.contains(&a.id));
@@ -1638,6 +1681,12 @@ fn three_native_launchers_bind_exact_sessions_before_idempotent_bootstrap() {
         );
         stop.store(true, std::sync::atomic::Ordering::SeqCst);
         server.join().unwrap();
+        std::fs::write(format!("{}.release", capture.display()), b"done").unwrap();
+        assert!(launched.wait().success());
+        assert!(
+            super::runtime::advance(&mut node, &config, &a.id, &f.node_key, &runner).is_err(),
+            "an exited runtime cannot receive a stale bootstrap"
+        );
     }
 }
 
@@ -1720,5 +1769,7 @@ async fn worker_socket_and_mcp_expose_only_scoped_assignment() {
     assert!(!path.join("worker.sock").exists());
 }
 
+#[path = "lifecycle_tests.rs"]
+mod lifecycle_tests;
 #[path = "verification_tests.rs"]
 mod verification_tests;

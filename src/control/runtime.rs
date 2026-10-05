@@ -1,7 +1,6 @@
 //! Exact-identity runtime launch and native mailer bootstrap. All mutations use
 //! durable markers; uncertain registrations/launches require reconciliation.
 use std::collections::BTreeMap;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -258,6 +257,15 @@ pub fn advance(
 ) -> Result<Value> {
     let _lease = super::api::lock(&store.dir, "execution.lock")?;
     store.grant.verify(jiff::Timestamp::now().as_second())?;
+    let exited: bool = store.connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM runtime_processes WHERE attempt=?1 AND state='exited')",
+        [attempt],
+        |r| r.get(0),
+    )?;
+    ensure!(
+        !exited,
+        "runtime already exited; reconcile its durable receipt"
+    );
     let (epoch, state, doc, checkpoint): (u64, String, String, String) =
         store.connection.query_row(
             "SELECT epoch,state,doc,checkpoint FROM jobs WHERE id=?1",
@@ -475,10 +483,12 @@ pub fn advance(
 }
 
 /// Executed only by the owned pane wrapper, never through a worker tool. The
-/// one-shot claim survives an exec failure or lost Herdr response.
+/// one-shot claim survives a spawn failure or lost Herdr response.
 pub fn run_owned(state: &Path, attempt: &str) -> Result<()> {
     let _lease = super::api::lock_wait(state, "execution.lock")?;
     let connection = rusqlite::Connection::open(state.join("node.sqlite"))?;
+    connection.busy_timeout(Duration::from_secs(10))?;
+    connection.execute_batch("PRAGMA synchronous=FULL;")?;
     let (epoch, job_state, doc, checkpoint): (u64, String, String, String) = connection.query_row(
         "SELECT epoch,state,doc,checkpoint FROM jobs WHERE id=?1",
         [attempt],
@@ -522,8 +532,14 @@ pub fn run_owned(state: &Path, attempt: &str) -> Result<()> {
         cmd.env_remove(key);
     }
     cmd.envs(invocation.environment);
-    let error = cmd.exec();
-    Err(error.into())
+    super::process::run(
+        connection,
+        _lease,
+        attempt,
+        epoch,
+        signed.record.expires_at,
+        cmd,
+    )
 }
 
 pub fn read_config(path: &Path) -> Result<RuntimeConfig> {

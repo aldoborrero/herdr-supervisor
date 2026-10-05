@@ -332,6 +332,38 @@ fn combined_candidate_review_and_checks_gate_owned_branch_for_sha1_and_sha256() 
                 })
                 .unwrap();
         assert_eq!(active, 2, "approval does not prove either process stopped");
+        let run: Run = document(&x.f.store.connection, "runs", &x.f.run).unwrap();
+        let complete = request(
+            &x.f.supervisor,
+            Mutation::CompleteRun {
+                run: x.f.run.clone(),
+                expected_revision: run.revision,
+            },
+        );
+        assert!(x.f.store.apply(&complete).is_err());
+        for attempt in [&x.attempt.id, &a.id] {
+            call(
+                &mut x.f.store,
+                &x.f.node,
+                Mutation::ObserveStopped {
+                    attempt: attempt.clone(),
+                    epoch: 1,
+                },
+            );
+        }
+        let response = x.f.store.apply(&complete).unwrap();
+        assert_eq!(response["state"], "completed");
+        assert_eq!(x.f.store.apply(&complete).unwrap(), response);
+        let binding_active: i64 =
+            x.f.store
+                .connection
+                .query_row(
+                    "SELECT active FROM repository_bindings WHERE run=?1",
+                    [&x.f.run],
+                    |r| r.get(0),
+                )
+                .unwrap();
+        assert_eq!(binding_active, 0);
     }
 }
 
@@ -489,6 +521,111 @@ fn started_check_is_not_rerun_after_unknown_execution_outcome() {
             .query_row("SELECT count(*) FROM check_runs", [], |r| r.get(0))
             .unwrap();
     assert_eq!(n, 1);
+}
+
+#[test]
+fn stopped_reviewer_can_be_replaced_and_rejected_task_retries_with_new_evidence() {
+    let mut x = GitFixture::new("sha1", "true", true);
+    x.submit();
+    let requested = x.request();
+    let i = x.advance(&requested.id);
+    let (a, old_token) = x.reviewer(&i);
+    let current = verification::integration(&x.f.store.connection, &i.id).unwrap();
+    let review_request = Mutation::RequestReview {
+        integration: i.id.clone(),
+        expected_revision: current.revision,
+        node: "local".into(),
+        profile: "auto".into(),
+    };
+    assert!(
+        x.f.store
+            .apply(&request(&x.f.supervisor, review_request.clone()))
+            .is_err()
+    );
+    call(
+        &mut x.f.store,
+        &x.f.supervisor,
+        Mutation::StopAttempt {
+            attempt: a.id.clone(),
+            expected_epoch: 1,
+        },
+    );
+    assert!(
+        x.f.store
+            .apply(&request(&x.f.supervisor, review_request))
+            .is_err(),
+        "cancellation is not proof of exit"
+    );
+    call(
+        &mut x.f.store,
+        &x.f.node,
+        Mutation::ObserveStopped {
+            attempt: a.id.clone(),
+            epoch: 2,
+        },
+    );
+    let (b, new_token) = x.reviewer(&current);
+    assert_ne!(old_token, new_token);
+    x.review(&current, &b, &new_token, false);
+    let task: Task = document(&x.f.store.connection, "tasks", &x.attempt.task).unwrap();
+    let retry = Mutation::RetryTask {
+        task: task.id.clone(),
+        expected_revision: task.revision,
+        contract: None,
+    };
+    assert!(
+        x.f.store
+            .apply(&request(&x.f.supervisor, retry.clone()))
+            .is_err()
+    );
+    for attempt in [&x.attempt.id, &b.id] {
+        call(
+            &mut x.f.store,
+            &x.f.node,
+            Mutation::ObserveStopped {
+                attempt: attempt.clone(),
+                epoch: 1,
+            },
+        );
+    }
+    call(&mut x.f.store, &x.f.supervisor, retry);
+    assert_eq!(
+        verification::integration(&x.f.store.connection, &i.id)
+            .unwrap()
+            .state,
+        "superseded"
+    );
+    let (next, worker) = x.f.dispatch(&task.id);
+    assert_eq!(
+        next.number, 4,
+        "reviewer attempts must not consume the author attempt budget"
+    );
+    x.f.ready(&next, &worker);
+    call(
+        &mut x.f.store,
+        &worker,
+        Mutation::SubmitResult {
+            attempt: next.id,
+            epoch: 1,
+            contract_hash: next.contract_hash,
+            commit: Some(x.result.clone()),
+            artifacts: BTreeMap::new(),
+            summary: "repair result".into(),
+        },
+    );
+    let task: Task = document(&x.f.store.connection, "tasks", &task.id).unwrap();
+    assert!(
+        x.f.store
+            .apply(&request(
+                &x.f.supervisor,
+                Mutation::RequestVerification {
+                    attempt: x.attempt.id,
+                    expected_revision: task.revision
+                }
+            ))
+            .is_err(),
+        "an old author result cannot be reused after retry"
+    );
 }
 
 #[test]

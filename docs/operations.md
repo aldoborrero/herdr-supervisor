@@ -126,7 +126,19 @@ A command reply, broker ACK or runtime API submission never completes steps 6–
 
 Lost create/launch replies do not reset the effect marker. Existing resources can prove success; absence leaves uncertainty. A lost mailer **registration** response without a durable local receipt remains unresolved; idempotent registration/reconciliation is a remaining gap. Send retries already use mailer operation IDs.
 
-Cancellation increments the attempt epoch and retires its capability. It fences further worker decisions and node launch/preparation. Automatic process stop, verification that a native model turn has stopped, and cleanup are **not implemented yet**. Cancellation therefore keeps capacity reserved until an authorized node submits a confirmed `observe_stopped`. Never infer stopped from an absent pane alone.
+The pane wrapper now remains alive around the native runtime. It gives the child its own process group and the foreground terminal, then restores the terminal when the child exits. It records spawn intent and a durable native-process exit receipt in the node's `runtime_processes` table. The node service forwards `observe_stopped` through its signed outbox; capacity is released only after the controller applies that event. Normal exit preserves an already-submitted result. An author that exits without a result leaves an `interrupted` task.
+
+`stop_attempt` takes `attempt` and `expected_epoch`. It retires the worker credential and increments the epoch before emitting the stop command. Run cancellation applies the same fence to every active attempt. The wrapper observes the durable local fence, sends TERM to its owned child group and escalates to KILL after two seconds if the child remains alive. It also stops on the execution deadline without needing a live controller, or on a TERM/HUP sent to the wrapper. The controller service cancels expired runs. A received cancellation never counts as an exit receipt.
+
+Only the wrapper signals its own unreaped child. After a wrapper crash, the node does **not** signal a stored numeric PID or infer exit from an absent pane. Without a durable exit receipt the slot remains uncertain and occupied. Older launchers that replaced themselves with the runtime also lack that receipt. Recovery of those cases and conservative resource cleanup remain pending.
+
+The receipt's scope is `native_process`: it confirms that the owned CLI/launcher has exited, not that a remote provider stopped computing or that detached descendants have been audited. Cancellation addresses the owned process group; cleanup must separately establish that resources are no longer in use. Worktrees and Herdr panes are retained in this checkpoint.
+
+If a reviewer exits before submitting its review, call `request_review` again with the current integration revision after its exit receipt has been applied. A live reviewer or completed review cannot be silently replaced. For an `interrupted` or `changes_requested` task, `retry_task` takes `task`, `expected_revision` and optional replacement `contract`. It requires all prior attempts to be stopped and no pending verification/apply effect, preserves immutable results and marks old candidates superseded. The next dispatch uses a new attempt, current integration base and current memory. Reviewer attempts do not consume the author's attempt budget.
+
+`complete_run` takes `run` and `expected_revision`. It requires every task completed/integrated, no occupied process slots and no active candidate/apply intent. Completion releases the canonical repository binding while retaining refs and audit history. Cancelled-run binding recovery and resource deletion remain pending.
+
+Terminal handling follows Rust's [Unix process-group API](https://doc.rust-lang.org/std/os/unix/process/trait.CommandExt.html#tymethod.process_group) and [foreground-terminal semantics](https://man7.org/linux/man-pages/man3/tcsetpgrp.3.html). A real pseudoterminal test verifies interactive input and restoration without launching a model.
 
 ## Verify, review and integrate code
 
@@ -159,7 +171,7 @@ For one explicit reconciliation, the owner can use `control verify --credential 
 
 If Git advances but the SQLite receipt fails, a later reconciliation recognizes the exact candidate at the owned ref and records the existing effect. It does not apply it a second time. Keep the controller's integration refs reserved for this service: independent Git clients do not participate in its SQLite lock.
 
-This pipeline currently supports `code` contracts. Artifact verification, automated repair/replanning, replacement of failed reviewers, release of repository bindings at run completion and conservative worktree cleanup remain pending. A submitted review or integrated task does not prove that either runtime has stopped.
+This pipeline currently supports `code` contracts. Artifact verification, abandoning an uncertain in-flight verifier and conservative worktree cleanup remain pending. Repair dispatch and reviewer replacement use the explicit lifecycle decisions above. A submitted review or integrated task does not prove that either runtime has stopped.
 
 ## Memory
 

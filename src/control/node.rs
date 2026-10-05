@@ -89,7 +89,11 @@ impl NodeStore {
                 )?;
             }
             2 => (),
+            3 => (),
             _ => bail!("unsupported node schema"),
+        }
+        if version <= 2 {
+            tx.execute_batch("CREATE TABLE runtime_processes (attempt TEXT PRIMARY KEY REFERENCES jobs(id), epoch INTEGER NOT NULL, state TEXT NOT NULL, doc TEXT NOT NULL) STRICT; PRAGMA user_version=3;")?;
         }
         let existing: (String, String, String, u64) = tx.query_row(
             "SELECT owner,node,key,epoch FROM authority WHERE singleton=1",
@@ -200,7 +204,8 @@ impl NodeStore {
                     .optional()?;
                 match old {
                     Some((epoch, state))
-                        if epoch > order.attempt.epoch && state == "cancelling" =>
+                        if epoch > order.attempt.epoch
+                            && ["cancelling", "stopped"].contains(&state.as_str()) =>
                     {
                         // A cancellation tombstone prevents delayed execution after a partition.
                         tx.execute(

@@ -14,6 +14,13 @@ fn advance_jobs(
     runtime: &RuntimeConfig,
 ) -> Result<Value> {
     let (mut store, key) = access.open()?;
+    let lifecycle = match super::lifecycle::reconcile(&mut store, runtime, &key) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("node lifecycle: {error}");
+            json!({"unresolved":error.to_string()})
+        }
+    };
     let jobs: Vec<(String, String)> = {
         let mut q=store.connection.prepare("SELECT id,state FROM jobs WHERE state IN ('reserved','preparing','prepared','launching','awaiting_binding') ORDER BY rowid LIMIT 128")?;
         q.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
@@ -37,7 +44,7 @@ fn advance_jobs(
             }
         }
     }
-    Ok(json!({"attempts":results}))
+    Ok(json!({"attempts":results,"lifecycle":lifecycle}))
 }
 
 pub async fn run(
@@ -111,6 +118,7 @@ pub async fn controller(
     let outcome=async{
         let mut last_rowid=0i64;
         loop {
+            if let Err(error)=super::lifecycle::expire_runs(&mut store){eprintln!("deadline reconciliation: {error}");}
             let relayed=super::transport::controller_once(&mut store,&broker).await;
             if let Err(error)=&relayed{eprintln!("controller relay: {error}");}
             anyhow::ensure!(!api.is_finished(),"controller API stopped before verification");
@@ -136,6 +144,7 @@ pub async fn controller(
                         };break;
                     }
                     _=interval.tick()=>{
+                        if let Err(error)=super::lifecycle::expire_runs(&mut store){eprintln!("deadline reconciliation: {error}");}
                         if let Err(error)=super::transport::controller_once(&mut store,&broker).await{eprintln!("controller relay during verification: {error}");}
                         if api.is_finished(){
                             let _=work.await?;

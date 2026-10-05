@@ -745,13 +745,13 @@ fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) -> Result<Val
                 |r| r.get(0),
             )?;
             ensure!(on_profile < prof.limit, "profile capacity exhausted");
-            let number: u64 = tx.query_row(
-                "SELECT COALESCE(MAX(number),0)+1 FROM attempts WHERE task=?1",
+            let (number, worker_count): (u64,u64) = tx.query_row(
+                "SELECT COALESCE(MAX(number),0)+1,COALESCE(SUM(role='worker'),0) FROM attempts WHERE task=?1",
                 [task],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?,r.get(1)?)),
             )?;
             ensure!(
-                number <= r.policy.max_attempts as u64,
+                worker_count < r.policy.max_attempts as u64,
                 "attempt budget exhausted"
             );
             let a = Attempt {
@@ -1002,6 +1002,89 @@ fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) -> Result<Val
             save_run(tx, &r)?;
             Ok(serde_json::to_value(r)?)
         }
+        Mutation::RetryTask {
+            task,
+            expected_revision,
+            contract,
+        } => {
+            let mut t: Task = document(tx, "tasks", task)?;
+            supervise(p, &t.run)?;
+            revision(t.revision, *expected_revision)?;
+            let r: Run = document(tx, "runs", &t.run)?;
+            active_run(&r)?;
+            ensure!(
+                ["interrupted", "changes_requested"].contains(&t.state.as_str()),
+                "task does not need a retry"
+            );
+            let busy:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE task=?1 AND active=1) OR EXISTS(SELECT 1 FROM integrations WHERE task=?1 AND state IN ('preparing','checking','applying'))",[task],|r|r.get(0))?;
+            ensure!(
+                !busy,
+                "prior processes or verification effects remain unresolved"
+            );
+            if let Some(contract) = contract {
+                contract.validate(&r.policy)?;
+                t.contract = contract.clone();
+                t.contract_hash = digest(&serde_json::to_vec(contract)?);
+            }
+            let mut q =
+                tx.prepare("SELECT doc FROM integrations WHERE task=?1 AND state<>'applied'")?;
+            let candidates: Vec<String> = q
+                .query_map([task], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            for doc in candidates {
+                let mut i: Integration = serde_json::from_str(&doc)?;
+                i.state = "superseded".into();
+                i.revision += 1;
+                super::verification::save(tx, &i)?;
+            }
+            t.state = "planned".into();
+            t.revision += 1;
+            save_task(tx, &t)?;
+            Ok(serde_json::to_value(t)?)
+        }
+        Mutation::StopAttempt {
+            attempt,
+            expected_epoch,
+        } => {
+            let mut a: Attempt = document(tx, "attempts", attempt)?;
+            supervise(p, &a.run)?;
+            revision(a.epoch, *expected_epoch)?;
+            ensure!(
+                !["stopped", "cancelling"].contains(&a.state.as_str()),
+                "attempt already stopping or stopped"
+            );
+            a.epoch += 1;
+            a.state = "cancelling".into();
+            save_attempt(tx, &a)?;
+            tx.execute("UPDATE principals SET active=0 WHERE attempt=?1", [attempt])?;
+            effect(tx, &a.node, "cancel", &json!({"attempt":a}), now() + 86400)?;
+            Ok(serde_json::to_value(a)?)
+        }
+        Mutation::CompleteRun {
+            run,
+            expected_revision,
+        } => {
+            supervise(p, run)?;
+            let mut r: Run = document(tx, "runs", run)?;
+            revision(r.revision, *expected_revision)?;
+            ensure!(
+                ["active", "paused"].contains(&r.state.as_str()),
+                "run already closed"
+            );
+            let unfinished: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM tasks WHERE run=?1 AND state NOT IN ('integrated','completed')) OR EXISTS(SELECT 1 FROM attempts WHERE run=?1 AND active=1) OR EXISTS(SELECT 1 FROM integrations WHERE run=?1 AND state IN ('preparing','checking','awaiting_review','verified','applying'))",[run],|r|r.get(0))?;
+            ensure!(
+                !unfinished,
+                "tasks, processes or integration intents remain unfinished"
+            );
+            r.state = "completed".into();
+            r.revision += 1;
+            save_run(tx, &r)?;
+            tx.execute(
+                "UPDATE repository_bindings SET active=0 WHERE run=?1",
+                [run],
+            )?;
+            Ok(serde_json::to_value(r)?)
+        }
         Mutation::ObserveStopped { attempt, epoch } => {
             let mut a: Attempt = document(tx, "attempts", attempt)?;
             node(p, &a, *epoch)?;
@@ -1010,6 +1093,12 @@ fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) -> Result<Val
             save_attempt(tx, &a)?;
             tx.execute("UPDATE attempts SET active=0 WHERE id=?1", [attempt])?;
             tx.execute("UPDATE principals SET active=0 WHERE attempt=?1", [attempt])?;
+            let mut task: Task = document(tx, "tasks", &a.task)?;
+            if a.role == "worker" && task.state == "executing" {
+                task.state = "interrupted".into();
+                task.revision += 1;
+                save_task(tx, &task)?;
+            }
             let mut r: Run = document(tx, "runs", &a.run)?;
             if r.state == "cancelling" {
                 let remaining: u32 = tx.query_row(

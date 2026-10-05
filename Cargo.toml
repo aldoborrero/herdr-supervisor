@@ -26,6 +26,7 @@ bs58 = "=0.5.1"
 async-nats = "0.50.0"
 tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "time", "net", "io-util", "signal"] }
 futures-util = "0.3.34"
+libc = "=0.2.189"
 
 [dev-dependencies]
 tempfile = "3"

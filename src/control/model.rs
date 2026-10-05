@@ -357,6 +357,19 @@ pub enum Mutation {
         attempt: String,
         epoch: u64,
     },
+    StopAttempt {
+        attempt: String,
+        expected_epoch: u64,
+    },
+    CompleteRun {
+        run: String,
+        expected_revision: u64,
+    },
+    RetryTask {
+        task: String,
+        expected_revision: u64,
+        contract: Option<Contract>,
+    },
     ProposeMemory {
         run: String,
         topic: String,

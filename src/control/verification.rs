@@ -107,6 +107,12 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
                 a.role == "worker" && a.contract_hash == t.contract_hash,
                 "result attempt no longer matches task"
             );
+            let latest: u64 = tx.query_row(
+                "SELECT MAX(number) FROM attempts WHERE task=?1 AND role='worker'",
+                [&t.id],
+                |r| r.get(0),
+            )?;
+            ensure!(a.number == latest, "result belongs to a superseded attempt");
             ensure!(
                 ["awaiting_review", "changes_requested"].contains(&t.state.as_str()),
                 "task is not awaiting verification"
@@ -173,13 +179,13 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
                 "candidate is not awaiting independent review"
             );
             let prior: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM review_assignments WHERE integration=?1)",
+                "SELECT EXISTS(SELECT 1 FROM review_assignments ra JOIN attempts a ON a.id=ra.attempt WHERE ra.integration=?1 AND (a.active=1 OR EXISTS(SELECT 1 FROM reviews r WHERE r.id=a.id)))",
                 [id],
                 |r| r.get(0),
             )?;
             ensure!(
                 !prior,
-                "candidate already has a reviewer; request a new verification cycle to replace it"
+                "candidate already has a live reviewer or a completed review"
             );
             let prof = r
                 .policy
