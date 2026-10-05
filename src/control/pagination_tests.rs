@@ -147,11 +147,12 @@ async fn paginated_context_preserves_all_large_tasks_and_separates_growing_polic
             assert!(std::time::Instant::now() < until);
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
-        for collection in [Collection::Attempts, Collection::PendingNotices, Collection::Memory] {
+        for collection in Collection::ALL {
             let panel = binding.page(collection, None).unwrap();
             assert_eq!(panel["kind"],"project_page");
             assert_eq!(panel["_page"]["collection"],collection.name());
-            assert!(panel.get("tasks").is_none());
+            if collection != Collection::Tasks { assert!(panel.get("tasks").is_none()); }
+            else { assert!(!panel["tasks"].as_array().unwrap().is_empty()); assert!(panel["_page"]["next_cursor"].is_string()); }
             assert!(serde_json::to_vec(&panel).unwrap().len() <= 3 * PAGE_BYTES);
         }
         let cursor=overview["collections"]["tasks"]["cursor"].clone();

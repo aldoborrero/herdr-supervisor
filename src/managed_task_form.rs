@@ -4,15 +4,17 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::Value;
 use std::collections::BTreeSet;
 
-use crate::control::model::{Contract, Mutation, Run, Task, identifier};
+use crate::control::model::{Contract, Mutation, Task, identifier};
 
-use crate::managed_form::{Field, Submission};
+use crate::managed_form::{Field, RunScope, Submission};
 
 pub struct Form {
     pub slug: String,
     pub fields: Vec<Field>,
     pub selected: usize,
-    run: Run,
+    run: RunScope,
+    checks: BTreeSet<String>,
+    complete_index: bool,
     edit: Option<(String, u64)>,
     dependencies: BTreeSet<String>,
     submitted: Option<Submission>,
@@ -27,13 +29,27 @@ pub enum Outcome {
 impl Form {
     pub fn new(slug: &str, context: &Value) -> Result<Self> {
         crate::project::validate_slug(slug)?;
-        let run: Run = serde_json::from_value(context["run"].clone())?;
+        let run = RunScope::read(slug, context)?;
         ensure!(run.project == slug, "task form belongs to another project");
         ensure!(
             run.state == "active",
             "task creation requires an active run"
         );
-        run.policy.validate()?;
+        let complete_index = context["task_index_complete"] != false;
+        let checks: BTreeSet<String> =
+            if let Some(checks) = context.get("checks_allowed").filter(|v| !v.is_null()) {
+                serde_json::from_value(checks.clone())?
+            } else {
+                context["run"]["policy"]["checks"]
+                    .as_object()
+                    .context("authorized checks missing")?
+                    .keys()
+                    .cloned()
+                    .collect()
+            };
+        for name in &checks {
+            identifier(name)?;
+        }
         let mut dependencies = BTreeSet::new();
         let mut choices = Vec::new();
         for task in context["tasks"].as_array().context("task index missing")? {
@@ -46,21 +62,23 @@ impl Form {
                 task["contract"]["title"].as_str().unwrap_or_default()
             ));
         }
-        let checks = run.policy.checks.keys().cloned().collect::<Vec<_>>();
+        let check_names = checks.iter().cloned().collect::<Vec<_>>();
         let fields = vec![
             Field { label: "Title", value: String::new(), hint: "A short name for this task (up to 512 UTF-8 bytes).".into() },
             Field { label: "Instructions", value: String::new(), hint: "The work this agent should do; its contract is fixed when dispatched.".into() },
             Field { label: "Criteria", value: "[]".into(), hint: "Acceptance criteria as JSON strings, e.g. [\"Parser rejects invalid input\",\"Tests pass\"]. At least one is required.".into() },
             Field { label: "Result", value: "code".into(), hint: "Left/right: code (Git commit) or artifact (verified files).".into() },
-            Field { label: "Checks", value: serde_json::to_string(&checks)?, hint: format!("JSON list of policy check names. Available: {}", checks.join(", ")) },
+            Field { label: "Checks", value: serde_json::to_string(&check_names)?, hint: format!("JSON list of policy check names. Available: {}", check_names.join(", ")) },
             Field { label: "Memory topics", value: "[]".into(), hint: "JSON list of memory topic IDs; approved preferences are included automatically.".into() },
-            Field { label: "Dependencies", value: "[]".into(), hint: format!("JSON list of predecessor task IDs; [] for none. Available: {}", choices.join("; ")) },
+            Field { label: "Dependencies", value: "[]".into(), hint: if complete_index {format!("JSON list of predecessor task IDs; [] for none. Available: {}", choices.join("; "))} else {"JSON list of task IDs from any page; the controller checks run scope and cycles. [] for none.".into()} },
         ];
         Ok(Self {
             slug: slug.into(),
             fields,
             selected: 0,
             run,
+            checks,
+            complete_index,
             edit: None,
             dependencies,
             submitted: None,
@@ -78,17 +96,22 @@ impl Form {
         let task: Task = serde_json::from_value(value.clone())?;
         ensure!(task.state == "planned", "only planned tasks can be edited");
         let mut predecessors = Vec::new();
-        for edge in context["dependencies"]
-            .as_array()
-            .context("dependency index missing")?
-        {
-            if edge["task"] == task.id {
-                predecessors.push(
-                    edge["predecessor"]
-                        .as_str()
-                        .context("invalid predecessor")?
-                        .to_string(),
-                );
+        if context["task_index_complete"] == false {
+            predecessors = serde_json::from_value(value["dependencies"].clone())
+                .context("complete task dependencies missing")?;
+        } else {
+            for edge in context["dependencies"]
+                .as_array()
+                .context("dependency index missing")?
+            {
+                if edge["task"] == task.id {
+                    predecessors.push(
+                        edge["predecessor"]
+                            .as_str()
+                            .context("invalid predecessor")?
+                            .to_string(),
+                    );
+                }
             }
         }
         form.fields[0].value = task.contract.title;
@@ -99,14 +122,18 @@ impl Form {
         form.fields[5].value = serde_json::to_string(&task.contract.memory_topics)?;
         form.fields[6].value = serde_json::to_string(&predecessors)?;
         form.dependencies.remove(&task.id);
-        form.fields[6].hint = format!(
-            "JSON list of predecessor task IDs; [] removes all. Available: {}",
-            form.dependencies
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+        form.fields[6].hint = if !form.complete_index {
+            "JSON list of task IDs from any page; [] removes all dependencies. The controller checks run scope and cycles.".into()
+        } else {
+            format!(
+                "JSON list of predecessor task IDs; [] removes all. Available: {}",
+                form.dependencies
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
         form.edit = Some((task.id, task.revision));
         Ok(form)
     }
@@ -188,12 +215,21 @@ impl Form {
             checks: list(4)?,
             memory_topics: list(5)?,
         };
-        contract.validate(&self.run.policy)?;
+        contract.validate_allowed_checks(|name| self.checks.contains(name))?;
         let dependencies = list(6)?;
         ensure!(
-            dependencies.iter().all(|id| self.dependencies.contains(id)),
+            !self.complete_index || dependencies.iter().all(|id| self.dependencies.contains(id)),
             "Choose dependency IDs from this run's captured task list"
         );
+        for dependency in &dependencies {
+            identifier(dependency)?;
+            ensure!(
+                self.edit
+                    .as_ref()
+                    .is_none_or(|(task, _)| task != dependency),
+                "task cannot depend on itself"
+            );
+        }
         let command = if let Some((task, revision)) = &self.edit {
             Mutation::AmendTask {
                 task: task.clone(),

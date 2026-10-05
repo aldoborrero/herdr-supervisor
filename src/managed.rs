@@ -618,7 +618,9 @@ pub fn page_collections(
         Section::Threads => &[Attempts],
         Section::Inbox => &[PendingNotices, Notices],
         Section::Memory => &[Memory, PendingMemory, MemoryProposals],
-        _ => &[],
+        Section::Tasks => &[Tasks, Dependencies, Integrations, Checks, Reviews, Results],
+        Section::Settings => &[Profiles, Nodes, CoordinatorLaunches],
+        Section::Routines => &[PolicyChecks],
     }
 }
 
@@ -789,10 +791,12 @@ fn panel_rows(
             }
         }
         Section::Tasks => {
-            if c["run"]["state"] == "active" {
+            if c["run"]["state"] == "active"
+                && (c["_page"].is_null() || c["_page"]["collection"] == "tasks")
+            {
                 add(
                     "Create a task…".into(),
-                    json!({"_task_form":{"run":c["run"],"tasks":c["tasks"],"dependencies":c["dependencies"]}}),
+                    json!({"_task_form":{"run":c["run"],"tasks":c["tasks"],"dependencies":c["dependencies"],"task_index_complete":c["task_index_complete"],"checks_allowed":c["checks_allowed"]}}),
                     vec![],
                 );
             }
@@ -835,6 +839,27 @@ fn panel_rows(
                     vec![],
                 );
             }
+            for field in ["dependencies", "checks", "reviews", "results"] {
+                if c["_page"]["collection"] == field {
+                    for record in c[field].as_array().into_iter().flatten() {
+                        let title = if field == "dependencies" {
+                            format!(
+                                "{} requires {}",
+                                record["task"].as_str().unwrap_or_default(),
+                                record["predecessor"].as_str().unwrap_or_default()
+                            )
+                        } else {
+                            format!(
+                                "{} {} · {}",
+                                field,
+                                record["id"].as_str().unwrap_or_default(),
+                                record["state"].as_str().unwrap_or("record")
+                            )
+                        };
+                        add(title, record.clone(), vec![]);
+                    }
+                }
+            }
         }
         Section::Inbox => {
             for n in c["notices"].as_array().into_iter().flatten() {
@@ -859,11 +884,20 @@ fn panel_rows(
                 );
             }
         }
-        Section::Routines => add(
-            "Scheduling is controlled by the run policy".into(),
-            c["run"]["policy"].clone(),
-            vec![],
-        ),
+        Section::Routines => {
+            add(
+                "Scheduling is controlled by the run policy".into(),
+                c["run"]["policy"].clone(),
+                vec![],
+            );
+            for check in c["policy_checks"].as_array().into_iter().flatten() {
+                add(
+                    format!("Check {}", check["name"].as_str().unwrap_or_default()),
+                    check.clone(),
+                    vec![],
+                );
+            }
+        }
         Section::Settings => {
             let params = json!({"run":run,"expected_revision":c["run"]["revision"]});
             let mut actions = Vec::new();
@@ -894,20 +928,27 @@ fn panel_rows(
             add("Run objective and policy".into(), c["run"].clone(), actions);
             let editable = c["actor_role"] == "owner"
                 && (c["run"]["state"] == "active" || c["run"]["state"] == "paused");
-            if editable {
+            if editable && (c["_page"].is_null() || c["_page"]["collection"] == "profiles") {
                 add(
                     "Create a run profile…".into(),
-                    json!({"_profile_form":{"run":c["run"],"actor_role":c["actor_role"]}}),
+                    json!({"_profile_form":{"run":c["run"],"actor_role":c["actor_role"],"profiles":c["profiles"]}}),
                     vec![],
                 );
             }
-            if let Some(profiles) = c["run"]["policy"]["profiles"].as_object() {
+            if let Some(profiles) = c["profiles"]
+                .as_object()
+                .or_else(|| c["run"]["policy"]["profiles"].as_object())
+            {
                 for (name, profile) in profiles {
                     let mut doc = json!({"name":name,"profile":profile});
                     let mut actions = vec![];
                     if editable {
                         doc["_profile_name"] = json!(name);
-                        if profiles.len() > 1 {
+                        if c["collections"]["profiles"]["count"]
+                            .as_u64()
+                            .unwrap_or(profiles.len() as u64)
+                            > 1
+                        {
                             actions.push(action('d',"remove profile",json!({"method":"set_profile","params":{"run":run,"expected_revision":c["run"]["revision"],"name":name,"profile":null}}),true)?);
                         }
                     }
@@ -926,7 +967,21 @@ fn panel_rows(
             if let Some(recovery) = recovery_summary(c) {
                 add(recovery, c["repository_recovery"].clone(), vec![]);
             }
-            add("Execution nodes".into(), c["nodes"].clone(), vec![]);
+            if c["_page"].is_null() {
+                add("Execution nodes".into(), c["nodes"].clone(), vec![]);
+            } else {
+                for node in c["nodes"].as_array().into_iter().flatten() {
+                    add(
+                        format!(
+                            "Node {} · {} active",
+                            node["id"].as_str().unwrap_or_default(),
+                            node["active_attempts"]
+                        ),
+                        node.clone(),
+                        vec![],
+                    );
+                }
+            }
             for launch in c["coordinator_launches"].as_array().into_iter().flatten() {
                 add(
                     format!(

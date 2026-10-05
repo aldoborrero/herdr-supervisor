@@ -632,4 +632,26 @@ fn run_profiles_owner_update_is_visible_and_notifies_coordinator_once() {
             .iter()
             .any(|n| n["kind"] == "set_profile")
     );
+    let revision = owner["run"]["revision"].as_u64().unwrap();
+    let created = request(
+        &f.owner,
+        Mutation::CreateProfile {
+            run: f.run.clone(),
+            expected_revision: revision,
+            name: "created".into(),
+            profile: policy().profiles["auto"].clone(),
+        },
+    );
+    f.store.apply(&created).unwrap();
+    assert_eq!(coordinator::collect(&mut f.store).unwrap(), 1);
+    f.store.apply(&created).unwrap();
+    assert_eq!(coordinator::collect(&mut f.store).unwrap(), 0);
+    let context = coordinator::context(&f.store, &f.supervisor, &f.run).unwrap();
+    assert!(
+        context["notices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["kind"] == "create_profile")
+    );
 }

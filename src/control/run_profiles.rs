@@ -93,14 +93,20 @@ pub(super) fn change(
     command: &Mutation,
 ) -> Result<serde_json::Value> {
     own(principal)?;
-    let Mutation::SetProfile {
-        run,
-        expected_revision,
-        name,
-        profile,
-    } = command
-    else {
-        anyhow::bail!("not a profile mutation");
+    let (run, expected_revision, name, profile, create_only) = match command {
+        Mutation::SetProfile {
+            run,
+            expected_revision,
+            name,
+            profile,
+        } => (run, expected_revision, name, profile.as_ref(), false),
+        Mutation::CreateProfile {
+            run,
+            expected_revision,
+            name,
+            profile,
+        } => (run, expected_revision, name, Some(profile), true),
+        _ => anyhow::bail!("not a profile decision"),
     };
     identifier(name)?;
     let mut run: Run = document(tx, "runs", run)?;
@@ -108,6 +114,10 @@ pub(super) fn change(
     ensure!(
         ["active", "paused"].contains(&run.state.as_str()) && run.deadline > now(),
         "run is expired or closed"
+    );
+    ensure!(
+        !create_only || !run.policy.profiles.contains_key(name),
+        "profile already exists; open its editor instead"
     );
     if let Some(profile) = profile {
         run.policy.profiles.insert(name.clone(), profile.clone());
@@ -120,7 +130,11 @@ pub(super) fn change(
     run.policy.validate()?;
     run.revision += 1;
     save_run(tx, &run)?;
-    Ok(serde_json::to_value(run)?)
+    if create_only {
+        Ok(serde_json::json!({"id":run.id,"revision":run.revision,"name":name,"profile":profile}))
+    } else {
+        Ok(serde_json::to_value(run)?)
+    }
 }
 
 pub(super) fn policy_digest(policy: &Policy, contract_hash: &str) -> Result<String> {

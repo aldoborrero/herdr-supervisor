@@ -80,7 +80,7 @@ impl Collection {
     }
     fn source(self) -> String {
         match self {
-            Self::Tasks => "SELECT rowid AS key,doc FROM tasks WHERE run=?1".into(),
+            Self::Tasks => "SELECT t.rowid AS key,json_set(t.doc,'$.dependencies',json((SELECT json_group_array(d.predecessor) FROM dependencies d WHERE d.task=t.id))) AS doc FROM tasks t WHERE t.run=?1".into(),
             Self::Attempts => "SELECT a.rowid AS key,json_set(a.doc,'$.profile_snapshot',json(p.profile)) AS doc FROM attempts a LEFT JOIN attempt_profiles p ON p.attempt=a.id WHERE a.run=?1".into(),
             Self::Results => "SELECT r.rowid AS key,r.doc FROM results r JOIN tasks t ON t.id=r.task WHERE t.run=?1".into(),
             Self::Integrations => "SELECT rowid AS key,doc FROM integrations WHERE run=?1".into(),
@@ -350,13 +350,6 @@ pub fn project_page(
     cursor: Option<&str>,
 ) -> Result<Value> {
     use Collection::*;
-    ensure!(
-        matches!(
-            collection,
-            Attempts | Notices | PendingNotices | Memory | PendingMemory | MemoryProposals
-        ),
-        "collection is not a paginated project panel"
-    );
     let tx = store.connection.unchecked_transaction()?;
     let mut context = read_overview(&tx, token, run)?;
     let mut page = read_page(&tx, token, run, collection, cursor, 50)?;
@@ -370,6 +363,30 @@ pub fn project_page(
     page["shown"] = json!(values.len());
     context["kind"] = json!("project_page");
     match collection {
+        Tasks => {
+            let checks:String = tx.query_row("SELECT json_group_array(j.key) FROM runs r,json_each(r.doc,'$.policy.checks') j WHERE r.id=?1",[run],|r|r.get(0))?;
+            ensure!(
+                checks.len() <= ITEM_BYTES,
+                "authorized check index exceeds form budget"
+            );
+            context["checks_allowed"] = serde_json::from_str(&checks)?;
+            context["task_index_complete"] = json!(false);
+            context["tasks"] = json!(values);
+        }
+        Profiles => {
+            let mut profiles = serde_json::Map::new();
+            for mut value in values {
+                profiles.insert(
+                    value["name"].as_str().context("profile name")?.to_string(),
+                    value["value"].take(),
+                );
+            }
+            context["profiles"] = json!(profiles);
+        }
+        PolicyChecks | Nodes | CoordinatorLaunches | Dependencies | Results | Integrations
+        | Checks | Reviews => {
+            context[collection.name()] = json!(values);
+        }
         Attempts => context["attempts"] = json!(values),
         Notices | PendingNotices => context["notices"] = json!(values),
         Memory => {
@@ -398,7 +415,6 @@ pub fn project_page(
             context["memory_topics"] = json!(revisions);
             context["memory_proposals"] = json!(values);
         }
-        _ => unreachable!(),
     }
     context["_page"] = page;
     ensure!(

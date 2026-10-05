@@ -198,7 +198,7 @@ fn project_pages_recheck_credentials_and_cursors_and_never_offer_stale_actions()
         )
         .is_err()
     );
-    assert!(pagination::project_page(&f.store, &f.owner, &f.run, Collection::Tasks, None).is_err());
+    assert!(pagination::project_page(&f.store, &f.owner, &f.run, Collection::Tasks, None).is_ok());
     let rows = managed::page_view(
         "demo",
         Section::Threads,

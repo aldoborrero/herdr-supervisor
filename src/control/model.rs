@@ -51,6 +51,17 @@ pub struct Profile {
     pub limit: u32,
 }
 
+impl Profile {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            ["codex", "claude", "pi"].contains(&self.runtime.as_str()),
+            "unsupported runtime"
+        );
+        ensure!(self.limit > 0, "profile limit is zero");
+        super::runtime::validate_args(&self.runtime, &self.argv)
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Policy {
@@ -93,12 +104,7 @@ impl Policy {
         );
         for (name, p) in &self.profiles {
             identifier(name)?;
-            ensure!(
-                ["codex", "claude", "pi"].contains(&p.runtime.as_str()),
-                "unsupported runtime"
-            );
-            ensure!(p.limit > 0, "profile limit is zero");
-            super::runtime::validate_args(&p.runtime, &p.argv)?;
+            p.validate()?;
         }
         for (name, argv) in &self.checks {
             identifier(name)?;
@@ -124,6 +130,10 @@ pub struct Contract {
 
 impl Contract {
     pub fn validate(&self, policy: &Policy) -> Result<()> {
+        self.validate_allowed_checks(|name| policy.checks.contains_key(name))
+    }
+
+    pub fn validate_allowed_checks(&self, allowed: impl Fn(&str) -> bool) -> Result<()> {
         ensure!(
             !self.title.trim().is_empty() && self.title.len() <= 512,
             "invalid title"
@@ -141,10 +151,7 @@ impl Contract {
             "invalid contract kind"
         );
         for check in &self.checks {
-            ensure!(
-                policy.checks.contains_key(check),
-                "check is not authorized by run policy"
-            );
+            ensure!(allowed(check), "check is not authorized by run policy");
         }
         for topic in &self.memory_topics {
             identifier(topic)?;
@@ -336,6 +343,12 @@ pub enum Mutation {
         base_oid: String,
         objective: String,
         policy: Policy,
+    },
+    CreateProfile {
+        run: String,
+        expected_revision: u64,
+        name: String,
+        profile: Profile,
     },
     SetProfile {
         run: String,

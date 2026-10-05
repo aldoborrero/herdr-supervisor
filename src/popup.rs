@@ -3691,8 +3691,9 @@ mod tests {
                     let request: serde_json::Value = serde_json::from_str(&line).unwrap();
                     if request["op"] == "coordinator_overview"
                         || request["op"] == "coordinator_context"
+                        || (request["op"] == "project_page" && request["collection"] == "tasks")
                     {
-                        writeln!(stream, "{}", json!({"data":{"kind":"paginated_context","run":{"id":"run","state":"active"},"collections":{"tasks":{"count":0}},"active_attempts":1}})).unwrap();
+                        writeln!(stream, "{}", json!({"data":{"kind":"paginated_context","run":{"id":"run","state":"active"},"collections":{"tasks":{"count":0}},"active_attempts":1,"_page":{"collection":"tasks","shown":0,"next_cursor":null}}})).unwrap();
                         continue;
                     }
                     break (stream, request);
@@ -3909,6 +3910,84 @@ mod tests {
         assert_eq!(world.runner.count("managed apply"), 0);
         assert_eq!(world.runner.count("thread stop"), 0);
         server.join().unwrap();
+    }
+
+    #[test]
+    fn paginated_task_and_profile_rows_open_editors_without_aggregate_run_context() {
+        use crate::{control::pagination::Collection, managed_refresh::View};
+        use serde_json::json;
+        let world = crate::scenarios::World::new();
+        let ctx = world.ctx();
+        let mut popup = Popup::new(&ctx, None, String::new());
+        let mut tasks = crate::managed_task_form::tests::edit_context();
+        tasks["run"]["policy"]
+            .as_object_mut()
+            .unwrap()
+            .remove("profiles");
+        tasks["run"]["policy"]
+            .as_object_mut()
+            .unwrap()
+            .remove("checks");
+        tasks["task_index_complete"] = json!(false);
+        tasks["checks_allowed"] = json!(["test"]);
+        tasks["tasks"].as_array_mut().unwrap().truncate(1);
+        tasks["tasks"][0]["dependencies"] = json!(["off-page-task"]);
+        tasks.as_object_mut().unwrap().remove("dependencies");
+        tasks["_page"] = json!({"collection":"tasks","shown":1});
+        tasks["collections"] = json!({"tasks":{"count":80}});
+        popup.section = 1;
+        popup.rows = crate::managed::page_view(
+            "demo",
+            Section::Tasks,
+            Collection::Tasks,
+            View::Current(tasks),
+        );
+        popup.selected = popup
+            .rows
+            .iter()
+            .position(|row| matches!(&row.kind,RowKind::Managed {doc,..} if doc["id"]=="task-1"))
+            .unwrap();
+        popup.key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        assert!(
+            matches!(&popup.mode,Mode::TaskForm(form) if form.fields[6].value==r#"["off-page-task"]"# && form.fields[4].value==r#"["test"]"#)
+        );
+        let mut rendered = Vec::new();
+        popup.draw(&mut rendered).unwrap();
+        assert!(
+            String::from_utf8(rendered)
+                .unwrap()
+                .contains("Original title")
+        );
+        popup.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let mut profiles = crate::managed_profile_form::tests::context();
+        let last = profiles["run"]["policy"]["profiles"]["second"].clone();
+        profiles["run"]["policy"]
+            .as_object_mut()
+            .unwrap()
+            .remove("profiles");
+        profiles["run"]["policy"]
+            .as_object_mut()
+            .unwrap()
+            .remove("checks");
+        profiles["profiles"] = json!({"second":last});
+        profiles["_page"] = json!({"collection":"profiles","shown":1});
+        profiles["collections"] = json!({"profiles":{"count":51},"tasks":{"count":80}});
+        popup.section = 4;
+        popup.rows = crate::managed::page_view(
+            "demo",
+            Section::Settings,
+            Collection::Profiles,
+            View::Current(profiles),
+        );
+        popup.selected=popup.rows.iter().position(|row|matches!(&row.kind,RowKind::Managed {doc,actions,..} if doc["_profile_name"]=="second" && actions.iter().any(|a|a.key=='d'))).unwrap();
+        popup.key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        assert!(
+            matches!(&popup.mode,Mode::ProfileForm(form) if form.editing() && form.fields[0].value=="second" && form.fields[2].value==r#"["--model","original"]"#)
+        );
+        let mut rendered = Vec::new();
+        popup.draw(&mut rendered).unwrap();
+        assert!(String::from_utf8(rendered).unwrap().contains("second"));
+        assert_eq!(world.runner.count("managed apply"), 0);
     }
 
     #[test]

@@ -1963,3 +1963,6 @@ mod pagination_tests;
 
 #[path = "project_pages_tests.rs"]
 mod project_pages_tests;
+
+#[path = "editor_pages_tests.rs"]
+mod editor_pages_tests;

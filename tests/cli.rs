@@ -249,6 +249,51 @@ fn managed_create_publishes_one_bound_view_through_real_controller_ipc_without_l
     assert_eq!(hp(home.path(), &args).stdout, saved.stdout);
     let policy: Value = serde_json::from_slice(&saved.stdout).unwrap();
     assert_eq!(policy["policy"]["profiles"]["reviewer"]["runtime"], "pi");
+    let create_profile = serde_json::to_string(&json!({"method":"create_profile","params":{
+        "run":receipt["run"],"expected_revision":policy["revision"],"name":"extra",
+        "profile":{"runtime":"codex","argv":[],"limit":1}}}))
+    .unwrap();
+    let create_args = [
+        "--root",
+        root_arg,
+        "managed",
+        "apply",
+        "managed-demo",
+        "--operation",
+        "create-profile-cli",
+        "--request-json",
+        &create_profile,
+    ];
+    let created = hp(home.path(), &create_args);
+    assert!(
+        created.status.success(),
+        "{}",
+        String::from_utf8_lossy(&created.stderr)
+    );
+    assert_eq!(hp(home.path(), &create_args).stdout, created.stdout);
+    let created: Value = serde_json::from_slice(&created.stdout).unwrap();
+    assert_eq!(created["profile"]["runtime"], "codex");
+    assert!(created.get("policy").is_none());
+    let collision = serde_json::to_string(&json!({"method":"create_profile","params":{
+        "run":receipt["run"],"expected_revision":created["revision"],"name":"reviewer",
+        "profile":{"runtime":"claude","argv":[],"limit":1}}}))
+    .unwrap();
+    let collision = hp(
+        home.path(),
+        &[
+            "--root",
+            root_arg,
+            "managed",
+            "apply",
+            "managed-demo",
+            "--operation",
+            "collision-profile-cli",
+            "--request-json",
+            &collision,
+        ],
+    );
+    assert!(!collision.status.success());
+    assert!(String::from_utf8_lossy(&collision.stderr).contains("already exists"));
     let view = hp(
         home.path(),
         &["--root", root_arg, "managed", "status", "managed-demo"],

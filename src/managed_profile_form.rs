@@ -1,7 +1,7 @@
 //! Owner-only profile editor; existing assignments keep their reserved settings.
 use crate::{
-    control::model::{Mutation, Profile, Run, identifier},
-    managed_form::{Field, Submission},
+    control::model::{Mutation, Profile, identifier},
+    managed_form::{Field, RunScope, Submission},
 };
 use anyhow::{Context, Result, ensure};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -11,7 +11,8 @@ pub struct Form {
     pub slug: String,
     pub fields: Vec<Field>,
     pub selected: usize,
-    run: Run,
+    run: RunScope,
+    known_names: std::collections::BTreeSet<String>,
     existing: Option<String>,
     submitted: Option<Submission>,
 }
@@ -29,18 +30,23 @@ impl Form {
             context["actor_role"] == "owner",
             "Only the owner can edit run profiles"
         );
-        let run: Run = serde_json::from_value(context["run"].clone())?;
+        let run = RunScope::read(slug, context)?;
+        let profiles = context["profiles"]
+            .as_object()
+            .or_else(|| context["run"]["policy"]["profiles"].as_object())
+            .context("profile page missing")?;
         ensure!(run.project == slug, "profile belongs to another project");
         ensure!(
             ["active", "paused"].contains(&run.state.as_str()),
             "run is closed"
         );
         let profile = if let Some(name) = name {
-            run.policy
-                .profiles
-                .get(name)
-                .context("profile no longer exists")?
-                .clone()
+            serde_json::from_value::<Profile>(
+                profiles
+                    .get(name)
+                    .context("profile no longer exists")?
+                    .clone(),
+            )?
         } else {
             Profile {
                 runtime: "codex".into(),
@@ -59,6 +65,7 @@ impl Form {
             fields,
             selected: 0,
             run,
+            known_names: profiles.keys().cloned().collect(),
             existing: name.map(str::to_owned),
             submitted: None,
         })
@@ -129,7 +136,7 @@ impl Form {
             ensure!(existing == &name, "Existing profile names cannot change");
         } else {
             ensure!(
-                !self.run.policy.profiles.contains_key(&name),
+                !self.known_names.contains(&name),
                 "Profile already exists; open its editor instead"
             );
         }
@@ -143,18 +150,23 @@ impl Form {
                 .parse()
                 .context("Active limit must be a positive number")?,
         };
-        let mut policy = self.run.policy.clone();
-        policy.profiles.insert(name.clone(), profile.clone());
-        policy.validate()?;
-        let submission = Submission::new(
-            &self.slug,
-            &Mutation::SetProfile {
+        profile.validate()?;
+        let command = if self.existing.is_some() {
+            Mutation::SetProfile {
                 run: self.run.id.clone(),
                 expected_revision: self.run.revision,
                 name,
                 profile: Some(profile),
-            },
-        )?;
+            }
+        } else {
+            Mutation::CreateProfile {
+                run: self.run.id.clone(),
+                expected_revision: self.run.revision,
+                name,
+                profile,
+            }
+        };
+        let submission = Submission::new(&self.slug, &command)?;
         self.submitted = Some(submission.clone());
         Ok(submission)
     }

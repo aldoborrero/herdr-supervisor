@@ -6,7 +6,7 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 **Last completed full Nix gate:** commit `352dcece5a03e21c079b9a397bdf89a2073df9dd` passes package build and `nix flake check` on x86_64-linux, with 520 unit and 10 CLI tests offline. It includes paginated coordinator context and scoped legacy reads. Picker and panel changes require their follow-up package gate. This does not establish other platforms or completion of the remaining feature scope.
 
-The local implementation suite currently passes **526 unit tests and 10 CLI tests** (local suite with four test threads), including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
+The local implementation suite currently passes **530 unit tests and 10 CLI tests** (local suite with four test threads), including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
 
 | Requirement | Evidence | Limit |
 | --- | --- | --- |
@@ -386,3 +386,19 @@ Threads, Inbox and Memory now use an authenticated `project_page` projection wit
 The final local suite passes 526 unit tests (40.46 s), 10 CLI tests (24.83 s), strict all-target Clippy (24.23 s) and `nix fmt`. Focused tests also pass. The full package gate remains pending. Logs: `.direnv/project-pages-first.log`, `.direnv/project-pages-focused.log`, `.direnv/project-pages-final.log`, `.direnv/project-pages-fmt.log`. The earlier full-suite attempt stopped on an incorrect test-module import, corrected before the final run. Model/Herdr/mailer execution remains simulated.
 
 The prior pagination commit `352dcec` completed its x86_64-linux Nix gate with 520 unit tests (98.50 s) and 10 CLI tests (46.97 s). Output: `/nix/store/hdqmjhkxllfynphy0l0z6pnam2ghx97f-herdr-supervisor-0.1.0`. Logs: `.direnv/pagination-nix-build.log` and `.direnv/pagination-nix-check.log`.
+
+## Paginated task/profile editors and remaining panels
+
+All six managed popup sections now use page projections. Task records include their complete predecessor IDs in the same read snapshot; forms capture authorized check names and a small run scope rather than deserializing a partial policy as a complete Run. Off-page dependency IDs are checked authoritatively by the controller. Profiles use their own page, the global count controls removal, and `create_profile` prevents a new-profile form from silently replacing a hidden name. The new owner-only mutation shares revision, run scope, operation replay and journal transactions; its receipt is compact. Existing `set_profile` responses and synchronous full-context CLI reads retain their aggregate limits.
+
+| Evidence | Boundary established |
+| --- | --- |
+| `task_page_edit_preserves_off_page_dependencies_and_new_tasks_validate_them_authoritatively` | 61 tasks across pages, predecessor outside the visible 50, full amendment/replay, new task referring to another page, missing predecessor rollback and self-dependency refusal |
+| `profile_page_creation_cannot_replace_a_hidden_name_and_edits_capture_page_revision` | 51 profiles, a single-profile last page still permits removal when others exist, hidden-name rejection, edit/revision fencing, stale cursor refusal and compact idempotent creation receipt |
+| `create_profile_is_owner_scoped_and_rolls_back_with_its_audit_and_operation` | Supervisor/foreign-run denial, injected journal failure rolls back profile, revision and operation; exact retry succeeds once through the Projects API |
+| `paginated_task_and_profile_rows_open_editors_without_aggregate_run_context` | Actual popup key handling and rendered forms from headers without profile/check maps; off-page predecessors and exact argv retained; no controller decisions submitted |
+| Extended native-coordinator profile notice regression | `create_profile` produces one coordinator notice, including after an operation replay |
+| Extended real CLI workflow | `create_profile` through `managed apply`, stable replay receipt and collision rejection beside legacy `set_profile` behavior |
+| Extended large-context IPC regression | Every project collection remains bounded while the legacy context exceeds 4 MiB |
+
+Focused tests pass, followed by all 530 unit tests (47.53 s), 10 CLI tests (26.44 s) and strict all-target Clippy (38.59 s). `nix fmt` also passes (`.direnv/editor-pages-fmt.log`); the full package gate remains pending. Logs: `.direnv/editor-pages-first.log`, `.direnv/editor-pages-focused.log`, `.direnv/editor-pages-full.log`. The initial panel regression still expected Tasks to be unsupported; that assertion was updated for the new supported endpoint. Model, Herdr and mailer boundaries remain simulated.

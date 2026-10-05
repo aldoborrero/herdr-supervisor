@@ -193,6 +193,7 @@ impl Store {
         let target = match &request.command {
             Mutation::Pause { run, .. }
             | Mutation::SetProfile { run, .. }
+            | Mutation::CreateProfile { run, .. }
             | Mutation::Resume { run, .. }
             | Mutation::Cancel { run, .. }
             | Mutation::CompleteRun { run, .. }
@@ -726,7 +727,9 @@ fn add_dependency(c: &Connection, task: &Task, predecessor: &str) -> Result<()> 
 
 pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) -> Result<Value> {
     match command {
-        Mutation::SetProfile { .. } => super::run_profiles::change(tx, p, command),
+        Mutation::SetProfile { .. } | Mutation::CreateProfile { .. } => {
+            super::run_profiles::change(tx, p, command)
+        }
         Mutation::StartCoordinator { .. } => super::coordinator_launch::reserve(tx, p, command),
         Mutation::BindCoordinator { .. } | Mutation::AcknowledgeNotices { .. } => {
             super::coordinator::mutate(tx, p, command)
