@@ -4,7 +4,25 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
-The worker-navigation checkpoint passes strict all-target Clippy (33.35 s, `.direnv/worker-focus-full.log`) and `nix fmt` with no changes (`.direnv/worker-focus-fmt.log`). A full Nix build/check of this checkpoint remains required.
+### Native Herdr subscriptions and reconnection
+
+`herdr_events.rs` subscribes through a dedicated Unix connection before requesting `session.snapshot` on another connection. `service.rs` wires its coalesced hints into node and coordinator-launch reconciliation. Endpoints are derived from explicit executor configuration and active saved plans. Event payloads do not write SQLite or grant resource authority. The local Herdr 0.9.1 `api schema --json` reports protocol 22; only bundled metadata was read, with no request to a shared live server. The schema snapshot used during implementation is `.direnv/herdr-0.9.1-schema.json`.
+
+Seven focused tests pass (`.direnv/herdr-events-focused-final.log`, 1.15 s), followed by strict all-target Clippy (23.44 s):
+
+| Evidence | Boundary established |
+| --- | --- |
+| `partial_frame_survives_cancel_and_keeps_its_original_deadline` | Consumed bytes and the initial completion deadline survive cancellation; an expired partial frame fails |
+| `subscription_precedes_snapshot_and_partial_event_survives_bootstrap` | Real private Unix connections, subscription ACK before snapshot request, partial event spanning bootstrap, and loss error propagation |
+| `frames_bound_bytes_and_reject_eof_malformed_and_wrong_ack` | Exact frame boundary, oversized/unterminated/malformed input, mismatched ACK identity, envelope validation, dotted/snake names and ignored future events |
+| `absent_named_pane_falls_back_to_lifecycle_and_unknown_protocol_fails_closed` | Whole-request pane rejection retries lifecycle-only subscription and fresh snapshot; protocol 21 refused |
+| `watchers_reconnect_resnapshot_coalesce_and_close_owned_streams` | Loss-triggered real reconnection and fresh snapshot, 1,000-event burst, one pending hint, minimum wake interval and owned-stream shutdown |
+| `changed_targets_abort_old_stream_and_limits_are_explicit` | Removed endpoint closes the old subscription; 64-socket/256-pane caps report excess targets for periodic reconciliation |
+| `target_discovery_uses_only_active_saved_plans_and_explicit_configuration` | Prepared and launched checkpoint layouts, retired resource exclusion and saved coordinator endpoint/pane discovery |
+
+The continuous CLI workflows now expose a separate native-protocol fixture and check known-pane subscription, false exit plus `events_lost`, a fresh empty snapshot after reconnection, unchanged live attempt/epoch/resource/capacity and closed subscriptions after shutdown. Git, NATS, wrappers and service processes are real; Herdr events/snapshots and models remain fixtures. This is not authenticated model or live Herdr acceptance. The final full suite passes 547 unit tests (41.71 s), 10 CLI tests (24.80 s) and strict all-target Clippy (26.64 s), including the final adjustment preserving periodic reconciliation after subscription-target discovery failures. Logs: `.direnv/herdr-events-final.log`; the preceding full run also passed (`.direnv/herdr-events-full.log`). `nix fmt` formats the Python fixture (`.direnv/herdr-events-fmt.log`). The new package gate remains pending. The first focused compilation failed only on a missing test collection type annotation; it was corrected before the passing focused run.
+
+The worker-navigation checkpoint `e87b17f9b75f96cd1ad6b98dcbe2a250057cd40b` passes strict all-target Clippy (33.35 s, `.direnv/worker-focus-full.log`), `nix fmt`, package build and `nix flake check` on x86_64-linux. The package ran 540 unit tests (93.27 s) and 10 CLI tests (52.41 s), including the previous popup viewport failures. Output: `/nix/store/96q5p1gfkgxnd1l4vzrqiwvyqxvifxjg-herdr-supervisor-0.1.0`; logs: `.direnv/worker-focus-nix-build.log`, `.direnv/worker-focus-nix-check.log`. Native-event work after that commit needs its own gate.
 
 ### Requirement audit, 2026-10-05
 
@@ -18,16 +36,16 @@ This audit reads the fourteen deliverables in `IMPLEMENTATION.md` together with 
 | 4. Durable effects | Node/controller outboxes and inboxes, `executor.rs` saved intents, process receipts, recovery and lost-response regressions | Explicit recovery of still-uncertain effects and terminal outgoing records; retain occupied capacity until evidence exists |
 | 5. Identity/enrollment | `identity.rs` Ed25519 did:key records; separate node keys/grants and current origin/epoch authorization | Full operational lifecycle evidence; do not infer rotation/revocation tooling from enrollment alone |
 | 6. Private NATS | `transport.rs` persists application acceptance before ACK; generated node/controller ACLs and real restricted-broker tests | Final package gate and actual multi-host execution evidence |
-| 7. Herdr/native workers | Exact persisted resource binding, runtime wrappers, native mailer operation/recipient preconditions and worker-ready capability | Authenticated new-session Codex/Claude/Pi acceptance chain; native Herdr event/reconnection and capability cases are not all covered by simulated snapshots |
+| 7. Herdr/native workers | Exact persisted resource binding, runtime wrappers, native mailer operation/recipient preconditions and worker-ready capability; event/reconnection tests over private Unix sockets and continuous node services | Authenticated new-session Codex/Claude/Pi acceptance chain and live native Herdr/capability acceptance; Unix protocol fixtures alone do not prove these |
 | 8. Mailer client extension | Separate mailer commit `7a12d5a`, prior independent build/check evidence and supervisor replay tests | Preserve the versioned client/server contract in final integration |
 | 9. API/CLI/MCP and lifecycle | Controller/worker boundaries, pause/resume/cancel, repair and registration/passive-exit recovery; bounded pages/receipts/record reads | Remaining uncertain-effect recovery and full acceptance audit; no forced abandonment is implemented |
 | 10. Verification/integration/cleanup | Immutable results, combined candidates, independent check/review gates, exact Git CAS and cancelled repository release | Conservative owned-resource removal; current recovery retains panes/worktrees and does not prove detached descendants exited |
 | 11. Curated memory | Proposal provenance, revision/withdrawal, bounded topic snapshots and transactional live-memory NATS updates; memory-specific regression suite | Final package gate and live runtime consumption evidence; delivery is not a read acknowledgement |
-| 12. Shared UI authority | Managed binding/facade scope, legacy-command fencing, asynchronous pages and captured revisions; task/profile/memory forms | Worker navigation was missing and is being added; service onboarding and full native/remote interaction evidence remain open |
+| 12. Shared UI authority | Managed binding/facade scope, legacy-command fencing, asynchronous pages and captured revisions; task/profile/memory forms; exact worker navigation through owner-configured routes | Service onboarding and full native/remote interaction evidence remain open |
 | 13. Nix/package/docs | Blueprint `prefix=nix`, locks, package resources/wrapper, devshell/formatter, opt-in modules and module-evaluation tests | Latest package/check gate and packaged smoke; no host activation is authorized |
 | 14. Acceptance evidence | Real SQLite/Git/IPC/process/NATS tests and explicit boundary limits in this document | Latest offline gate, authenticated runtime matrix, remote/native acceptance and unresolved mandatory cases above |
 
-Priority is the missing end-to-end operator/lifecycle path: exact worker navigation, recovery/cleanup and native acceptance evidence. Project-wide memory across runs, Markdown memory exports, embedded large-record editing and automatic control-plane failover are extensions; they are not substitutes for closing the required acceptance cases. The initial design's `events.subscribe`/reconnection behavior and authenticated runtime matrix still need direct evidence. No current source uses `events.subscribe` in the managed controller path; snapshot polling tests cannot establish that contract.
+Priority is the missing end-to-end operator/lifecycle path: service onboarding, recovery/cleanup and native acceptance evidence. Project-wide memory across runs, Markdown memory exports, embedded large-record editing and automatic control-plane failover are extensions; they are not substitutes for closing the required acceptance cases. The initial design's `events.subscribe`/reconnection behavior is now implemented in `herdr_events.rs` and wired into continuous node/coordinator services, with private protocol and continuous node tests as recorded above. The authenticated runtime matrix still needs direct evidence.
 
 The full Nix gate for `64751dde1497588a644cde90958bfbb947cd1bca` failed with **533/534 unit tests**: `paginated_task_and_profile_rows_open_editors_without_aggregate_run_context` still drew against ambient terminal dimensions and did not render `Original title` in the builder. The two remaining test render calls now use the same explicit 120×30 viewport as the earlier corrected popup test; assertions remain. Its chained flake check did not run. Logs: `.direnv/operator-reads-nix-build.log`. A later successful gate is required.
 
@@ -35,7 +53,7 @@ The large-record checkpoint passes strict all-target Clippy (35.45 s, `.direnv/r
 
 The bounded operator/receipt checkpoint also passes strict all-target Clippy (39.89 s, `.direnv/operator-reads-full.log`) and `nix fmt` (no changes, `.direnv/operator-reads-fmt.log`). Its full Nix build/check remains pending.
 
-**Last completed full Nix gate:** commit `352dcece5a03e21c079b9a397bdf89a2073df9dd` passes package build and `nix flake check` on x86_64-linux, with 520 unit and 10 CLI tests offline. It includes paginated coordinator context and scoped legacy reads. Picker and panel changes require their follow-up package gate. This does not establish other platforms or completion of the remaining feature scope.
+**Last completed full Nix gate:** commit `e87b17f9b75f96cd1ad6b98dcbe2a250057cd40b`, with 540 unit and 10 CLI tests offline on x86_64-linux, as recorded above. It covers picker/panel pagination, operator receipts, chunked records and worker navigation. Native-event changes are newer; this gate does not establish other platforms or completion of the remaining feature scope.
 
 The local implementation suite currently passes **540 unit tests and 10 CLI tests** (local suite with four test threads), including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
 

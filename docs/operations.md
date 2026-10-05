@@ -561,6 +561,16 @@ Once the native bootstrap has completed, the node sends a hint through mailer to
 
 Node schema 4 migrates the existing assignment snapshots and preserves jobs/process receipts/events. Assignments written before `memory_version` existed retain version 0; subsequent approved updates advance them. Existing snapshots are not silently reconstructed from a newer controller history during migration. Nodes must support `memory_update` to consume these events; older nodes reject and leave them pending. This path has real-broker/process tests with simulated model/Herdr/mailer boundaries; it does not prove a live model has read or followed the memory.
 
+## Native Herdr change hints
+
+Continuous nodes and the controller's coordinator launcher subscribe to Herdr on separate Unix connections. Endpoints come from explicit executor configuration and saved launch/resource plans. Subscriptions cover resource lifecycle events and agent status for known panes; terminal output is not subscribed. After acknowledgement, each connection reads a fresh `session.snapshot` on a second connection while draining events. EOF, malformed/oversized frames, subscription errors (including `events_lost`) or snapshot failures trigger reconnect with backoff from one to thirty seconds and a new snapshot. The inspected Herdr 0.9.1 bundled schema reports protocol 22; older snapshot protocols are rejected by this optional hints path.
+
+Events and snapshots only wake the existing reconciliation handlers. They never establish readiness, exit, released capacity, task completion or model consumption. The existing 500 ms idle reconciliation remains available during outages or failed subscription-target discovery; actual cycle time also includes bounded relay/effect work. A single coalesced hint and a 100 ms minimum interval limit wakeups during bursts. Partial frames retain their bytes and original three-second deadline across snapshot completion. Event frames are limited to 256 KiB and snapshots to 4 MiB.
+
+If a named pane is no longer subscribable, a new lifecycle-only subscription preserves general hints; exact pane checks continue through periodic reconciliation. Changing the saved target set or reconnecting retries the pane subscriptions. At most 64 sockets and 256 named panes per socket are watched; excess targets still use periodic reconciliation. Node `run-node --once` output includes `herdr_events` counters (`watching`, `lifecycle_only`, `polling_only_sockets`, `polling_only_panes`); a one-shot invocation can finish before the asynchronous handshake. Service shutdown cancels owned subscriptions without changing resource/task state.
+
+This follows the [Herdr socket API](https://herdr.dev/docs/socket-api/) distinction between live event hints and authoritative snapshots. Protocol tests use private Unix sockets and the inspected schema; they do not establish live Herdr or authenticated model acceptance.
+
 ## Backups
 
 Use SQLite's online backup mechanism or stop the owning processes before copying a complete state directory. Copying only a live `.sqlite` file can omit WAL transactions. Back up owner/node keys and credentials privately with their corresponding database; do not rotate them merely to recover a process crash.

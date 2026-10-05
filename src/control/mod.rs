@@ -10,6 +10,7 @@ pub mod coordinator_launch;
 mod delivery;
 pub mod executor;
 pub mod git_pipeline;
+pub mod herdr_events;
 pub mod identity;
 mod kernel_process;
 pub mod lifecycle;

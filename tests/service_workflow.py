@@ -78,6 +78,120 @@ class JsonServer(socketserver.UnixStreamServer):
         self.server_close()
 
 
+class NativeEventsServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    """Native protocol fixture, separate from the CLI/model stub transport."""
+
+    daemon_threads = True
+
+    def __init__(self, path):
+        self.lock = threading.Lock()
+        self.clients = {}
+        self.subscriptions = 0
+        self.snapshots = 0
+        self.errors = []
+
+        class Handler(socketserver.StreamRequestHandler):
+            def handle(handler):
+                stream = handler.request
+                stream.settimeout(5)
+                try:
+                    request = json.loads(handler.rfile.readline(262145))
+                    method = request["method"]
+                    if method == "events.subscribe":
+                        selections = request["params"]["subscriptions"]
+                        assert all(
+                            s["type"] != "pane.output_matched" for s in selections
+                        )
+                        with self.lock:
+                            self.clients[stream] = {
+                                s["pane_id"] for s in selections if "pane_id" in s
+                            }
+                            self.subscriptions += 1
+                        stream.sendall(
+                            json.dumps(
+                                {
+                                    "id": request["id"],
+                                    "result": {"type": "subscription_started"},
+                                }
+                            ).encode()
+                            + b"\n"
+                        )
+                        # Wait for owned subscription cancellation, not a timer
+                        # that would manufacture the reconnect under test.
+                        stream.settimeout(None)
+                        assert stream.recv(1) == b""
+                    elif method == "session.snapshot":
+                        # Empty observation deliberately proves absence is not
+                        # accepted as exit of the still-running native wrapper.
+                        value = {
+                            "version": "0.9.1",
+                            "protocol": 22,
+                            "workspaces": [],
+                            "tabs": [],
+                            "panes": [],
+                            "layouts": [],
+                            "agents": [],
+                        }
+                        stream.sendall(
+                            json.dumps(
+                                {
+                                    "id": request["id"],
+                                    "result": {
+                                        "type": "session_snapshot",
+                                        "snapshot": value,
+                                    },
+                                }
+                            ).encode()
+                            + b"\n"
+                        )
+                        with self.lock:
+                            assert self.subscriptions > 0, (
+                                "snapshot preceded subscription"
+                            )
+                            self.snapshots += 1
+                    else:
+                        raise AssertionError(f"unexpected native method {method}")
+                except (BrokenPipeError, ConnectionResetError):
+                    pass  # Target changes/shutdown may cancel a response.
+                except Exception as error:  # noqa: BLE001 -- preserve fixture failures
+                    self.errors.append(str(error))
+                finally:
+                    with self.lock:
+                        self.clients.pop(stream, None)
+
+        super().__init__(str(path), Handler)
+        self.thread = threading.Thread(target=self.serve_forever, daemon=True)
+        self.thread.start()
+
+    def has_pane(self, pane):
+        with self.lock:
+            return any(pane in panes for panes in self.clients.values())
+
+    def interrupt_with_false_exit(self, pane):
+        with self.lock:
+            streams = list(self.clients)
+        assert streams
+        wire = (
+            json.dumps({"event": "pane_exited", "data": {"pane_id": pane}}).encode()
+            + b"\n"
+        )
+        wire += json.dumps({"error": {"code": "events_lost"}}).encode() + b"\n"
+        for stream in streams:
+            stream.sendall(wire)
+
+    def close(self):
+        self.shutdown()
+        self.thread.join(timeout=5)
+        with self.lock:
+            streams = list(self.clients)
+        for stream in streams:
+            try:
+                stream.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        self.server_close()
+
+
 class Fixture:
     def __init__(self, root, binary, nats, artifact=False):
         self.root = root
@@ -91,6 +205,8 @@ class Fixture:
         self.mailer.mkdir()
         self.children = []
         self.servers = []
+        self.native_events = NativeEventsServer(root / "native-events.sock")
+        self.servers.append(self.native_events)
         self.spaces = {}
         self.models = {}
         self.registrations = {}
@@ -545,7 +661,7 @@ class Fixture:
                 "repositories": {"/fixture": str(self.repo)},
                 "worktree_root": str(self.root / "worktrees"),
                 "herdr_binary": str(self.root / "herdr-stub"),
-                "herdr_socket": str(self.root / "fixture.sock"),
+                "herdr_socket": str(self.root / "native-events.sock"),
             },
         )
         admin = self.file("mailer-admin.token", uid() + uid())
@@ -614,6 +730,22 @@ class Fixture:
         # The native wrapper belongs to the pane and survives the relay restart.
         self.start_node()
         context = self.ready(author)
+        wait_for(
+            "native status subscription for the exact author pane",
+            lambda: self.native_events.has_pane(self.spaces[author]["pane_id"]),
+        )
+        before_native = self.attempt(author)
+        snapshots = self.native_events.snapshots
+        self.native_events.interrupt_with_false_exit(self.spaces[author]["pane_id"])
+        wait_for(
+            "native event loss reconnects and takes a fresh snapshot",
+            lambda: self.native_events.snapshots > snapshots,
+        )
+        after_native = self.attempt(author)
+        assert after_native["state"] == before_native["state"]
+        assert after_native["epoch"] == before_native["epoch"]
+        assert after_native["resource"] == before_native["resource"]
+        assert self.snapshot()["active_attempts"] == 1
         proposal = self.apply(
             "propose_memory",
             run=self.run,
@@ -880,6 +1012,11 @@ class Fixture:
         assert len(self.registrations) == len(self.deliveries) == 2
         self.stop(self.node_process)
         self.stop(self.controller_process)
+        wait_for(
+            "native event streams close on shutdown",
+            lambda: not self.native_events.clients,
+        )
+        assert not self.native_events.errors, self.native_events.errors
         assert not (self.node / "worker.sock").exists()
         assert not (self.controller / "control.sock").exists()
         print(

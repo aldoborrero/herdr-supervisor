@@ -77,8 +77,18 @@ pub async fn run(
     let api = tokio::spawn(super::worker::serve(access.clone(), async {
         let _ = stopped.await;
     }));
+    let mut events = super::herdr_events::Watchers::new();
     let result = async {
         loop {
+            match super::herdr_events::node_targets(&store.connection, &executor.herdr_socket) {
+                Ok(targets) => events.reconcile(targets),
+                Err(error) => {
+                    events.reconcile(super::herdr_events::Targets::new());
+                    eprintln!(
+                        "node Herdr event targets: {error}; continuing health reconciliation"
+                    );
+                }
+            }
             anyhow::ensure!(
                 !api.is_finished(),
                 "worker API stopped; node execution halted"
@@ -94,15 +104,18 @@ pub async fn run(
             // Runtime/Herdr commands may take seconds. Keep worker IPC responsive.
             let executed = tokio::task::spawn_blocking(move || advance_jobs(&a, &e, &r)).await??;
             if once {
-                return Ok(json!({"relayed":relayed?,"execution":executed}));
+                return Ok(
+                    json!({"relayed":relayed?,"execution":executed,"herdr_events":events.health()}),
+                );
             }
             tokio::select! {
                 _=shutdown.recv()=>return Ok(json!({"stopped":true})),
-                _=tokio::time::sleep(Duration::from_millis(500))=>(),
+                _=events.wait()=>(),
             }
         }
     }
     .await;
+    events.shutdown().await;
     let _ = stop.send(());
     api.await??;
     result
@@ -136,24 +149,42 @@ pub async fn controller(
     let launcher = tokio::spawn(async move {
         if let Some(config) = launch_config {
             let mut stopped = launch_stopped;
+            let mut events = super::herdr_events::Watchers::new();
             loop {
                 let path = launch_state.clone();
                 let config = config.clone();
                 let result = tokio::task::spawn_blocking(move || {
-                    super::coordinator_launch::advance_all(
-                        &mut super::store::Store::open(&path)?,
+                    let mut store = super::store::Store::open(&path)?;
+                    let targets = super::herdr_events::controller_targets(&store.connection);
+                    let advanced = super::coordinator_launch::advance_all(
+                        &mut store,
                         &config,
                         &crate::runner::RealRunner,
-                    )
+                    );
+                    Ok::<_, anyhow::Error>((targets, advanced))
                 })
                 .await;
                 match result {
-                    Ok(Ok(_)) => (),
+                    Ok(Ok((targets, advanced))) => {
+                        match targets {
+                            Ok(targets) => events.reconcile(targets),
+                            Err(error) => {
+                                events.reconcile(super::herdr_events::Targets::new());
+                                eprintln!(
+                                    "coordinator Herdr event targets: {error}; continuing health reconciliation"
+                                );
+                            }
+                        }
+                        if let Err(e) = advanced {
+                            eprintln!("coordinator launch: {e}");
+                        }
+                    }
                     Ok(Err(e)) => eprintln!("coordinator launch: {e}"),
                     Err(e) => eprintln!("coordinator launcher task: {e}"),
                 }
-                tokio::select! {_=&mut stopped=>break,_=tokio::time::sleep(Duration::from_millis(500))=>()}
+                tokio::select! {_=&mut stopped=>break,_=events.wait()=>()}
             }
+            events.shutdown().await;
         }
     });
     let (notify_stop, notify_stopped) = tokio::sync::oneshot::channel();
