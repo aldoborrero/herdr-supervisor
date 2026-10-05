@@ -4,6 +4,25 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
+### Terminal code-verification retirement
+
+Controller schema 12 records exact owner decisions, scope hashes and prepared/removing/removed phases. SQLite audit events commit with each transition. The execution lease, terminal run, released repository, exact clean detached checkout and operator process/retention attestations precede non-force Git removal. Results, reviews and check receipts are retained. Retired checkout history is distinct from unresolved creation when checking cancelled repository reuse.
+
+The four initial regressions pass (3.48 s), followed by strict all-target Clippy (30.34 s), in `.direnv/verification-retirement-focused.log`. The full implementation checkpoint passes all 613 unit tests (54.73 s), 18 CLI tests (24.60 s) and strict all-target Clippy (14.56 s), in `.direnv/verification-retirement-full.log`. Both continuous service workflows pass; the code workflow retires author, reviewer and verifier checkouts through the actual CLI while preserving their commits. Final review replaces the integration-state denylist with known terminal outcomes and explicitly rejects unknown check states; all six focused unit tests (5.38 s), one CLI test (0.10 s) and strict Clippy (38.74 s) pass in `.direnv/verification-retirement-terminal.log`. `nix fmt` passes, formatting the Python fixture (`.direnv/verification-retirement-fmt.log`). The package gate for this source remains pending.
+
+| Evidence | Boundary established |
+| --- | --- |
+| `verification_retirement_preserves_sha1_and_sha256_candidates_evidence_and_replay` | Real detached checkout removal, preserved candidate/integration refs and check receipts, one completion audit and owner-only replay |
+| `verification_retirement_requires_terminal_authority_and_clean_exact_checkout` | Confirmation/revision, unrecognized integration/check outcomes, untracked data, hidden index entries, active binding, started checks, lease contention and symbolic retention references prevent deletion |
+| `verification_retirement_audit_failure_rolls_back_intent_and_recovers_lost_final_receipt` | Failed initial audit prevents intent/effect; failed final audit rolls back resource state and recovers after restart without losing candidate evidence |
+| `verification_retirement_migrates_schema_and_never_deletes_recreated_path` | Schema-11 upgrade and refusal to delete data recreated after an uncertain original removal |
+| `verification_retirement_after_cancelled_release_does_not_block_repository_reuse` | Active/unreleased runs refused; cancelled terminal candidate can be retired without blocking a fresh run |
+| `verification_retirement_never_repeats_an_uncertain_git_removal` | Timed-out no-effect command issued once; later operator fixture removal permits observation-only reconciliation |
+| `verification_retirement_cli_requires_owner_and_never_initializes_missing_state` | Actual CLI rejects missing state and invalid credentials without creating verification resources or exposing a token |
+| Extended continuous code workflow | Validates the final owner CLI command after actual process stop and completion; model, Herdr and mailer boundaries remain simulated |
+
+The worker retention-reference review additionally found that a symbolic ref could be mistaken for an independent retained commit, or followed during creation. `retirement_never_follows_symbolic_retention_refs_or_calls_them_preserved_commits` covers present/missing targets and changed refs during reconciliation. Retention now uses the existing explicit reference observation and `--no-deref` CAS helpers, rejecting symbolic refs. The focused retirement selection passes 13 unit tests (6.23 s), one CLI test (0.03 s) and strict Clippy (35.04 s), in `.direnv/retirement-refs.log`.
+
 ### Explicit local worker-checkout retirement
 
 `cleanup-retire` records a local operator's exact attempt/epoch/HEAD decision and required process/retention attestations in node SQLite schema 10. It preserves the original branch plus a compare-and-swap retention ref before invoking Herdr without force. Successful reconciliation requires absence from the filesystem, Git worktree inventory and exact native resources, preserved refs and unchanged authority. An uncertain result reports `resources_deleted: null` and never repeats native removal. This is an explicit local maintenance action, not autonomous proof of descendant exit.
@@ -27,11 +46,11 @@ No user checkout or live native session is removed by these tests. The operator'
 
 ### Independent verifier completion receipts
 
-The verified source is committed locally as `f1d19112665c6e56df7741751f451ec5390e5177`. `nix fmt` also passed without changes (`.direnv/check-receipts-final-fmt.log`). Its pinned package build/check is running; do not infer success from an active tool handle.
+The verified source is committed locally as `f1d19112665c6e56df7741751f451ec5390e5177`. `nix fmt` passed without changes (`.direnv/check-receipts-final-fmt.log`). Its x86_64-linux package build and flake check pass with 598 unit tests (173.80 s) and 16 CLI tests (52.62 s) offline; build phase 10 min 29 s and check phase 10 min 13 s. Output: `/nix/store/4drfaxn9i6kn8bavmhkm4i33zkag5aq9-herdr-supervisor-0.1.0`. Logs: `.direnv/check-receipts-nix-build.log` and `.direnv/check-receipts-nix-check.log`. Other platforms were not built.
 
 The regression `check_receipt_recovers_finished_verifier_after_lost_sql_without_reexecuting` fails on `01d20d8`: the controller returns `checks_failed` after a completed check loses its SQLite receipt. `.direnv/check-receipts-before.log` records that failure, with a real Git checkout and an external execution counter. The implementation now atomically publishes an owner-signed completion file before the final SQL/audit transaction and recovers it without rerunning the check. Controller services reconcile these receipts before cancelled-run release; the local owner CLI performs the same bounded recovery. No schema migration is required; legacy starts without the receipt scheme remain unresolved.
 
-The first focused implementation run recovered the code check but exposed the old artifact expectation (`checks_failed` despite a recoverable completion). That artifact test now expects `verified` while retaining its original assertion that the command ran only once. `.direnv/check-receipts-focused.log` records the transition. The signed implementation then passes eight focused unit tests (3.17 s), one CLI test (0.12 s) and strict all-target Clippy (34.81 s), in `.direnv/check-receipts-signed.log`. The initial full suite, including coherent-result tampering and legacy accounting, passes 597 unit tests (50.51 s), 16 CLI tests (23.09 s) and strict all-target Clippy (16.85 s), in `.direnv/check-receipts-full.log`. The final source recovers known failures before reobserving dirty inputs; all 598 unit tests (48.31 s), 16 CLI tests (22.87 s) and strict all-target Clippy (17.56 s) pass in `.direnv/check-receipts-final.log`. The Nix package gate for this checkpoint is pending.
+The first focused implementation run recovered the code check but exposed the old artifact expectation (`checks_failed` despite a recoverable completion). That artifact test now expects `verified` while retaining its original assertion that the command ran only once. `.direnv/check-receipts-focused.log` records the transition. The signed implementation then passes eight focused unit tests (3.17 s), one CLI test (0.12 s) and strict all-target Clippy (34.81 s), in `.direnv/check-receipts-signed.log`. The initial full suite, including coherent-result tampering and legacy accounting, passes 597 unit tests (50.51 s), 16 CLI tests (23.09 s) and strict all-target Clippy (16.85 s), in `.direnv/check-receipts-full.log`. The final source recovers known failures before reobserving dirty inputs; all 598 unit tests (48.31 s), 16 CLI tests (22.87 s) and strict all-target Clippy (17.56 s) pass in `.direnv/check-receipts-final.log`. The completed Nix package gate for this checkpoint is recorded above.
 
 | Evidence | Boundary established |
 | --- | --- |
@@ -197,7 +216,7 @@ The large-record checkpoint passes strict all-target Clippy (35.45 s, `.direnv/r
 
 The bounded operator/receipt checkpoint also passes strict all-target Clippy (39.89 s, `.direnv/operator-reads-full.log`) and `nix fmt` (no changes, `.direnv/operator-reads-fmt.log`). Its full Nix build/check remains pending.
 
-**Last completed full Nix gate:** commit `01d20d8cb932fda69ce599f2386251d88492621e`, with 591 unit and 15 CLI tests offline on x86_64-linux, as recorded above. It includes cancellation renewal, expired node-event recovery, node lifecycle, checkout-retention inspection, local diagnosis/onboarding, event subscriptions/reconnection and earlier pagination/navigation changes. Verifier completion recovery is newer; this gate does not establish other platforms or completion of the remaining feature scope.
+**Last completed full Nix gate:** commit `f1d19112665c6e56df7741751f451ec5390e5177`, with 598 unit and 16 CLI tests offline on x86_64-linux, as recorded above. It includes verifier completion recovery and prior cancellation renewal, node-event recovery, node lifecycle, local diagnosis/onboarding, event subscriptions/reconnection and pagination/navigation. Worker and verification checkout retirement are newer; this gate does not establish other platforms or completion of the remaining feature scope.
 
 The worker-navigation checkpoint passed **540 unit tests and 10 CLI tests** (local suite with four test threads), including the inherited Projects suite; later checkpoint results are recorded above. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
 
@@ -337,7 +356,7 @@ Mailer protocol-2 support is an independent local commit **`7a12d5a`** on `feat/
 ## Still required
 
 - Broader replanning and abandonment of an uncertain verifier.
-- Recovery/abandonment of uncertain cancelled-run effects and conservative verification checkout cleanup.
+- Recovery/abandonment of uncertain cancelled-run effects, artifact-input retention and coordinator resource cleanup. Explicit worker and code-verification checkout retirement now have implementation/tests; their final package gates remain separate.
 - Recovery of still-live orphans, legacy capture gaps, changed boots/namespaces and non-Linux wrapper loss; detached-descendant audit and conservative resource cleanup.
 - Reconciliation for legacy/lost-wrapper registration evidence. Explicit recovery covers prelaunch Claude/Pi and still-owned Codex before binding.
 - Native/remote acceptance of the implemented service bundle, dependency diagnosis and cross-host focus routes. Managed creation, local onboarding and focus have fixture coverage.

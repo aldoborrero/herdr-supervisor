@@ -90,7 +90,7 @@ pub(super) fn recover_observed(
     let tx = c.transaction_with_behavior(TransactionBehavior::Deferred)?;
     let schema: i64 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
     ensure!(
-        schema == if node { 10 } else { 11 },
+        schema == if node { 10 } else { 12 },
         "unsupported recovery schema; run the current service migration first"
     );
     if let Some(receipt) = recorded(&tx, id, operation, epoch)? {

@@ -93,6 +93,7 @@ fn current_head(runner: &dyn Runner, plan: &CheckoutPlan, request: &Request) -> 
 
 fn absent(runner: &dyn Runner, plan: &CheckoutPlan, request: &Request) -> Result<bool> {
     current_head(runner, plan, request)?;
+    super::git_pipeline::detached_ref(runner, &plan.repo, &retained_ref(request))?;
     ensure!(
         git(
             runner,
@@ -268,27 +269,10 @@ pub(super) fn retire_with(
         }
         current_head(runner, &checkout, request)?;
         let reference = retained_ref(request);
-        // Exact CAS creation; never repoint an existing retention reference.
-        if git(
-            runner,
-            &checkout.repo,
-            &["show-ref", "--verify", "--hash", &reference],
-        )
-        .ok()
-        .as_deref()
-            != Some(&request.expected_head)
-        {
-            git(
-                runner,
-                &checkout.repo,
-                &[
-                    "update-ref",
-                    &reference,
-                    &request.expected_head,
-                    &"0".repeat(request.expected_head.len()),
-                ],
-            )?;
-        }
+        // Never follow a symbolic retention ref into another branch. Observation
+        // failure is distinct from a missing ref; creation uses --no-deref CAS.
+        super::git_pipeline::detached_ref(runner, &checkout.repo, &reference)?;
+        super::git_pipeline::pin(runner, &checkout.repo, &reference, &request.expected_head)?;
         // Persist uncertainty before invoking Herdr. A lost reply never causes a second removal.
         ensure!(c.execute("UPDATE checkout_retirements SET state='removing',updated=?2 WHERE attempt=?1 AND state='prepared'",
             params![request.attempt,now()])? == 1, "retirement phase changed");

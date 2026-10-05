@@ -99,7 +99,7 @@ fn ref_value(runner: &dyn Runner, repo: &Path, name: &str) -> Result<Option<Stri
     );
     Ok(None)
 }
-fn detached_ref(runner: &dyn Runner, repo: &Path, name: &str) -> Result<()> {
+pub(super) fn detached_ref(runner: &dyn Runner, repo: &Path, name: &str) -> Result<()> {
     let symbolic = runner.run(&git_cmd(repo, &["symbolic-ref", "--quiet", name]))?;
     ensure!(
         !symbolic.timed_out && symbolic.code == Some(1),
@@ -112,7 +112,7 @@ fn detached_ref(runner: &dyn Runner, repo: &Path, name: &str) -> Result<()> {
     );
     Ok(())
 }
-fn pin(runner: &dyn Runner, repo: &Path, name: &str, value: &str) -> Result<()> {
+pub(super) fn pin(runner: &dyn Runner, repo: &Path, name: &str, value: &str) -> Result<()> {
     match ref_value(runner, repo, name)? {
         Some(current) => ensure!(current == value, "owned pin changed"),
         None => {

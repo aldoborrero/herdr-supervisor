@@ -1059,6 +1059,37 @@ class Fixture:
                 assert not path.exists()
                 assert self.git(self.repo, "rev-parse", receipt["retained_ref"]) == head
             assert self.removals == [author, reviewer]
+            decision = self.file(
+                "retire-verification.json",
+                {
+                    "operation": uid(),
+                    "integration": applied["id"],
+                    "expected_revision": applied["revision"],
+                    "expected_candidate": applied["candidate_oid"],
+                    "processes_confirmed_stopped": True,
+                    "retain_commits_remove_checkout": True,
+                    "reason": "Fixture controller and all owned checks stopped",
+                },
+            )
+            args = (
+                "cleanup-verification",
+                "--credential",
+                self.controller / "admin.token",
+                "--verifier",
+                self.root / "services/repositories.json",
+                "--request",
+                decision,
+            )
+            receipt = self.cli(self.controller, *args)
+            assert receipt["state"] == "removed", receipt
+            assert self.cli(self.controller, *args) == receipt
+            assert not (
+                self.controller / "verification" / applied["id"] / "checkout"
+            ).exists()
+            assert (
+                self.git(self.repo, "rev-parse", receipt["retained_ref"])
+                == applied["candidate_oid"]
+            )
         print(
             f"PASS: continuous services, offline dispatch, node restart, native binding, result, checks, review, {'artifact acceptance' if self.artifact_mode else 'Git CAS'}, stop, completion"
         )

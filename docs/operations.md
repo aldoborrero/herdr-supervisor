@@ -558,7 +558,34 @@ The execution lease excludes plugin launch/cancellation effects. A durable SQLit
 
 `state: removed` requires filesystem absence, absence from Git's worktree inventory, absence of the saved native resources, preserved refs and unchanged local authority. An ambiguous native response or partial removal returns `state: removing`, `outcome: unresolved`; **exit success does not mean removal succeeded**. Repeating the identical decision only observes an already-issued removal and never sends it again. A crash before native issuance can also leave that unresolved state: inspect and finish the specific resource manually, then repeat the same request to record the result. Changed operation contents are refused; completed replay returns its historical receipt and touches no resources. Keep the decision file for recovery.
 
-This path retires an explicitly selected worker/reviewer checkout. Automatic descendant containment, unattended cleanup and controller verification/coordinator resource retirement remain pending. Neither a successful task nor this operator attestation is presented as automatic proof that detached descendants exited.
+This path retires an explicitly selected worker/reviewer checkout. Automatic descendant containment, unattended cleanup and coordinator resource retirement remain pending. Neither a successful task nor this operator attestation is presented as automatic proof that detached descendants exited. Retention references must be direct: symbolic references are refused, including when their target currently has the expected commit. Creation never follows a reference into another branch.
+
+### Retire a code-verification checkout
+
+After a run reaches `completed` or `cancelled` and its repository binding is released, the owner can remove its clean detached verification checkout. This requires the same exclusive-process attestation as worker retirement. The controller refuses active workers/coordinators, unresolved checks or Git effects, changed candidates/revisions, dirty or untracked/ignored files, hidden index flags and submodules. Pending or artifact integrations are not accepted by this command.
+
+```json
+{
+  "operation": "<new UUID>",
+  "integration": "<integration UUID>",
+  "expected_revision": 4,
+  "expected_candidate": "<full candidate commit SHA>",
+  "processes_confirmed_stopped": true,
+  "retain_commits_remove_checkout": true,
+  "reason": "Run finished; verifier and all checkout users stopped"
+}
+```
+
+```bash
+herdr-supervisor control --state /private/controller cleanup-verification \
+  --credential /private/controller/admin.token \
+  --verifier /private/services/repositories.json \
+  --request /private/verification-retirement.json
+```
+
+Upgrade controller consumers together to schema 12. The owner capability is checked again in the intent and completion transactions. SQLite records the decision before side effects; each phase and its audit entry commit together. `git worktree remove` receives no force option. The candidate remains reachable through `refs/herdr-supervisor/retained-verification/<integration>` in addition to existing candidate/integration refs. Check receipts, results, reviews and the parent evidence directory are retained.
+
+As with worker retirement, `state: removing` reports an uncertain outcome and `resources_deleted: null`; repeating the same decision observes an already-issued effect without issuing it again. A recreated path is preserved. Successful completion records the checkout as `retired` and appends an audit event; replay returns the historical result after reauthenticating the owner. This known terminal resource state does not make a cancelled repository appear to have an unfinished checkout creation. Sealed artifact inputs, uploaded contents and coordinator workspaces need separate retention paths and are not removed here.
 
 ### Passive recovery after wrapper loss
 

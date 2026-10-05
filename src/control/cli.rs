@@ -19,6 +19,15 @@ pub struct ControlArgs {
 
 #[derive(Subcommand)]
 enum ControlCommand {
+    /// Owner maintenance: retire a terminal code-verification checkout, preserving its candidate
+    CleanupVerification {
+        #[arg(long)]
+        credential: PathBuf,
+        #[arg(long)]
+        verifier: PathBuf,
+        #[arg(long)]
+        request: PathBuf,
+    },
     /// Local operator retirement with explicit process/retention attestations; keeps commits
     CleanupRetire {
         #[arg(long)]
@@ -767,6 +776,25 @@ pub fn run(args: ControlArgs) -> Result<()> {
             credential: path,
             node,
         } => Store::open(&args.state)?.node_status(&credential(&path)?, &node)?,
+        ControlCommand::CleanupVerification {
+            credential: path,
+            verifier,
+            request,
+        } => {
+            use std::io::Read;
+            super::reception::local_db(&args.state, false, false)?;
+            let mut bytes = Vec::new();
+            std::fs::File::open(request)?
+                .take(16385)
+                .read_to_end(&mut bytes)?;
+            ensure!(bytes.len() <= 16384, "retirement request exceeds 16 KiB");
+            super::verification_retirement::retire(
+                &mut Store::open(&args.state)?,
+                &super::git_pipeline::read_config(&verifier)?,
+                &credential(&path)?,
+                &serde_json::from_slice(&bytes)?,
+            )?
+        }
         ControlCommand::CleanupRetire { executor, request } => {
             use std::io::Read;
             let mut bytes = Vec::new();

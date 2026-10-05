@@ -130,6 +130,7 @@ impl Store {
             9 => (),
             10 => (),
             11 => (),
+            12 => (),
             _ => bail!("unsupported controller schema {version}; no migration applied"),
         }
         if version <= 2 {
@@ -163,6 +164,9 @@ impl Store {
         }
         if version <= 10 {
             tx.execute_batch(super::event_recovery::CONTROLLER_SCHEMA)?;
+        }
+        if version <= 11 {
+            tx.execute_batch(super::verification_retirement::SCHEMA)?;
         }
         tx.commit()?;
         Ok(Self {
@@ -1331,7 +1335,7 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
                 !unfinished,
                 "tasks, processes or integration intents remain unfinished"
             );
-            let uncertain:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM check_runs c JOIN integrations i ON i.id=c.integration WHERE i.run=?1 AND c.state='started') OR EXISTS(SELECT 1 FROM verification_worktrees w JOIN integrations i ON i.id=w.integration WHERE i.run=?1 AND w.state<>'ready') OR EXISTS(SELECT 1 FROM repository_bindings WHERE run=?1 AND state<>'ready')",[run],|r|r.get(0))?;
+            let uncertain:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM check_runs c JOIN integrations i ON i.id=c.integration WHERE i.run=?1 AND c.state='started') OR EXISTS(SELECT 1 FROM verification_worktrees w JOIN integrations i ON i.id=w.integration WHERE i.run=?1 AND w.state NOT IN ('ready','retired')) OR EXISTS(SELECT 1 FROM repository_bindings WHERE run=?1 AND state<>'ready')",[run],|r|r.get(0))?;
             ensure!(
                 !uncertain,
                 "earlier repository/check effects remain unresolved"

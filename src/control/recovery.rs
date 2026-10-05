@@ -37,7 +37,7 @@ pub(super) fn blockers(c: &Connection, run: &str) -> Result<Vec<&'static str>> {
         ),
         (
             "checkout_creation_unresolved",
-            "SELECT EXISTS(SELECT 1 FROM verification_worktrees w JOIN integrations i ON i.id=w.integration WHERE i.run=?1 AND w.state<>'ready')",
+            "SELECT EXISTS(SELECT 1 FROM verification_worktrees w JOIN integrations i ON i.id=w.integration WHERE i.run=?1 AND w.state NOT IN ('ready','retired'))",
         ),
     ];
     let mut blockers = Vec::new();

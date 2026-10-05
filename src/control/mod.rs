@@ -36,6 +36,7 @@ pub mod service_setup;
 pub mod store;
 pub mod transport;
 pub mod verification;
+mod verification_retirement;
 pub mod worker;
 
 #[cfg(test)]

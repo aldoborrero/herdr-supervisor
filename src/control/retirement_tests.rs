@@ -269,3 +269,49 @@ fn retirement_uncertain_reconciliation_fences_changed_authority_config_and_recre
     assert!(retire(&s, &r).is_err());
     assert_eq!(s.native.remove_calls.get(), 1);
 }
+
+#[test]
+fn retirement_never_follows_symbolic_retention_refs_or_calls_them_preserved_commits() {
+    for existing in [false, true] {
+        let mut s = Setup::new();
+        s.stop();
+        s.native.removal.set(1);
+        let r = request(&s);
+        let reference = format!("refs/herdr-supervisor/retained/{}", r.attempt);
+        let target = "refs/heads/another-owner";
+        if existing {
+            git(&s.plan.repo, &["update-ref", target, &r.expected_head]);
+        }
+        git(&s.plan.repo, &["symbolic-ref", &reference, target]);
+        assert!(retire(&s, &r).is_err());
+        assert_eq!(s.native.remove_calls.get(), 0);
+        assert!(s.plan.worktree.exists());
+        assert_eq!(git(&s.plan.repo, &["symbolic-ref", &reference]), target);
+        let refs = git(
+            &s.plan.repo,
+            &["for-each-ref", "--format=%(refname)", target],
+        );
+        assert_eq!(!refs.is_empty(), existing);
+    }
+    let mut s = Setup::new();
+    s.stop();
+    s.native.removal.set(2);
+    let r = request(&s);
+    s.node.connection.execute_batch("CREATE TRIGGER lose_receipt BEFORE UPDATE ON checkout_retirements WHEN NEW.state='removed' BEGIN SELECT RAISE(FAIL,'lost receipt'); END;").unwrap();
+    assert!(retire(&s, &r).is_err());
+    s.node
+        .connection
+        .execute_batch("DROP TRIGGER lose_receipt")
+        .unwrap();
+    let reference = format!("refs/herdr-supervisor/retained/{}", r.attempt);
+    git(
+        &s.plan.repo,
+        &[
+            "symbolic-ref",
+            &reference,
+            &format!("refs/heads/{}", s.plan.branch),
+        ],
+    );
+    assert_eq!(retire(&s, &r).unwrap()["outcome"], "unresolved");
+    assert_eq!(s.native.remove_calls.get(), 1);
+}
