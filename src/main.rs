@@ -5,7 +5,10 @@ mod assign;
 mod brief;
 mod cli;
 mod command_link;
+mod control;
 mod coordinator;
+#[cfg(test)]
+mod coordinator_review;
 mod doctor;
 mod grouping;
 mod herdr;
@@ -19,8 +22,8 @@ mod popup;
 mod pr;
 mod profiles;
 mod progress;
-mod prompt_box;
 mod project;
+mod prompt_box;
 mod remote;
 mod rename;
 mod routine;
@@ -58,7 +61,11 @@ fn extend_path() {
     let _ = USER_PATH.set(current.to_string_lossy().into_owned());
     let mut dirs: Vec<std::path::PathBuf> = std::env::split_paths(&current).collect();
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-    let mut extra: Vec<std::path::PathBuf> = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"].iter().map(Into::into).collect();
+    let mut extra: Vec<std::path::PathBuf> =
+        ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
+            .iter()
+            .map(Into::into)
+            .collect();
     if let Some(home) = home {
         extra.push(home.join(".local/bin"));
         extra.push(home.join(".cargo/bin"));
@@ -77,7 +84,7 @@ fn extend_path() {
 fn main() {
     extend_path();
     if let Err(error) = cli::run() {
-        eprintln!("herdr-projects: {error:#}");
+        eprintln!("herdr-supervisor: {error:#}");
         std::process::exit(1);
     }
 }

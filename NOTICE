@@ -1,0 +1,5 @@
+Herdr Supervisor is derived from Herdr Projects by Elias Stravik.
+Upstream: https://github.com/eliasstravik/herdr-projects
+Base revision: 4e4548c3c43888e6be1c96906215998f07dc63f0 (0.2.34)
+The upstream MIT license is retained in LICENSE.
+Supervisor additions: Copyright (c) 2026 Aldo Borrero, MIT.

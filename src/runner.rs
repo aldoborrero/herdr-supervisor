@@ -167,11 +167,15 @@ impl Runner for RealRunner {
 
         // Readers and the writer run on their own threads so a full pipe in
         // either direction cannot deadlock against the deadline loop below.
-        let stdin_thread = child.stdin.take().zip(cmd.stdin.clone()).map(|(mut pipe, text)| {
-            std::thread::spawn(move || {
-                let _ = pipe.write_all(text.as_bytes());
-            })
-        });
+        let stdin_thread = child
+            .stdin
+            .take()
+            .zip(cmd.stdin.clone())
+            .map(|(mut pipe, text)| {
+                std::thread::spawn(move || {
+                    let _ = pipe.write_all(text.as_bytes());
+                })
+            });
         let stdout_thread = child.stdout.take().map(read_all);
         let stderr_thread = child.stderr.take().map(read_all);
 
@@ -223,7 +227,8 @@ impl Runner for RealRunner {
         if let Some(cwd) = &cmd.cwd {
             // This process leads the pane's foreground group, and Herdr reports
             // the leader's directory as the pane's `foreground_cwd`: it moves too.
-            std::env::set_current_dir(cwd).with_context(|| format!("could not enter {}", cwd.display()))?;
+            std::env::set_current_dir(cwd)
+                .with_context(|| format!("could not enter {}", cwd.display()))?;
             command.current_dir(cwd);
         }
         let mut child = command
@@ -306,14 +311,14 @@ fn kill(child: &mut std::process::Child, own_group: bool) {
     if own_group {
         // The child is its group's leader, so its pid is the pgid. Grandchildren
         // hold the pipes open; killing only the child would leave readers hanging.
-        let _ = Command::new("/bin/kill")
+        let _ = Command::new("kill")
             .args(["-TERM", "--", &format!("-{}", child.id())])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
         std::thread::sleep(Duration::from_millis(200));
-        let _ = Command::new("/bin/kill")
+        let _ = Command::new("kill")
             .args(["-KILL", "--", &format!("-{}", child.id())])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -329,12 +334,13 @@ pub mod fake {
     use std::cell::RefCell;
 
     type Matcher = Box<dyn Fn(&Cmd) -> bool>;
+    type Responder = Box<dyn Fn(&Cmd) -> Result<Output>>;
 
     /// A scripted runner: the first rule whose matcher accepts the command
     /// answers it. Every command is recorded, matched or not.
     #[derive(Default)]
     pub struct FakeRunner {
-        rules: RefCell<Vec<(Matcher, Box<dyn Fn(&Cmd) -> Result<Output>>)>>,
+        rules: RefCell<Vec<(Matcher, Responder)>>,
         pub calls: RefCell<Vec<Cmd>>,
         /// (socket, request line) of every socket request.
         pub socket_requests: RefCell<Vec<(PathBuf, String)>>,
@@ -410,7 +416,9 @@ pub mod fake {
         }
 
         fn socket_request(&self, socket: &Path, line: &str, _timeout: Duration) -> Result<String> {
-            self.socket_requests.borrow_mut().push((socket.to_path_buf(), line.to_string()));
+            self.socket_requests
+                .borrow_mut()
+                .push((socket.to_path_buf(), line.to_string()));
             Ok(r#"{"id":"hp","result":{"type":"agent_view","active":true}}"#.to_string())
         }
 
@@ -439,7 +447,10 @@ mod tests {
     #[test]
     fn captures_output_and_exit_code() {
         let out = RealRunner
-            .run(&Cmd::new("sh", Duration::from_secs(5)).args(["-c", "echo hi; echo err >&2; exit 3"]))
+            .run(
+                &Cmd::new("sh", Duration::from_secs(5))
+                    .args(["-c", "echo hi; echo err >&2; exit 3"]),
+            )
             .unwrap();
         assert_eq!(out.code, Some(3));
         assert_eq!(out.stdout, "hi\n");

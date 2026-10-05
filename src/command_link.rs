@@ -1,4 +1,4 @@
-//! The `herdr-projects` command on `PATH`: a link in `~/.local/bin` (or
+//! The `herdr-supervisor` command on `PATH`: a link in `~/.local/bin` (or
 //! `$XDG_BIN_HOME`) to the plugin's binary, made at every plugin start and by
 //! `doctor --fix`, so a reinstall into another folder never leaves it broken.
 //! Only a missing entry, or a link that is dangling or points into Herdr's
@@ -10,18 +10,20 @@ use anyhow::{Context, Result};
 
 use crate::paths::Env;
 
-pub const NAME: &str = "herdr-projects";
+pub const NAME: &str = "herdr-supervisor";
 
 /// The folder the link goes in: `$XDG_BIN_HOME`, else `~/.local/bin`.
 pub fn bin_dir(env: &Env) -> PathBuf {
-    env.var("XDG_BIN_HOME").map(PathBuf::from).unwrap_or_else(|| env.home.join(".local/bin"))
+    env.var("XDG_BIN_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| env.home.join(".local/bin"))
 }
 
 pub fn link_path(env: &Env) -> PathBuf {
     bin_dir(env).join(NAME)
 }
 
-/// Whether `binary` is an installed build (`target/release/herdr-projects`),
+/// Whether `binary` is an installed build (`target/release/herdr-supervisor`),
 /// not a test or debug binary that must never become the user's command.
 pub fn installable(binary: &Path) -> bool {
     binary.ends_with(Path::new("release").join(NAME))
@@ -72,11 +74,13 @@ pub fn ensure(env: &Env, binary: &Path) -> Result<State> {
     if matches!(found, State::Missing | State::Stale(_)) {
         let link = link_path(env);
         let dir = bin_dir(env);
-        std::fs::create_dir_all(&dir).with_context(|| format!("could not create {}", dir.display()))?;
+        std::fs::create_dir_all(&dir)
+            .with_context(|| format!("could not create {}", dir.display()))?;
         // Link under a temporary name, then rename over: never a moment without a command.
         let tmp = dir.join(format!(".{NAME}.{}", std::process::id()));
         let _ = std::fs::remove_file(&tmp);
-        std::os::unix::fs::symlink(binary, &tmp).with_context(|| format!("could not link {}", link.display()))?;
+        std::os::unix::fs::symlink(binary, &tmp)
+            .with_context(|| format!("could not link {}", link.display()))?;
         if let Err(error) = std::fs::rename(&tmp, &link) {
             let _ = std::fs::remove_file(&tmp);
             return Err(error).with_context(|| format!("could not link {}", link.display()));
@@ -85,16 +89,25 @@ pub fn ensure(env: &Env, binary: &Path) -> Result<State> {
     Ok(found)
 }
 
-/// What a shell with `path_var` runs for `herdr-projects`, if anything.
+/// What a shell with `path_var` runs for `herdr-supervisor`, if anything.
 pub fn resolves_to(path_var: &str) -> Option<PathBuf> {
-    std::env::split_paths(path_var).map(|dir| dir.join(NAME)).find(|candidate| candidate.is_file())
+    std::env::split_paths(path_var)
+        .map(|dir| dir.join(NAME))
+        .find(|candidate| candidate.is_file())
 }
 
 /// The `doctor` line: `(ok, detail)` where `None` is a warning.
 pub fn check(env: &Env, binary: &Path, path_var: &str, fix: bool) -> (Option<bool>, String) {
     let link = link_path(env);
     if !installable(binary) {
-        return (None, format!("{} is not an installed build, so {} was not checked", binary.display(), link.display()));
+        return (
+            None,
+            format!(
+                "{} is not an installed build, so {} was not checked",
+                binary.display(),
+                link.display()
+            ),
+        );
     }
     let (found, fixed) = if fix {
         match ensure(env, binary) {
@@ -108,20 +121,52 @@ pub fn check(env: &Env, binary: &Path, path_var: &str, fix: bool) -> (Option<boo
         (state(env, binary), false)
     };
     let mut detail = match &found {
-        State::Foreign(what) => return (None, format!("{} is {what}, so it was left alone; move it away and run `doctor --fix` to link this binary there", link.display())),
-        State::Missing if !fix => return (None, format!("{} is missing; `doctor --fix` (or restarting Herdr) links it", link.display())),
-        State::Stale(old) if !fix => return (None, format!("{} links {}, not this binary; `doctor --fix` (or restarting Herdr) relinks it", link.display(), old.display())),
+        State::Foreign(what) => {
+            return (
+                None,
+                format!(
+                    "{} is {what}, so it was left alone; move it away and run `doctor --fix` to link this binary there",
+                    link.display()
+                ),
+            );
+        }
+        State::Missing if !fix => {
+            return (
+                None,
+                format!(
+                    "{} is missing; `doctor --fix` (or restarting Herdr) links it",
+                    link.display()
+                ),
+            );
+        }
+        State::Stale(old) if !fix => {
+            return (
+                None,
+                format!(
+                    "{} links {}, not this binary; `doctor --fix` (or restarting Herdr) relinks it",
+                    link.display(),
+                    old.display()
+                ),
+            );
+        }
         _ if fixed => format!("fixed: {} now links this binary", link.display()),
         _ => format!("{} links this binary", link.display()),
     };
     let dir = bin_dir(env);
     if !std::env::split_paths(path_var).any(|d| d == dir) {
-        detail.push_str(&format!("; but {} is not on your PATH: add `export PATH=\"{}:$PATH\"` to your shell profile", dir.display(), dir.display()));
+        detail.push_str(&format!(
+            "; but {} is not on your PATH: add `export PATH=\"{}:$PATH\"` to your shell profile",
+            dir.display(),
+            dir.display()
+        ));
         return (None, detail);
     }
     match resolves_to(path_var) {
         Some(first) if std::fs::canonicalize(&first).ok() != std::fs::canonicalize(binary).ok() => {
-            detail.push_str(&format!("; but your PATH finds {} first, which is another binary", first.display()));
+            detail.push_str(&format!(
+                "; but your PATH finds {} first, which is another binary",
+                first.display()
+            ));
             (None, detail)
         }
         _ => (Some(true), detail),
@@ -135,7 +180,9 @@ mod tests {
     fn setup() -> (tempfile::TempDir, Env, PathBuf) {
         let home = tempfile::tempdir().unwrap();
         let env = Env::for_test(home.path(), &[]);
-        let binary = home.path().join(".config/herdr/plugins/github/herdr-projects-abc/target/release/herdr-projects");
+        let binary = home.path().join(
+            ".config/herdr/plugins/github/herdr-supervisor-abc/target/release/herdr-supervisor",
+        );
         std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
         std::fs::write(&binary, "#!/bin/sh\n").unwrap();
         (home, env, binary)
@@ -159,11 +206,14 @@ mod tests {
     fn a_dangling_link_or_one_into_another_plugin_install_is_replaced() {
         let (home, env, binary) = setup();
         std::fs::create_dir_all(bin_dir(&env)).unwrap();
-        std::os::unix::fs::symlink(home.path().join("gone/herdr-projects"), link_path(&env)).unwrap();
+        std::os::unix::fs::symlink(home.path().join("gone/herdr-supervisor"), link_path(&env))
+            .unwrap();
         assert!(matches!(ensure(&env, &binary).unwrap(), State::Stale(_)));
         assert_eq!(std::fs::read_link(link_path(&env)).unwrap(), binary);
 
-        let other = home.path().join(".config/herdr/plugins/github/herdr-projects-old/target/release/herdr-projects");
+        let other = home.path().join(
+            ".config/herdr/plugins/github/herdr-supervisor-old/target/release/herdr-supervisor",
+        );
         std::fs::create_dir_all(other.parent().unwrap()).unwrap();
         std::fs::write(&other, "").unwrap();
         std::fs::remove_file(link_path(&env)).unwrap();
@@ -186,7 +236,9 @@ mod tests {
         assert!(detail.contains("left alone"), "{detail}");
 
         std::fs::remove_file(link_path(&env)).unwrap();
-        let own = home.path().join("dev/herdr-projects/target/release/herdr-projects");
+        let own = home
+            .path()
+            .join("dev/herdr-supervisor/target/release/herdr-supervisor");
         std::fs::create_dir_all(own.parent().unwrap()).unwrap();
         std::fs::write(&own, "").unwrap();
         std::os::unix::fs::symlink(&own, link_path(&env)).unwrap();
@@ -199,7 +251,10 @@ mod tests {
         let (_home, env, binary) = setup();
         let (ok, detail) = check(&env, &binary, "/usr/bin", true);
         assert_eq!(ok, None);
-        assert!(detail.contains("is not on your PATH: add `export PATH="), "{detail}");
+        assert!(
+            detail.contains("is not on your PATH: add `export PATH="),
+            "{detail}"
+        );
         assert!(link_path(&env).is_symlink());
     }
 
@@ -212,15 +267,23 @@ mod tests {
         let path = format!("{}:{}", early.display(), path_with(&env));
         let (ok, detail) = check(&env, &binary, &path, true);
         assert_eq!(ok, None);
-        assert!(detail.contains("finds") && detail.contains("early"), "{detail}");
+        assert!(
+            detail.contains("finds") && detail.contains("early"),
+            "{detail}"
+        );
     }
 
     #[test]
     fn xdg_bin_home_wins_and_debug_builds_are_never_linked() {
         let home = tempfile::tempdir().unwrap();
         let env = Env::for_test(home.path(), &[("XDG_BIN_HOME", "/xdg/bin")]);
-        assert_eq!(link_path(&env), PathBuf::from("/xdg/bin/herdr-projects"));
-        let (ok, _) = check(&env, Path::new("/src/target/debug/herdr-projects"), "", true);
+        assert_eq!(link_path(&env), PathBuf::from("/xdg/bin/herdr-supervisor"));
+        let (ok, _) = check(
+            &env,
+            Path::new("/src/target/debug/herdr-supervisor"),
+            "",
+            true,
+        );
         assert_eq!(ok, None);
         assert!(!Path::new("/xdg/bin").exists());
     }
@@ -233,7 +296,14 @@ mod tests {
             .arg(checkout)
             .env_clear()
             .env("HOME", home)
-            .env("PATH", format!("{}:/usr/bin:/bin", home.join(".local/bin").display()))
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    home.join(".local/bin").display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            )
             .output()
             .unwrap();
         assert!(out.status.success());
@@ -245,12 +315,13 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let plugins = home.path().join(".config/herdr/plugins");
         let checkout = plugins.join(".tmp-install-12-34/checkout");
-        let link = home.path().join(".local/bin/herdr-projects");
-        // Herdr's folder for plugin id `herdr-projects`: slug plus sha256's first 12 hex digits.
-        let final_binary = plugins.join("github/herdr-projects-b1278ffb803c/target/release/herdr-projects");
+        let link = home.path().join(".local/bin/herdr-supervisor");
+        // Herdr's folder for plugin id `herdr-supervisor`: slug plus sha256's first 12 hex digits.
+        let final_binary =
+            plugins.join("github/herdr-supervisor-2bdc6c2fda8e/target/release/herdr-supervisor");
 
         // Anywhere but a Herdr install checkout: nothing.
-        run_script(home.path(), &home.path().join("dev/herdr-projects"));
+        run_script(home.path(), &home.path().join("dev/herdr-supervisor"));
         assert!(std::fs::symlink_metadata(&link).is_err());
 
         let said = run_script(home.path(), &checkout);

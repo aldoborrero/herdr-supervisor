@@ -23,7 +23,7 @@ use crate::herdr::{self, Herdr, Version};
 use crate::paths::{self, Ctx, SessionFlags};
 use crate::runner::{Cmd, Runner};
 
-const PLUGIN_ID: &str = "herdr-projects";
+const PLUGIN_ID: &str = "herdr-supervisor";
 const GIT_TIMEOUT: Duration = Duration::from_secs(30);
 /// `doctor` must stay fast and quiet when offline.
 const CHECK_TIMEOUT: Duration = Duration::from_secs(3);
@@ -46,7 +46,7 @@ impl Install {
     }
 }
 
-/// Reads `herdr plugin list --plugin herdr-projects --json`.
+/// Reads `herdr plugin list --plugin herdr-supervisor --json`.
 pub fn parse_install(json: &str) -> Result<Install> {
     #[derive(Deserialize)]
     struct Reply {
@@ -69,8 +69,14 @@ pub fn parse_install(json: &str) -> Result<Install> {
         repo: Option<String>,
         subdir: Option<String>,
     }
-    let reply: Reply = serde_json::from_str(json).context("`herdr plugin list --json` output changed")?;
-    let Some(plugin) = reply.result.plugins.into_iter().find(|p| p.plugin_id == PLUGIN_ID) else {
+    let reply: Reply =
+        serde_json::from_str(json).context("`herdr plugin list --json` output changed")?;
+    let Some(plugin) = reply
+        .result
+        .plugins
+        .into_iter()
+        .find(|p| p.plugin_id == PLUGIN_ID)
+    else {
         bail!("Herdr has no plugin `{PLUGIN_ID}` installed");
     };
     let root = plugin.plugin_root;
@@ -86,7 +92,9 @@ pub fn parse_install(json: &str) -> Result<Install> {
             }
             Ok(Install::Github { root, repo })
         }
-        other => bail!("`{PLUGIN_ID}` is installed from a `{other}` source, which `update` does not know"),
+        other => bail!(
+            "`{PLUGIN_ID}` is installed from a `{other}` source, which `update` does not know"
+        ),
     }
 }
 
@@ -94,7 +102,11 @@ pub fn parse_install(json: &str) -> Result<Install> {
 pub fn parse_release(tag: &str) -> Option<Version> {
     let core = tag.strip_prefix('v')?;
     let parts: Vec<&str> = core.split('.').collect();
-    if parts.len() != 3 || parts.iter().any(|p| p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit())) {
+    if parts.len() != 3
+        || parts
+            .iter()
+            .any(|p| p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit()))
+    {
         return None;
     }
     herdr::parse_version(core)
@@ -114,14 +126,17 @@ pub fn own_version() -> Version {
     herdr::parse_version(env!("CARGO_PKG_VERSION")).expect("Cargo.toml carries an X.Y.Z version")
 }
 
-/// The plugin root this binary was built in (`<root>/target/release/herdr-projects`).
+/// The plugin root this binary was built in (`<root>/target/release/herdr-supervisor`).
 pub fn own_root() -> Option<PathBuf> {
     let binary = paths::binary().ok()?;
     Some(binary.parent()?.parent()?.parent()?.to_path_buf())
 }
 
 fn git(root: &Path, timeout: Duration) -> Cmd {
-    Cmd::new("git", timeout).arg("-C").arg(root.to_string_lossy()).env("GIT_TERMINAL_PROMPT", "0")
+    Cmd::new("git", timeout)
+        .arg("-C")
+        .arg(root.to_string_lossy())
+        .env("GIT_TERMINAL_PROMPT", "0")
 }
 
 /// The newest release on the checkout's `origin`; `Ok(None)` when it has no release tags.
@@ -145,20 +160,28 @@ pub fn newer_release(runner: &dyn Runner, root: Option<&Path>) -> Option<Version
 }
 
 fn binary_in(root: &Path) -> PathBuf {
-    root.join("target/release/herdr-projects")
+    root.join("target/release/herdr-supervisor")
 }
 
 /// The release of the binary at `binary`, from its `--version`.
 fn binary_version(runner: &dyn Runner, binary: &Path) -> Option<Version> {
-    let out = runner.run(&Cmd::new(binary.to_string_lossy(), herdr::CALL_TIMEOUT).arg("--version")).ok()?;
-    out.success().then(|| herdr::parse_version(&out.stdout)).flatten()
+    let out = runner
+        .run(&Cmd::new(binary.to_string_lossy(), herdr::CALL_TIMEOUT).arg("--version"))
+        .ok()?;
+    out.success()
+        .then(|| herdr::parse_version(&out.stdout))
+        .flatten()
 }
 
 /// Why a linked checkout cannot be pulled, or `None` when it can.
 fn linked_blocker(runner: &dyn Runner, root: &Path) -> Result<Option<String>> {
     let branch = runner.run(&git(root, GIT_TIMEOUT).args(["rev-parse", "--abbrev-ref", "HEAD"]))?;
     if !branch.success() {
-        bail!("{} is not a git checkout: {}", root.display(), branch.error_text());
+        bail!(
+            "{} is not a git checkout: {}",
+            root.display(),
+            branch.error_text()
+        );
     }
     let branch = branch.stdout.trim();
     if branch != "main" {
@@ -168,9 +191,17 @@ fn linked_blocker(runner: &dyn Runner, root: &Path) -> Result<Option<String>> {
             root.display()
         )));
     }
-    let status = runner.run(&git(root, GIT_TIMEOUT).args(["status", "--porcelain", "--untracked-files=no"]))?;
+    let status = runner.run(&git(root, GIT_TIMEOUT).args([
+        "status",
+        "--porcelain",
+        "--untracked-files=no",
+    ]))?;
     if !status.success() {
-        bail!("git status failed in {}: {}", root.display(), status.error_text());
+        bail!(
+            "git status failed in {}: {}",
+            root.display(),
+            status.error_text()
+        );
     }
     if !status.stdout.trim().is_empty() {
         return Ok(Some(format!(
@@ -191,26 +222,56 @@ fn tail(text: &str) -> String {
 fn fetch_and_build(ctx: &Ctx, herdr: &Herdr, install: &Install, latest: Version) -> Result<()> {
     match install {
         Install::Github { repo, .. } => {
-            println!("installing {repo} v{latest} with Herdr (it downloads the prebuilt binary, or builds it when there is none)…");
+            println!(
+                "installing {repo} v{latest} with Herdr (it downloads the prebuilt binary, or builds it when there is none)…"
+            );
             let tag = format!("v{latest}");
-            let out = ctx.runner.run(&herdr.cmd(BUILD_TIMEOUT).args(["plugin", "install", repo, "--ref", &tag, "--yes"]))?;
+            let out = ctx.runner.run(
+                &herdr
+                    .cmd(BUILD_TIMEOUT)
+                    .args(["plugin", "install", repo, "--ref", &tag, "--yes"]),
+            )?;
             if !out.success() {
-                bail!("`herdr plugin install {repo} --ref {tag}` failed:\n{}", tail(&format!("{}\n{}", out.stdout, out.stderr)));
+                bail!(
+                    "`herdr plugin install {repo} --ref {tag}` failed:\n{}",
+                    tail(&format!("{}\n{}", out.stdout, out.stderr))
+                );
             }
         }
         Install::Linked { root } => {
             println!("pulling main in {}…", root.display());
-            let out = ctx.runner.run(&git(root, STEP_TIMEOUT).args(["pull", "--ff-only", "origin", "main"]))?;
+            let out = ctx.runner.run(&git(root, STEP_TIMEOUT).args([
+                "pull",
+                "--ff-only",
+                "origin",
+                "main",
+            ]))?;
             if !out.success() {
-                bail!("`git pull --ff-only origin main` failed: {}", out.error_text());
+                bail!(
+                    "`git pull --ff-only origin main` failed: {}",
+                    out.error_text()
+                );
             }
-            println!("installing the binary (scripts/install.sh: the prebuilt download, or a source build when there is none)…");
-            let out = ctx.runner.run(&Cmd::new("sh", BUILD_TIMEOUT).arg("scripts/install.sh").cwd(root))?;
+            println!(
+                "installing the binary (scripts/install.sh: the prebuilt download, or a source build when there is none)…"
+            );
+            let out = ctx.runner.run(
+                &Cmd::new("sh", BUILD_TIMEOUT)
+                    .arg("scripts/install.sh")
+                    .cwd(root),
+            )?;
             if !out.success() {
-                bail!("the install failed:\n{}", tail(&format!("{}\n{}", out.stdout, out.stderr)));
+                bail!(
+                    "the install failed:\n{}",
+                    tail(&format!("{}\n{}", out.stdout, out.stderr))
+                );
             }
             // Its own lines say whether it downloaded or fell back to a build.
-            for line in out.stderr.lines().filter(|l| l.starts_with("herdr-projects install:")) {
+            for line in out
+                .stderr
+                .lines()
+                .filter(|l| l.starts_with("herdr-supervisor install:"))
+            {
                 println!("{line}");
             }
         }
@@ -235,9 +296,16 @@ pub fn run(ctx: &Ctx, check_only: bool) -> Result<()> {
     let bin = ctx.env.herdr_bin();
     let session = paths::resolve_session(&SessionFlags::default(), ctx.env, ctx.runner)?;
     let herdr = Herdr::new(&bin, &session.socket, ctx.runner);
-    let out = ctx.runner.run(&herdr.cmd(herdr::CALL_TIMEOUT).args(["plugin", "list", "--plugin", PLUGIN_ID, "--json"]))?;
+    let out = ctx.runner.run(
+        &herdr
+            .cmd(herdr::CALL_TIMEOUT)
+            .args(["plugin", "list", "--plugin", PLUGIN_ID, "--json"]),
+    )?;
     if !out.success() {
-        bail!("could not ask Herdr how {PLUGIN_ID} is installed: {}", out.error_text());
+        bail!(
+            "could not ask Herdr how {PLUGIN_ID} is installed: {}",
+            out.error_text()
+        );
     }
     let install = parse_install(&out.stdout)?;
     let root = install.root().to_path_buf();
@@ -250,12 +318,12 @@ pub fn run(ctx: &Ctx, check_only: bool) -> Result<()> {
         println!("installed: {current}");
         println!("latest:    {latest}");
         if latest > current {
-            println!("run `herdr-projects update` to update");
+            println!("run `herdr-supervisor update` to update");
         }
         return Ok(());
     }
     if latest <= current {
-        println!("herdr-projects {current} is up to date");
+        println!("herdr-supervisor {current} is up to date");
         return Ok(());
     }
     if let Install::Linked { root } = &install
@@ -277,21 +345,32 @@ pub fn run(ctx: &Ctx, check_only: bool) -> Result<()> {
         Err(_) => true,
     };
     let ticker = run_binary(ctx, &binary, &["ticker", "start"]).unwrap_or(false);
-    let ticker_note = if ticker { "" } else { "; `herdr-projects ticker start` failed, run it again" };
+    let ticker_note = if ticker {
+        ""
+    } else {
+        "; `herdr-supervisor ticker start` failed, run it again"
+    };
 
     match fetched {
         Ok(()) => {
-            let new = binary_version(ctx.runner, &binary).map_or_else(|| "unknown".to_string(), |v| v.to_string());
+            let new = binary_version(ctx.runner, &binary)
+                .map_or_else(|| "unknown".to_string(), |v| v.to_string());
             println!("updated {current} → {new}");
             if !fixed || !ticker {
                 bail!(
                     "updated, but {}{ticker_note}",
-                    if fixed { "the ticker did not start" } else { "`doctor --fix` reported problems (above)" }
+                    if fixed {
+                        "the ticker did not start"
+                    } else {
+                        "`doctor --fix` reported problems (above)"
+                    }
                 );
             }
             Ok(())
         }
-        Err(error) => bail!("{error:#}\nupdate failed: {current} is still installed and the ticker was restarted{ticker_note}"),
+        Err(error) => bail!(
+            "{error:#}\nupdate failed: {current} is still installed and the ticker was restarted{ticker_note}"
+        ),
     }
 }
 
@@ -301,27 +380,45 @@ mod tests {
 
     fn list(kind_source: &str) -> String {
         format!(
-            r#"{{"id":"cli:plugin","result":{{"plugins":[{{"plugin_id":"herdr-projects","plugin_root":"/p/root","version":"0.2.2","source":{kind_source}}}],"type":"plugin_list"}}}}"#
+            r#"{{"id":"cli:plugin","result":{{"plugins":[{{"plugin_id":"herdr-supervisor","plugin_root":"/p/root","version":"0.2.2","source":{kind_source}}}],"type":"plugin_list"}}}}"#
         )
     }
 
     #[test]
     fn a_linked_checkout_is_detected() {
         let install = parse_install(&list(r#"{"kind":"local"}"#)).unwrap();
-        assert_eq!(install, Install::Linked { root: "/p/root".into() });
+        assert_eq!(
+            install,
+            Install::Linked {
+                root: "/p/root".into()
+            }
+        );
     }
 
     #[test]
     fn a_github_install_is_detected_with_its_repository() {
-        let json = list(r#"{"kind":"github","owner":"eliasstravik","repo":"herdr-projects","managed_path":"/p/root","resolved_commit":"abc","requested_ref":"v0.2.2"}"#);
+        let json = list(
+            r#"{"kind":"github","owner":"eliasstravik","repo":"herdr-supervisor","managed_path":"/p/root","resolved_commit":"abc","requested_ref":"v0.2.2"}"#,
+        );
         let install = parse_install(&json).unwrap();
-        assert_eq!(install, Install::Github { root: "/p/root".into(), repo: "eliasstravik/herdr-projects".into() });
+        assert_eq!(
+            install,
+            Install::Github {
+                root: "/p/root".into(),
+                repo: "eliasstravik/herdr-supervisor".into()
+            }
+        );
     }
 
     #[test]
     fn a_missing_plugin_or_unknown_source_is_an_error() {
         let empty = r#"{"id":"cli:plugin","result":{"plugins":[],"type":"plugin_list"}}"#;
-        assert!(parse_install(empty).unwrap_err().to_string().contains("no plugin"));
+        assert!(
+            parse_install(empty)
+                .unwrap_err()
+                .to_string()
+                .contains("no plugin")
+        );
         assert!(parse_install(&list(r#"{"kind":"archive"}"#)).is_err());
     }
 
@@ -357,9 +454,15 @@ mod tests {
 
         let runner = FakeRunner::new();
         runner.on("ls-remote", ok("aaa\trefs/tags/v999.0.0\n"));
-        assert_eq!(newer_release(&runner, Some(dir.path())), Some(Version(999, 0, 0)));
+        assert_eq!(
+            newer_release(&runner, Some(dir.path())),
+            Some(Version(999, 0, 0))
+        );
         let runner = FakeRunner::new();
-        runner.on("ls-remote", ok(&format!("aaa\trefs/tags/v{}\n", env!("CARGO_PKG_VERSION"))));
+        runner.on(
+            "ls-remote",
+            ok(&format!("aaa\trefs/tags/v{}\n", env!("CARGO_PKG_VERSION"))),
+        );
         assert_eq!(newer_release(&runner, Some(dir.path())), None);
     }
 }

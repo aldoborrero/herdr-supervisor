@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 300" role="img" aria-labelledby="title desc">
+  <title id="title">Herdr Supervisor</title>
+  <desc id="desc">A supervisor coordinates three isolated workers through a durable message bus.</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#101c2c"/><stop offset="1" stop-color="#172e3b"/></linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="#7a9cae" stroke-opacity=".09"/></pattern>
+  </defs>
+  <rect width="1120" height="300" rx="20" fill="url(#bg)"/>
+  <rect width="1120" height="300" rx="20" fill="url(#grid)"/>
+  <g font-family="ui-sans-serif, system-ui, sans-serif">
+    <text x="48" y="66" fill="#69dcc2" font-size="13" letter-spacing="3">LOCAL AUTHORITY · DISTRIBUTED EXECUTION</text>
+    <text x="45" y="137" fill="#f2f7fb" font-size="53" font-weight="700">Herdr Supervisor</text>
+    <text x="48" y="181" fill="#bdd0df" font-size="21">One objective. Isolated workers.</text>
+    <text x="48" y="214" fill="#bdd0df" font-size="21">Coordination that survives a restart.</text>
+    <text x="48" y="266" fill="#819faf" font-size="13">RUST / SQLITE / NATS / HERDR-MAILER</text>
+    <g fill="none" stroke="#69dcc2" stroke-width="2" opacity=".7"><path d="M748 149H809M809 72V227M809 72H853M809 149H853M809 227H853"/></g>
+    <rect x="625" y="122" width="124" height="54" rx="12" fill="#203f4a" stroke="#69dcc2"/>
+    <text x="687" y="155" fill="#d9fff5" font-size="15" text-anchor="middle">Supervisor</text>
+    <g fill="#223847" stroke="#58788c"><rect x="853" y="45" width="210" height="54" rx="10"/><rect x="853" y="122" width="210" height="54" rx="10"/><rect x="853" y="200" width="210" height="54" rx="10"/></g>
+    <g fill="#edf5fb" font-size="15"><text x="873" y="78">Codex</text><text x="873" y="155">Claude</text><text x="873" y="233">Pi</text></g>
+    <g fill="#9db9ca" font-size="12" text-anchor="end"><text x="1045" y="78">worktree 01</text><text x="1045" y="155">worktree 02</text><text x="1045" y="233">worktree 03</text></g>
+  </g>
+</svg>

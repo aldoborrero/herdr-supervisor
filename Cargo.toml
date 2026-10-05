@@ -1,10 +1,10 @@
 [package]
-name = "herdr-projects"
-version = "0.2.34"
+name = "herdr-supervisor"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT"
-description = "Projects for herdr: a coordinator conversation, parallel worker threads, shared memory and an overview"
+description = "Durable supervision of Herdr agents with isolated worktrees and native messaging"
 
 [dependencies]
 anyhow = "1"
@@ -17,6 +17,15 @@ serde_json = "1"
 sha2 = "0.10"
 toml = "0.9"
 toml_edit = "0.23"
+
+rusqlite = { version = "=0.37.0", features = ["bundled"] }
+uuid = { version = "=1.23.4", features = ["v4", "serde"] }
+ed25519-dalek = "=2.2.0"
+getrandom = "=0.2.17"
+bs58 = "=0.5.1"
+async-nats = "0.50.0"
+tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "time", "net", "io-util", "signal"] }
+futures-util = "0.3.34"
 
 [dev-dependencies]
 tempfile = "3"

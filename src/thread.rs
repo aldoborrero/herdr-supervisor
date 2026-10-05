@@ -171,26 +171,44 @@ pub fn home_report_path(project: &Project, id: &str) -> PathBuf {
 pub fn load(project: &Project, id: &str) -> Result<Thread> {
     validate_id(id)?;
     let path = record_path(project, id);
-    let text = std::fs::read_to_string(&path).with_context(|| format!("no thread `{id}` in `{}`", project.slug))?;
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("no thread `{id}` in `{}`", project.slug))?;
     toml::from_str(&text).with_context(|| format!("{} does not parse", path.display()))
 }
 
 pub fn list(project: &Project) -> Vec<Thread> {
+    match list_checked(project) {
+        Ok(threads) => threads,
+        Err(error) => {
+            eprintln!("{}: thread inventory is invalid: {error:#}", project.slug);
+            Vec::new()
+        }
+    }
+}
+
+/// Decisions which create or remove resources must not silently omit corrupt records.
+pub fn list_checked(project: &Project) -> Result<Vec<Thread>> {
     let Ok(entries) = std::fs::read_dir(threads_dir(project)) else {
-        return Vec::new();
+        bail!("cannot read thread inventory for {}", project.slug);
     };
-    let mut threads: Vec<Thread> = entries
-        .flatten()
-        .filter_map(|e| e.file_name().into_string().ok())
-        .filter_map(|name| name.strip_suffix(".toml").map(str::to_string))
-        .filter_map(|id| load(project, &id).ok())
-        .collect();
+    let mut threads = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_str().context("non-UTF-8 thread filename")?;
+        if let Some(id) = name.strip_suffix(".toml") {
+            threads.push(load(project, id)?);
+        }
+    }
     threads.sort_by(|a, b| a.id.cmp(&b.id));
-    threads
+    Ok(threads)
 }
 
 fn write_record(project: &Project, thread: &Thread) -> Result<()> {
-    write_atomic(&record_path(project, &thread.id), toml::to_string(thread)?.as_bytes())
+    write_atomic(
+        &record_path(project, &thread.id),
+        toml::to_string(thread)?.as_bytes(),
+    )
 }
 
 /// Read-modify-write under the project lock: re-reads the record, lets `change`
@@ -207,7 +225,16 @@ pub fn update(project: &Project, id: &str, change: impl FnOnce(&mut Thread)) -> 
 /// Allocates the next id under the project lock and writes the first record.
 pub fn allocate(project: &Project, fill: impl FnOnce(&mut Thread)) -> Result<Thread> {
     let _lock = project.lock()?;
-    let next = list(project)
+    let inventory = list_checked(project)?;
+    let (settings, _) = project.read_project_md()?;
+    let occupied = inventory
+        .iter()
+        .filter(|t| t.status != Status::Resolved)
+        .count();
+    if occupied >= settings.max_parallel_threads as usize {
+        bail!("project capacity exhausted (including unresolved failures)");
+    }
+    let next = inventory
         .iter()
         .filter_map(|t| t.id.strip_prefix("t-")?.parse::<u32>().ok())
         .max()
@@ -278,7 +305,11 @@ pub fn next_lines(report: &str) -> Vec<String> {
         let text = text
             .strip_prefix("- ")
             .or_else(|| text.strip_prefix("* "))
-            .or_else(|| text.split_once(". ").filter(|(n, _)| n.chars().all(|c| c.is_ascii_digit())).map(|(_, rest)| rest))
+            .or_else(|| {
+                text.split_once(". ")
+                    .filter(|(n, _)| n.chars().all(|c| c.is_ascii_digit()))
+                    .map(|(_, rest)| rest)
+            })
             .unwrap_or(text)
             .trim();
         if !text.is_empty() {
@@ -298,7 +329,13 @@ pub fn all_next(project: &Project, id: &str) -> Vec<String> {
     let report = std::fs::read_to_string(home_report_path(project, id)).unwrap_or_default();
     let mut lines = next_lines(&report);
     let extra = std::fs::read_to_string(extra_next_path(project, id)).unwrap_or_default();
-    lines.extend(extra.lines().map(str::trim).filter(|l| !l.is_empty()).map(|l| l.trim_start_matches("- ").to_string()));
+    lines.extend(
+        extra
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(|l| l.trim_start_matches("- ").to_string()),
+    );
     lines
 }
 
@@ -340,22 +377,44 @@ pub struct BriefInput<'a> {
 /// the coordinator's or the ticker's settings.
 fn brief_header(input: &BriefInput) -> String {
     let mut out = String::from("# Project\n\n");
-    out.push_str(&format!("- Project: {} (`{}`)\n", input.project_name, input.slug));
-    out.push_str(&format!("- Goal: {}\n", if input.goal.trim().is_empty() { "(none set)" } else { input.goal.trim() }));
+    out.push_str(&format!(
+        "- Project: {} (`{}`)\n",
+        input.project_name, input.slug
+    ));
+    out.push_str(&format!(
+        "- Goal: {}\n",
+        if input.goal.trim().is_empty() {
+            "(none set)"
+        } else {
+            input.goal.trim()
+        }
+    ));
     if input.repos.is_empty() {
         out.push_str("- Repos: (none)\n");
     } else {
         out.push_str("- Repos:\n");
         for repo in input.repos {
             match &repo.machine {
-                Some(machine) => out.push_str(&format!("  - {} on machine `{machine}`\n", repo.path)),
+                Some(machine) => {
+                    out.push_str(&format!("  - {} on machine `{machine}`\n", repo.path))
+                }
                 None => out.push_str(&format!("  - {} (local)\n", repo.path)),
             }
         }
     }
-    let uploads_note = if input.remote { " (on the home machine; not copied to yours)" } else { "" };
-    out.push_str(&format!("- Uploads, files from the user: `{}`{uploads_note}\n", input.uploads_path));
-    out.push_str(&format!("- Library, files for the user: `{}`\n", input.library_path));
+    let uploads_note = if input.remote {
+        " (on the home machine; not copied to yours)"
+    } else {
+        ""
+    };
+    out.push_str(&format!(
+        "- Uploads, files from the user: `{}`{uploads_note}\n",
+        input.uploads_path
+    ));
+    out.push_str(&format!(
+        "- Library, files for the user: `{}`\n",
+        input.library_path
+    ));
     out.push_str(&format!("- Report: `{}`\n", input.report_path));
     out
 }
@@ -396,7 +455,7 @@ pub fn compose_brief(input: &BriefInput) -> String {
 
     brief.push_str("\n# Progress\n\n");
     if input.report_prefix.is_empty() {
-        brief.push_str("Report progress with `herdr-projects report --percent N --activity '...'` if that command exists on this machine (use `--activity 'Waiting for you'` before asking the user something, and `--percent 100` when done); otherwise skip it.\n");
+        brief.push_str("Report progress with `herdr-supervisor report --percent N --activity '...'` if that command exists on this machine (use `--activity 'Waiting for you'` before asking the user something, and `--percent 100` when done); otherwise skip it.\n");
     } else {
         brief.push_str(&crate::progress::guidance(input.report_prefix, None));
         brief.push('\n');
@@ -415,7 +474,11 @@ pub fn brief_for(project: &Project, thread: &Thread, task: &str, restart: bool) 
     let (settings, instructions) = project.read_project_md()?;
     let project_name = project::display_name(&settings.name, &project.slug);
     let uploads = project.dir().join("uploads").to_string_lossy().into_owned();
-    let prefix = if thread.is_remote() { String::new() } else { crate::coordinator::current_prefix(&project.root).unwrap_or_default() };
+    let prefix = if thread.is_remote() {
+        String::new()
+    } else {
+        crate::coordinator::current_prefix(&project.root).unwrap_or_default()
+    };
     let memory_index = std::fs::read_to_string(project.dir().join("MEMORY.md")).unwrap_or_default();
     let mut names: Vec<String> = std::fs::read_dir(project.dir().join("memory"))
         .map(|entries| {
@@ -433,7 +496,10 @@ pub fn brief_for(project: &Project, thread: &Thread, task: &str, restart: bool) 
             let path = project.dir().join("memory").join(&name);
             // Regular files only: a symbolic link in memory/ is never followed.
             let regular = std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_file());
-            regular.then(|| std::fs::read_to_string(&path).ok()).flatten().map(|text| (name, text))
+            regular
+                .then(|| std::fs::read_to_string(&path).ok())
+                .flatten()
+                .map(|text| (name, text))
         })
         .collect();
     Ok(compose_brief(&BriefInput {
@@ -544,12 +610,16 @@ pub struct Live {
 impl Live {
     /// The agent said it is waiting for the user and has not started working since.
     pub fn self_waiting(&self) -> bool {
-        self.self_report.as_ref().is_some_and(|r| r.waiting()) && self.agent_state.as_deref() != Some("working")
+        self.self_report.as_ref().is_some_and(|r| r.waiting())
+            && self.agent_state.as_deref() != Some("working")
     }
 
     /// The agent reported progress under 100% within the activity TTL.
     pub fn self_working(&self) -> bool {
-        self.self_report.as_ref().is_some_and(|r| !r.done() && !r.waiting()) && self.report_age_secs < (crate::progress::ACTIVITY_TTL_MS / 1000) as i64
+        self.self_report
+            .as_ref()
+            .is_some_and(|r| !r.done() && !r.waiting())
+            && self.report_age_secs < (crate::progress::ACTIVITY_TTL_MS / 1000) as i64
     }
 }
 
@@ -579,7 +649,8 @@ pub fn group(thread: &Thread, live: &Live, now: jiff::Timestamp) -> Group {
     }
     // 3: a failed start, a dead pane, or a launch stuck on a dialog.
     let stuck_launch = thread.prompt_pending
-        && (thread.brief_stuck || (state.is_some_and(|s| !ready_state(s)) && live.state_secs >= NOT_READY_SECS));
+        && (thread.brief_stuck
+            || (state.is_some_and(|s| !ready_state(s)) && live.state_secs >= NOT_READY_SECS));
     // A pane closed after the thread wrote its report is finished work, not
     // a thread that needs the user.
     if thread.status == Status::Failed || (!live.pane_exists && !has_report) || stuck_launch {
@@ -598,11 +669,15 @@ pub fn group(thread: &Thread, live: &Live, now: jiff::Timestamp) -> Group {
         return Group::Landing;
     }
     let new_report = has_report && thread.report_hash != thread.acked_report_hash;
-    if (new_report || (has_report && pr_open)) && !thread.prompt_pending && state != Some("working") {
+    if (new_report || (has_report && pr_open)) && !thread.prompt_pending && state != Some("working")
+    {
         return Group::ReadyForReview;
     }
     // 6: working by the harness or by its own report.
-    if matches!(state, Some("working") | Some("blocked")) || thread.prompt_pending || live.self_working() {
+    if matches!(state, Some("working") | Some("blocked"))
+        || thread.prompt_pending
+        || live.self_working()
+    {
         return Group::Working;
     }
     // 7
@@ -627,7 +702,9 @@ pub fn agent_matches(thread: &Thread, agent: &Agent) -> bool {
         // Not started by the binary: whatever herdr reported at adoption.
         Kind::Adopted => ids,
         _ => {
-            ids && (thread.agent.is_empty() || agent.agent.is_empty() || agent.agent == thread.agent)
+            ids && (thread.agent.is_empty()
+                || agent.agent.is_empty()
+                || agent.agent == thread.agent)
                 && (agent.name.is_empty() || agent.name == thread.agent_name)
         }
     }
@@ -635,7 +712,10 @@ pub fn agent_matches(thread: &Thread, agent: &Agent) -> bool {
 
 /// Our agent, found by `agent_matches`, running without a name: re-apply it.
 pub fn needs_rename(thread: &Thread, agent: &Agent) -> bool {
-    thread.kind != Kind::Adopted && !thread.agent_name.is_empty() && agent.name.is_empty() && agent_matches(thread, agent)
+    thread.kind != Kind::Adopted
+        && !thread.agent_name.is_empty()
+        && agent.name.is_empty()
+        && agent_matches(thread, agent)
 }
 
 /// Live state from one `agent list` and one `pane list`. `recorded` supplies
@@ -645,7 +725,9 @@ pub fn live_state(thread: &Thread, agents: &[Agent], panes: &[Pane], now: jiff::
     let agent = agents.iter().find(|a| agent_matches(thread, a));
     let pane_exists = agent.is_some() || panes.iter().any(|p| pane_matches(thread, p));
     // A pane whose ids match but which holds someone else's agent is not ours.
-    let foreign = agent.is_none() && agents.iter().any(|a| a.pane_id == thread.pane_id) && thread.kind != Kind::Adopted;
+    let foreign = agent.is_none()
+        && agents.iter().any(|a| a.pane_id == thread.pane_id)
+        && thread.kind != Kind::Adopted;
     let agent_state = agent.map(|a| a.agent_status.clone());
     let state_secs = match &agent_state {
         Some(state) if *state == thread.last_state => seconds_since(&thread.last_state_change, now),
@@ -663,7 +745,14 @@ pub fn live_state(thread: &Thread, agents: &[Agent], panes: &[Pane], now: jiff::
 /// `live_state` plus the agent's own report from `<root>/.progress/`, matched
 /// by pane id and terminal id. Remote threads have none (the record is written
 /// on the machine where the agent runs).
-pub fn live_with_report(thread: &Thread, agents: &[Agent], panes: &[Pane], now: jiff::Timestamp, root: &Path, socket: &str) -> Live {
+pub fn live_with_report(
+    thread: &Thread,
+    agents: &[Agent],
+    panes: &[Pane],
+    now: jiff::Timestamp,
+    root: &Path,
+    socket: &str,
+) -> Live {
     let mut live = live_state(thread, agents, panes, now);
     if thread.is_remote() || !live.pane_exists {
         return live;
@@ -672,7 +761,12 @@ pub fn live_with_report(thread: &Thread, agents: &[Agent], panes: &[Pane], now: 
         .iter()
         .find(|a| agent_matches(thread, a))
         .map(|a| a.terminal_id.clone())
-        .or_else(|| panes.iter().find(|p| pane_matches(thread, p)).map(|p| p.terminal_id.clone()))
+        .or_else(|| {
+            panes
+                .iter()
+                .find(|p| pane_matches(thread, p))
+                .map(|p| p.terminal_id.clone())
+        })
         .unwrap_or_default();
     if let Some(record) = crate::progress::self_report(root, socket, &thread.pane_id, &terminal) {
         live.report_age_secs = now.as_second() - record.reported_at;
@@ -692,7 +786,10 @@ pub enum CopyOutcome {
 }
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 fn is_real_dir(path: &Path) -> bool {
@@ -726,7 +823,10 @@ pub fn local_report_hash(thread: &Thread) -> Option<String> {
     }
     let report = dir.join("report.md");
     let regular = std::fs::symlink_metadata(&report).is_ok_and(|m| m.is_file());
-    regular.then(|| std::fs::read(&report).ok()).flatten().map(|bytes| sha256_hex(&bytes))
+    regular
+        .then(|| std::fs::read(&report).ok())
+        .flatten()
+        .map(|bytes| sha256_hex(&bytes))
 }
 
 pub struct Copied {
@@ -738,16 +838,27 @@ pub struct Copied {
 /// Copies a local thread's report and, when `with_library`, its library home.
 /// Nothing that is a symbolic link is followed or copied. The caller must not
 /// hold the project lock: this runs `du` and `rsync`.
-pub fn copy_home_local(project: &Project, thread: &Thread, with_library: bool, runner: &dyn Runner) -> Copied {
+pub fn copy_home_local(
+    project: &Project,
+    thread: &Thread,
+    with_library: bool,
+    runner: &dyn Runner,
+) -> Copied {
     let dir = Path::new(&thread.thread_dir);
     let mut notes = Vec::new();
     if thread.thread_dir.is_empty() || !dir.exists() {
         // Nothing was ever written, so nothing can be lost.
-        return Copied { outcome: CopyOutcome::Complete, report_hash: None };
+        return Copied {
+            outcome: CopyOutcome::Complete,
+            report_hash: None,
+        };
     }
     if !is_real_dir(dir) {
         return Copied {
-            outcome: CopyOutcome::Partial(vec![format!("{} is a symbolic link; nothing was copied", dir.display())]),
+            outcome: CopyOutcome::Partial(vec![format!(
+                "{} is a symbolic link; nothing was copied",
+                dir.display()
+            )]),
             report_hash: None,
         };
     }
@@ -760,66 +871,121 @@ pub fn copy_home_local(project: &Project, thread: &Thread, with_library: bool, r
             Ok(bytes) => {
                 let hash = sha256_hex(&bytes);
                 if hash != thread.report_hash || !home_report_path(project, &thread.id).is_file() {
-                    let written = project
-                        .lock()
-                        .and_then(|_lock| write_atomic(&home_report_path(project, &thread.id), &bytes));
+                    let written = project.lock().and_then(|_lock| {
+                        write_atomic(&home_report_path(project, &thread.id), &bytes)
+                    });
                     if let Err(error) = written {
-                        return Copied { outcome: CopyOutcome::Failed(format!("{error:#}")), report_hash: None };
+                        return Copied {
+                            outcome: CopyOutcome::Failed(format!("{error:#}")),
+                            report_hash: None,
+                        };
                     }
                 }
                 report_hash = Some(hash);
             }
             Err(error) => {
-                return Copied { outcome: CopyOutcome::Failed(format!("could not read {}: {error}", report.display())), report_hash: None };
+                return Copied {
+                    outcome: CopyOutcome::Failed(format!(
+                        "could not read {}: {error}",
+                        report.display()
+                    )),
+                    report_hash: None,
+                };
             }
         },
-        Ok(_) => notes.push(format!("{} is not a regular file; it was not copied", report.display())),
+        Ok(_) => notes.push(format!(
+            "{} is not a regular file; it was not copied",
+            report.display()
+        )),
     }
 
     if with_library {
         let library = dir.join("library");
         if is_symlink(&library) {
-            notes.push(format!("{} is a symbolic link; the library was not copied", library.display()));
+            notes.push(format!(
+                "{} is a symbolic link; the library was not copied",
+                library.display()
+            ));
         } else if is_real_dir(&library) {
             match copy_library_local(project, thread, &library, runner) {
                 Ok(mut skipped) => notes.append(&mut skipped),
-                Err(error) => return Copied { outcome: CopyOutcome::Failed(format!("{error:#}")), report_hash },
+                Err(error) => {
+                    return Copied {
+                        outcome: CopyOutcome::Failed(format!("{error:#}")),
+                        report_hash,
+                    };
+                }
             }
         }
     }
 
-    let outcome = if notes.is_empty() { CopyOutcome::Complete } else { CopyOutcome::Partial(notes) };
-    Copied { outcome, report_hash }
+    let outcome = if notes.is_empty() {
+        CopyOutcome::Complete
+    } else {
+        CopyOutcome::Partial(notes)
+    };
+    Copied {
+        outcome,
+        report_hash,
+    }
 }
 
 /// The same copy for a thread on a saved machine: the report with `scp`, the
 /// library with rsync over ssh, after checking on the machine (without
 /// following links) what is a real directory and a regular file.
-pub fn copy_home_remote(project: &Project, thread: &Thread, with_library: bool, runner: &dyn Runner, target: &str) -> Copied {
+pub fn copy_home_remote(
+    project: &Project,
+    thread: &Thread,
+    with_library: bool,
+    runner: &dyn Runner,
+    target: &str,
+) -> Copied {
     use crate::remote;
-    let failed = |error: String| Copied { outcome: CopyOutcome::Failed(error), report_hash: None };
+    let failed = |error: String| Copied {
+        outcome: CopyOutcome::Failed(error),
+        report_hash: None,
+    };
     if thread.thread_dir.is_empty() {
-        return Copied { outcome: CopyOutcome::Complete, report_hash: None };
+        return Copied {
+            outcome: CopyOutcome::Complete,
+            report_hash: None,
+        };
     }
     let found = match remote::layout(runner, target, &thread.thread_dir) {
         Ok(found) => found,
         Err(error) => return failed(format!("{error:#}")),
     };
     if found.absent {
-        return Copied { outcome: CopyOutcome::Complete, report_hash: None };
+        return Copied {
+            outcome: CopyOutcome::Complete,
+            report_hash: None,
+        };
     }
     if !found.dir_ok {
-        return Copied { outcome: CopyOutcome::Partial(vec![format!("{} on {target} is a symbolic link; nothing was copied", thread.thread_dir)]), report_hash: None };
+        return Copied {
+            outcome: CopyOutcome::Partial(vec![format!(
+                "{} on {target} is a symbolic link; nothing was copied",
+                thread.thread_dir
+            )]),
+            report_hash: None,
+        };
     }
     let mut notes = Vec::new();
     let mut report_hash = None;
     if found.report_ok {
-        let tmp = project.dir().join("threads").join(format!(".{}.fetch.{}.tmp", thread.id, std::process::id()));
-        let fetched = remote::fetch_file(runner, target, &thread.report_path(), &tmp).and_then(|()| Ok(std::fs::read(&tmp)?));
+        let tmp = project.dir().join("threads").join(format!(
+            ".{}.fetch.{}.tmp",
+            thread.id,
+            std::process::id()
+        ));
+        let fetched = remote::fetch_file(runner, target, &thread.report_path(), &tmp)
+            .and_then(|()| Ok(std::fs::read(&tmp)?));
         let _ = std::fs::remove_file(&tmp);
         match fetched {
             Ok(bytes) => {
-                let written = project.lock().and_then(|_lock| write_atomic(&home_report_path(project, &thread.id), &bytes));
+                let written = project
+                    .lock()
+                    .and_then(|_lock| write_atomic(&home_report_path(project, &thread.id), &bytes));
                 if let Err(error) = written {
                     return failed(format!("{error:#}"));
                 }
@@ -828,16 +994,31 @@ pub fn copy_home_remote(project: &Project, thread: &Thread, with_library: bool, 
             Err(error) => return failed(format!("{error:#}")),
         }
     } else if found.report_is_other {
-        notes.push(format!("{} on {target} is not a regular file; it was not copied", thread.report_path()));
+        notes.push(format!(
+            "{} on {target} is not a regular file; it was not copied",
+            thread.report_path()
+        ));
     }
 
     if with_library {
         if found.library_is_link {
-            notes.push(format!("{} on {target} is a symbolic link; the library was not copied", thread.library_path()));
+            notes.push(format!(
+                "{} on {target} is a symbolic link; the library was not copied",
+                thread.library_path()
+            ));
         } else if found.library_ok && found.library_kb > LIBRARY_CAP_KB {
-            notes.push(format!("the library is {} MB, over the {} MB cap; nothing from it was copied", found.library_kb / 1024, LIBRARY_CAP_KB / 1024));
+            notes.push(format!(
+                "the library is {} MB, over the {} MB cap; nothing from it was copied",
+                found.library_kb / 1024,
+                LIBRARY_CAP_KB / 1024
+            ));
         } else if found.library_ok {
-            notes.extend(found.symlinks.iter().map(|p| format!("{p} is a symbolic link; it was not copied")));
+            notes.extend(
+                found
+                    .symlinks
+                    .iter()
+                    .map(|p| format!("{p} is a symbolic link; it was not copied")),
+            );
             let target_dir = project.dir().join("library").join(&thread.id);
             let made = project.lock().and_then(|_lock| {
                 if !target_dir.is_dir() {
@@ -846,19 +1027,40 @@ pub fn copy_home_remote(project: &Project, thread: &Thread, with_library: bool, 
                 Ok(())
             });
             if let Err(error) = made {
-                return Copied { outcome: CopyOutcome::Failed(format!("{error:#}")), report_hash };
+                return Copied {
+                    outcome: CopyOutcome::Failed(format!("{error:#}")),
+                    report_hash,
+                };
             }
-            if let Err(error) = remote::fetch_dir(runner, target, &thread.library_path(), &target_dir) {
-                return Copied { outcome: CopyOutcome::Failed(format!("{error:#}")), report_hash };
+            if let Err(error) =
+                remote::fetch_dir(runner, target, &thread.library_path(), &target_dir)
+            {
+                return Copied {
+                    outcome: CopyOutcome::Failed(format!("{error:#}")),
+                    report_hash,
+                };
             }
         }
     }
-    let outcome = if notes.is_empty() { CopyOutcome::Complete } else { CopyOutcome::Partial(notes) };
-    Copied { outcome, report_hash }
+    let outcome = if notes.is_empty() {
+        CopyOutcome::Complete
+    } else {
+        CopyOutcome::Partial(notes)
+    };
+    Copied {
+        outcome,
+        report_hash,
+    }
 }
 
-fn copy_library_local(project: &Project, thread: &Thread, library: &Path, runner: &dyn Runner) -> Result<Vec<String>> {
-    let du = runner.run(&Cmd::new("du", Duration::from_secs(10)).args(["-sk", &library.to_string_lossy()]))?;
+fn copy_library_local(
+    project: &Project,
+    thread: &Thread,
+    library: &Path,
+    runner: &dyn Runner,
+) -> Result<Vec<String>> {
+    let du = runner
+        .run(&Cmd::new("du", Duration::from_secs(10)).args(["-sk", &library.to_string_lossy()]))?;
     let kb: u64 = du
         .stdout
         .split_whitespace()
@@ -874,24 +1076,26 @@ fn copy_library_local(project: &Project, thread: &Thread, library: &Path, runner
     }
     let mut notes = Vec::new();
     symlinks_under(library, &mut notes);
-    let notes: Vec<String> = notes.into_iter().map(|p| format!("{p} is a symbolic link; it was not copied")).collect();
+    let notes: Vec<String> = notes
+        .into_iter()
+        .map(|p| format!("{p} is a symbolic link; it was not copied"))
+        .collect();
 
     let target = project.dir().join("library").join(&thread.id);
     {
         let _lock = project.lock()?;
         if !target.is_dir() {
             // `create_dir`, not `create_dir_all`: never recreate a deleted project.
-            std::fs::create_dir(&target).with_context(|| format!("could not create {}", target.display()))?;
+            std::fs::create_dir(&target)
+                .with_context(|| format!("could not create {}", target.display()))?;
         }
     }
     // `-rt` without `-l`: symbolic links are skipped, never followed.
-    let out = runner.run(
-        &Cmd::new("rsync", Duration::from_secs(60)).args([
-            "-rt".to_string(),
-            format!("{}/", library.to_string_lossy()),
-            format!("{}/", target.to_string_lossy()),
-        ]),
-    )?;
+    let out = runner.run(&Cmd::new("rsync", Duration::from_secs(60)).args([
+        "-rt".to_string(),
+        format!("{}/", library.to_string_lossy()),
+        format!("{}/", target.to_string_lossy()),
+    ]))?;
     if !out.success() {
         bail!("rsync failed: {}", out.error_text());
     }
@@ -921,110 +1125,265 @@ mod tests {
     }
 
     fn live(state: Option<&str>, secs: i64) -> Live {
-        Live { pane_exists: true, agent_state: state.map(str::to_string), state_secs: secs, ..Live::default() }
+        Live {
+            pane_exists: true,
+            agent_state: state.map(str::to_string),
+            state_secs: secs,
+            ..Live::default()
+        }
     }
 
     #[test]
     fn row1_resolved_wins_over_everything() {
-        let t = Thread { status: Status::Resolved, prompt_pending: true, ..open_thread() };
-        assert_eq!(group(&t, &live(Some("blocked"), 999), now()), Group::Resolved);
+        let t = Thread {
+            status: Status::Resolved,
+            prompt_pending: true,
+            ..open_thread()
+        };
+        assert_eq!(
+            group(&t, &live(Some("blocked"), 999), now()),
+            Group::Resolved
+        );
     }
 
     #[test]
     fn row2_starting_is_working_for_five_minutes() {
-        let young = Thread { status: Status::Starting, created: ago(10), ..open_thread() };
+        let young = Thread {
+            status: Status::Starting,
+            created: ago(10),
+            ..open_thread()
+        };
         assert_eq!(group(&young, &Live::default(), now()), Group::Working);
-        let old = Thread { status: Status::Starting, created: ago(301), ..open_thread() };
+        let old = Thread {
+            status: Status::Starting,
+            created: ago(301),
+            ..open_thread()
+        };
         assert_eq!(group(&old, &Live::default(), now()), Group::WaitingOnYou);
     }
 
     #[test]
     fn row3_waiting_on_you() {
-        let failed = Thread { status: Status::Failed, ..open_thread() };
-        assert_eq!(group(&failed, &live(Some("working"), 0), now()), Group::WaitingOnYou);
+        let failed = Thread {
+            status: Status::Failed,
+            ..open_thread()
+        };
+        assert_eq!(
+            group(&failed, &live(Some("working"), 0), now()),
+            Group::WaitingOnYou
+        );
 
-        let pending = Thread { prompt_pending: true, ..open_thread() };
-        assert_eq!(group(&pending, &live(Some("blocked"), 60), now()), Group::WaitingOnYou);
-        assert_eq!(group(&pending, &live(Some("unknown"), 60), now()), Group::WaitingOnYou);
+        let pending = Thread {
+            prompt_pending: true,
+            ..open_thread()
+        };
+        assert_eq!(
+            group(&pending, &live(Some("blocked"), 60), now()),
+            Group::WaitingOnYou
+        );
+        assert_eq!(
+            group(&pending, &live(Some("unknown"), 60), now()),
+            Group::WaitingOnYou
+        );
 
-        let gone = Live { pane_exists: false, agent_state: None, state_secs: 0, ..Live::default() };
+        let gone = Live {
+            pane_exists: false,
+            agent_state: None,
+            state_secs: 0,
+            ..Live::default()
+        };
         assert_eq!(group(&open_thread(), &gone, now()), Group::WaitingOnYou);
 
-        assert_eq!(group(&open_thread(), &live(Some("blocked"), 30), now()), Group::WaitingOnYou);
+        assert_eq!(
+            group(&open_thread(), &live(Some("blocked"), 30), now()),
+            Group::WaitingOnYou
+        );
     }
 
     #[test]
     fn row4_working_including_a_launch_in_progress() {
-        assert_eq!(group(&open_thread(), &live(Some("working"), 0), now()), Group::Working);
+        assert_eq!(
+            group(&open_thread(), &live(Some("working"), 0), now()),
+            Group::Working
+        );
         // A permission prompt answered quickly never shows as waiting.
-        assert_eq!(group(&open_thread(), &live(Some("blocked"), 29), now()), Group::Working);
+        assert_eq!(
+            group(&open_thread(), &live(Some("blocked"), 29), now()),
+            Group::Working
+        );
         // A new thread is Working, not Waiting on you, until an undetected-ready
         // agent has lasted 60 seconds.
-        let pending = Thread { prompt_pending: true, ..open_thread() };
+        let pending = Thread {
+            prompt_pending: true,
+            ..open_thread()
+        };
         assert_eq!(group(&pending, &live(None, 0), now()), Group::Working);
-        assert_eq!(group(&pending, &live(Some("unknown"), 59), now()), Group::Working);
-        assert_eq!(group(&pending, &live(Some("idle"), 500), now()), Group::Working);
+        assert_eq!(
+            group(&pending, &live(Some("unknown"), 59), now()),
+            Group::Working
+        );
+        assert_eq!(
+            group(&pending, &live(Some("idle"), 500), now()),
+            Group::Working
+        );
     }
 
     #[test]
     fn row5_landing_needs_open_and_approved() {
-        let t = Thread { report_hash: "h".into(), pr_state: "OPEN".into(), pr_review: "APPROVED".into(), ..open_thread() };
+        let t = Thread {
+            report_hash: "h".into(),
+            pr_state: "OPEN".into(),
+            pr_review: "APPROVED".into(),
+            ..open_thread()
+        };
         assert_eq!(group(&t, &live(Some("idle"), 0), now()), Group::Landing);
-        let t = Thread { pr_review: "CHANGES_REQUESTED".into(), ..t };
-        assert_eq!(group(&t, &live(Some("idle"), 0), now()), Group::ReadyForReview);
+        let t = Thread {
+            pr_review: "CHANGES_REQUESTED".into(),
+            ..t
+        };
+        assert_eq!(
+            group(&t, &live(Some("idle"), 0), now()),
+            Group::ReadyForReview
+        );
     }
 
     #[test]
     fn row6_ready_for_review_until_ack_or_while_pr_open() {
-        let t = Thread { report_hash: "h".into(), ..open_thread() };
-        assert_eq!(group(&t, &live(Some("done"), 0), now()), Group::ReadyForReview);
-        let acked = Thread { acked_report_hash: "h".into(), ..t.clone() };
+        let t = Thread {
+            report_hash: "h".into(),
+            ..open_thread()
+        };
+        assert_eq!(
+            group(&t, &live(Some("done"), 0), now()),
+            Group::ReadyForReview
+        );
+        let acked = Thread {
+            acked_report_hash: "h".into(),
+            ..t.clone()
+        };
         assert_eq!(group(&acked, &live(Some("done"), 0), now()), Group::Idle);
-        let with_pr = Thread { pr_state: "OPEN".into(), ..acked };
-        assert_eq!(group(&with_pr, &live(Some("done"), 0), now()), Group::ReadyForReview);
+        let with_pr = Thread {
+            pr_state: "OPEN".into(),
+            ..acked
+        };
+        assert_eq!(
+            group(&with_pr, &live(Some("done"), 0), now()),
+            Group::ReadyForReview
+        );
     }
 
     #[test]
     fn row7_idle_and_precedence() {
-        assert_eq!(group(&open_thread(), &live(Some("idle"), 0), now()), Group::Idle);
+        assert_eq!(
+            group(&open_thread(), &live(Some("idle"), 0), now()),
+            Group::Idle
+        );
         // Working (row 4) beats Ready for review (row 6).
-        let t = Thread { report_hash: "h".into(), ..open_thread() };
+        let t = Thread {
+            report_hash: "h".into(),
+            ..open_thread()
+        };
         assert_eq!(group(&t, &live(Some("working"), 0), now()), Group::Working);
         // Blocked for long (row 3) beats an approved pull request (row 5).
-        let t = Thread { pr_state: "OPEN".into(), pr_review: "APPROVED".into(), ..t };
-        assert_eq!(group(&t, &live(Some("blocked"), 31), now()), Group::WaitingOnYou);
+        let t = Thread {
+            pr_state: "OPEN".into(),
+            pr_review: "APPROVED".into(),
+            ..t
+        };
+        assert_eq!(
+            group(&t, &live(Some("blocked"), 31), now()),
+            Group::WaitingOnYou
+        );
     }
 
     #[test]
     fn a_closed_pane_needs_you_only_without_a_report() {
-        let gone = Live { pane_exists: false, ..Live::default() };
-        let t = Thread { report_hash: "h".into(), ..open_thread() };
+        let gone = Live {
+            pane_exists: false,
+            ..Live::default()
+        };
+        let t = Thread {
+            report_hash: "h".into(),
+            ..open_thread()
+        };
         assert_eq!(group(&t, &gone, now()), Group::ReadyForReview);
-        let acked = Thread { acked_report_hash: "h".into(), ..t };
+        let acked = Thread {
+            acked_report_hash: "h".into(),
+            ..t
+        };
         assert_eq!(group(&acked, &gone, now()), Group::Idle);
         assert_eq!(group(&open_thread(), &gone, now()), Group::WaitingOnYou);
     }
 
     fn reported(activity: &str, percent: Option<u8>, age: i64, state: &str) -> Live {
-        let record = crate::progress::Record { activity: activity.into(), percent, reported_at: 1, ..Default::default() };
-        Live { report_age_secs: age, self_report: Some(record), ..live(Some(state), 0) }
+        let record = crate::progress::Record {
+            activity: activity.into(),
+            percent,
+            reported_at: 1,
+            ..Default::default()
+        };
+        Live {
+            report_age_secs: age,
+            self_report: Some(record),
+            ..live(Some(state), 0)
+        }
     }
 
     #[test]
     fn self_reports_feed_the_group() {
         // Asked a question but the harness reads idle: needs you.
-        assert_eq!(group(&open_thread(), &reported("Waiting for you", Some(40), 5, "idle"), now()), Group::WaitingOnYou);
+        assert_eq!(
+            group(
+                &open_thread(),
+                &reported("Waiting for you", Some(40), 5, "idle"),
+                now()
+            ),
+            Group::WaitingOnYou
+        );
         // Waiting beats a new report, but not a harness that is working again.
-        let t = Thread { report_hash: "h".into(), ..open_thread() };
-        assert_eq!(group(&t, &reported("Waiting for you", None, 5, "idle"), now()), Group::WaitingOnYou);
-        assert_eq!(group(&t, &reported("Waiting for you", None, 5, "working"), now()), Group::Working);
+        let t = Thread {
+            report_hash: "h".into(),
+            ..open_thread()
+        };
+        assert_eq!(
+            group(&t, &reported("Waiting for you", None, 5, "idle"), now()),
+            Group::WaitingOnYou
+        );
+        assert_eq!(
+            group(&t, &reported("Waiting for you", None, 5, "working"), now()),
+            Group::Working
+        );
         // Under 100% and fresh: working, even between tool calls.
-        assert_eq!(group(&open_thread(), &reported("Testing changes", Some(55), 30, "idle"), now()), Group::Working);
+        assert_eq!(
+            group(
+                &open_thread(),
+                &reported("Testing changes", Some(55), 30, "idle"),
+                now()
+            ),
+            Group::Working
+        );
         // Stale after five minutes, and 100% is done.
-        assert_eq!(group(&open_thread(), &reported("Testing changes", Some(55), 400, "idle"), now()), Group::Idle);
-        assert_eq!(group(&open_thread(), &reported("Done", Some(100), 5, "idle"), now()), Group::Idle);
+        assert_eq!(
+            group(
+                &open_thread(),
+                &reported("Testing changes", Some(55), 400, "idle"),
+                now()
+            ),
+            Group::Idle
+        );
+        assert_eq!(
+            group(
+                &open_thread(),
+                &reported("Done", Some(100), 5, "idle"),
+                now()
+            ),
+            Group::Idle
+        );
         // A new report beats self-reported progress.
-        assert_eq!(group(&t, &reported("Polishing", Some(90), 5, "idle"), now()), Group::ReadyForReview);
+        assert_eq!(
+            group(&t, &reported("Polishing", Some(90), 5, "idle"), now()),
+            Group::ReadyForReview
+        );
     }
 
     #[test]
@@ -1074,7 +1433,10 @@ mod tests {
         assert!(!state.pane_exists);
         assert_eq!(state.agent_state, None);
         // Another kind in our pane is not ours either.
-        let codex = Agent { agent: "codex".into(), ..agent("", "/wt") };
+        let codex = Agent {
+            agent: "codex".into(),
+            ..agent("", "/wt")
+        };
         assert!(!agent_matches(&t, &codex));
     }
 
@@ -1083,7 +1445,12 @@ mod tests {
         // After a server restart the pane id and cwd are the same, the tab may
         // have moved, and the resumed agent has no name.
         let t = placed_thread(Kind::Worktree);
-        let resumed = Agent { tab_id: "w2:t9".into(), workspace_id: "w2".into(), agent: "claude".into(), ..agent("", "/wt") };
+        let resumed = Agent {
+            tab_id: "w2:t9".into(),
+            workspace_id: "w2".into(),
+            agent: "claude".into(),
+            ..agent("", "/wt")
+        };
         assert!(agent_matches(&t, &resumed));
         assert!(needs_rename(&t, &resumed));
         assert!(live_state(&t, &[resumed], &[], now()).pane_exists);
@@ -1092,7 +1459,10 @@ mod tests {
 
     #[test]
     fn adopted_threads_match_without_the_name() {
-        let t = Thread { agent_name: String::new(), ..placed_thread(Kind::Adopted) };
+        let t = Thread {
+            agent_name: String::new(),
+            ..placed_thread(Kind::Adopted)
+        };
         assert!(agent_matches(&t, &agent("whatever", "/wt")));
         assert!(!agent_matches(&t, &agent("whatever", "/elsewhere")));
     }
@@ -1114,10 +1484,19 @@ mod tests {
         for bad in ["", "t-1", "t-00a1", "../t-0001", "x-0001"] {
             assert!(validate_id(bad).is_err(), "{bad}");
         }
-        assert_eq!(branch_name("demo", "t-0001", "Fix the $(login) bug!"), "hp/demo/t-0001-fix-the-login-bug");
+        assert_eq!(
+            branch_name("demo", "t-0001", "Fix the $(login) bug!"),
+            "hp/demo/t-0001-fix-the-login-bug"
+        );
         assert_eq!(branch_name("demo", "t-0002", "???"), "hp/demo/t-0002");
-        assert_eq!(thread_dir("/wt/", "demo", "t-0001"), "/wt/.herdr-project/demo-t-0001");
-        assert_eq!(launch_prompt("demo", "t-0001"), "Read .herdr-project/demo-t-0001/brief.md and do what it says.");
+        assert_eq!(
+            thread_dir("/wt/", "demo", "t-0001"),
+            "/wt/.herdr-project/demo-t-0001"
+        );
+        assert_eq!(
+            launch_prompt("demo", "t-0001"),
+            "Read .herdr-project/demo-t-0001/brief.md and do what it says."
+        );
     }
 
     #[test]
@@ -1146,8 +1525,15 @@ mod tests {
         update(&project, &t.id, |t| t.pane_id = "w1:p2".into()).unwrap();
         update(&project, &t.id, |t| t.prompt_pending = true).unwrap();
         let t = load(&project, &t.id).unwrap();
-        assert_eq!((t.title.as_str(), t.pane_id.as_str(), t.prompt_pending), ("Hello", "w1:p2", true));
-        let leftovers = std::fs::read_dir(project.dir().join("threads")).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".tmp")).count();
+        assert_eq!(
+            (t.title.as_str(), t.pane_id.as_str(), t.prompt_pending),
+            ("Hello", "w1:p2", true)
+        );
+        let leftovers = std::fs::read_dir(project.dir().join("threads"))
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .count();
         assert_eq!(leftovers, 0);
     }
 
@@ -1159,8 +1545,14 @@ mod tests {
             ("c.md".to_string(), "gamma fact".to_string()),
         ];
         let repos = vec![
-            project::Repo { path: "/srv/app".into(), machine: Some("box".into()) },
-            project::Repo { path: "/home/me/lib".into(), machine: None },
+            project::Repo {
+                path: "/srv/app".into(),
+                machine: Some("box".into()),
+            },
+            project::Repo {
+                path: "/home/me/lib".into(),
+                machine: None,
+            },
         ];
         let input = BriefInput {
             project_name: "Demo",
@@ -1179,7 +1571,11 @@ mod tests {
             report_prefix: "/bin/hp --root /r",
         };
         let brief = compose_brief(&input);
-        let pos = |needle: &str| brief.find(needle).unwrap_or_else(|| panic!("missing {needle}"));
+        let pos = |needle: &str| {
+            brief
+                .find(needle)
+                .unwrap_or_else(|| panic!("missing {needle}"))
+        };
         // The header comes first: name, goal, repos with machines, uploads, library, report.
         assert!(brief.starts_with("# Project\n\n- Project: Demo (`demo`)\n- Goal: Ship it\n"));
         assert!(pos("/srv/app on machine `box`") < pos("/home/me/lib (local)"));
@@ -1192,14 +1588,37 @@ mod tests {
         assert!(pos("/bin/hp --root /r report --percent 25") < pos("Do the thing."));
         assert!(pos("Do the thing.") < pos("# Paths"));
         assert!(brief.contains("gamma fact"));
-        assert!(brief.contains("Not inlined because project memory is over 32000 characters: memory/b.md."));
+        assert!(
+            brief.contains(
+                "Not inlined because project memory is over 32000 characters: memory/b.md."
+            )
+        );
         assert!(!brief.contains(&"x".repeat(100)));
         // No operational settings reach a thread.
-        for word in ["max_parallel_threads", "auto_resolve_days", "nudge", "coordinator_agent", "thread_agent"] {
+        for word in [
+            "max_parallel_threads",
+            "auto_resolve_days",
+            "nudge",
+            "coordinator_agent",
+            "thread_agent",
+        ] {
             assert!(!brief.contains(word), "{word}");
         }
 
-        let fresh = compose_brief(&BriefInput { goal: "", repos: &[], remote: true, instructions: "", memory_index: "", memory_files: &[], task: "t", restart: false, report_path: "r", library_path: "l", report_prefix: "", ..input });
+        let fresh = compose_brief(&BriefInput {
+            goal: "",
+            repos: &[],
+            remote: true,
+            instructions: "",
+            memory_index: "",
+            memory_files: &[],
+            task: "t",
+            restart: false,
+            report_path: "r",
+            library_path: "l",
+            report_prefix: "",
+            ..input
+        });
         assert!(!fresh.contains("previous attempt"));
         assert!(fresh.contains("- Goal: (none set)\n- Repos: (none)\n"));
         assert!(fresh.contains("on the home machine; not copied"));
@@ -1208,7 +1627,10 @@ mod tests {
     #[test]
     fn next_lines_come_from_the_next_section_only() {
         let report = "PR: https://github.com/o/r/pull/1\n## Report\n- not this\n## Next\n- Merge the PR\n* Fix CI\n3. Confirm assumption X\n\n## Remember\n- nor this\n";
-        assert_eq!(next_lines(report), ["Merge the PR", "Fix CI", "Confirm assumption X"]);
+        assert_eq!(
+            next_lines(report),
+            ["Merge the PR", "Fix CI", "Confirm assumption X"]
+        );
         assert!(next_lines("## Report\nnothing\n").is_empty());
         assert!(next_lines("## Next\n").is_empty());
     }
@@ -1222,19 +1644,36 @@ mod tests {
         append_follow_up(&project, &t.id, "Also do Y.\n").unwrap();
         append_follow_up(&project, &t.id, "And Z.").unwrap();
         let text = std::fs::read_to_string(task_path(&project, &t.id)).unwrap();
-        assert!(text.starts_with("The task.\n\n## Follow-ups\n\n### 20"), "{text}");
+        assert!(
+            text.starts_with("The task.\n\n## Follow-ups\n\n### 20"),
+            "{text}"
+        );
         assert_eq!(text.matches("## Follow-ups").count(), 1);
         assert_eq!(text.matches("\n### ").count(), 2);
         assert!(text.ends_with("And Z.\n"));
 
         // The coordinator's extra Next lines come after the report's.
-        std::fs::write(home_report_path(&project, &t.id), "## Next\n- From the report\n").unwrap();
-        std::fs::write(extra_next_path(&project, &t.id), "- Added by the coordinator\n").unwrap();
-        assert_eq!(all_next(&project, &t.id), ["From the report", "Added by the coordinator"]);
+        std::fs::write(
+            home_report_path(&project, &t.id),
+            "## Next\n- From the report\n",
+        )
+        .unwrap();
+        std::fs::write(
+            extra_next_path(&project, &t.id),
+            "- Added by the coordinator\n",
+        )
+        .unwrap();
+        assert_eq!(
+            all_next(&project, &t.id),
+            ["From the report", "Added by the coordinator"]
+        );
     }
 
     fn local_thread(project: &Project, dir: &Path) -> Thread {
-        let t = allocate(project, |t| t.thread_dir = dir.to_string_lossy().into_owned()).unwrap();
+        let t = allocate(project, |t| {
+            t.thread_dir = dir.to_string_lossy().into_owned()
+        })
+        .unwrap();
         std::fs::create_dir_all(dir.join("library")).unwrap();
         t
     }
@@ -1251,9 +1690,18 @@ mod tests {
 
         let copied = copy_home_local(&project, &t, true, &RealRunner);
         assert_eq!(copied.outcome, CopyOutcome::Complete);
-        assert_eq!(copied.report_hash.as_deref(), Some(sha256_hex(b"## Report\nok\n").as_str()));
-        assert_eq!(std::fs::read_to_string(home_report_path(&project, &t.id)).unwrap(), "## Report\nok\n");
-        assert_eq!(std::fs::read_to_string(project.dir().join("library/t-0001/out.txt")).unwrap(), "data");
+        assert_eq!(
+            copied.report_hash.as_deref(),
+            Some(sha256_hex(b"## Report\nok\n").as_str())
+        );
+        assert_eq!(
+            std::fs::read_to_string(home_report_path(&project, &t.id)).unwrap(),
+            "## Report\nok\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(project.dir().join("library/t-0001/out.txt")).unwrap(),
+            "data"
+        );
 
         std::os::unix::fs::symlink("/etc/passwd", dir.join("library/link")).unwrap();
         let copied = copy_home_local(&project, &t, true, &RealRunner);
@@ -1285,7 +1733,10 @@ mod tests {
         std::fs::write(real.join("report.md"), "secret").unwrap();
         let linked = work.path().join("linked");
         std::os::unix::fs::symlink(&real, &linked).unwrap();
-        let t2 = allocate(&project, |t| t.thread_dir = linked.to_string_lossy().into_owned()).unwrap();
+        let t2 = allocate(&project, |t| {
+            t.thread_dir = linked.to_string_lossy().into_owned()
+        })
+        .unwrap();
         let copied = copy_home_local(&project, &t2, true, &RealRunner);
         assert!(matches!(copied.outcome, CopyOutcome::Partial(_)));
         assert!(!home_report_path(&project, &t2.id).exists());
@@ -1303,7 +1754,9 @@ mod tests {
         let runner = FakeRunner::new();
         runner.on("du -sk", ok("60000\t/x\n"));
         let copied = copy_home_local(&project, &t, true, &runner);
-        assert!(matches!(&copied.outcome, CopyOutcome::Partial(notes) if notes[0].contains("over the 50 MB cap")));
+        assert!(
+            matches!(&copied.outcome, CopyOutcome::Partial(notes) if notes[0].contains("over the 50 MB cap"))
+        );
         assert_eq!(runner.count("rsync"), 0);
         assert!(home_report_path(&project, &t.id).is_file());
     }
@@ -1319,6 +1772,9 @@ mod tests {
         let runner = FakeRunner::new();
         runner.on("du -sk", ok("4\t/x\n"));
         runner.on("rsync", fail(23, "rsync: write failed"));
-        assert!(matches!(copy_home_local(&project, &t, true, &runner).outcome, CopyOutcome::Failed(_)));
+        assert!(matches!(
+            copy_home_local(&project, &t, true, &runner).outcome,
+            CopyOutcome::Failed(_)
+        ));
     }
 }

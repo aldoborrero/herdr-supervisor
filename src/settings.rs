@@ -26,16 +26,25 @@ pub const KEYS: [(&str, &str); 10] = [
 
 /// Splits `+++` front matter from the rest, keeping both verbatim.
 fn split(text: &str) -> Result<(&str, &str)> {
-    let rest = text.strip_prefix("+++\n").context("the file must start with a `+++` line")?;
+    let rest = text
+        .strip_prefix("+++\n")
+        .context("the file must start with a `+++` line")?;
     match rest.find("\n+++\n") {
         Some(end) => Ok((&rest[..end + 1], &rest[end + 5..])),
-        None => rest.strip_suffix("\n+++").map(|f| (f, "")).context("no closing `+++` line"),
+        None => rest
+            .strip_suffix("\n+++")
+            .map(|f| (f, ""))
+            .context("no closing `+++` line"),
     }
 }
 
 fn join(front: &str, body: &str) -> String {
     let front = front.trim_end_matches('\n');
-    if body.is_empty() { format!("+++\n{front}\n+++\n") } else { format!("+++\n{front}\n+++\n{body}") }
+    if body.is_empty() {
+        format!("+++\n{front}\n+++\n")
+    } else {
+        format!("+++\n{front}\n+++\n{body}")
+    }
 }
 
 fn parse_bool(value: &str) -> Result<bool> {
@@ -55,7 +64,9 @@ fn normalize_repos(doc: &mut DocumentMut) -> Result<()> {
         Some(Item::Value(toml_edit::Value::Array(array))) => {
             let mut tables = ArrayOfTables::new();
             for value in array.iter() {
-                let inline = value.as_inline_table().context("`repos` entries must be tables")?;
+                let inline = value
+                    .as_inline_table()
+                    .context("`repos` entries must be tables")?;
                 tables.push(inline.clone().into_table());
             }
             Some(tables)
@@ -73,7 +84,9 @@ fn normalize_repos(doc: &mut DocumentMut) -> Result<()> {
 /// Applies one setting to PROJECT.md's text, validating the result.
 pub fn set_in(text: &str, key: &str, value: &str) -> Result<String> {
     let (front, body) = split(text)?;
-    let mut doc = front.parse::<DocumentMut>().context("PROJECT.md front matter does not parse")?;
+    let mut doc = front
+        .parse::<DocumentMut>()
+        .context("PROJECT.md front matter does not parse")?;
     let value = value.trim();
     match key {
         "name" | "goal" => {
@@ -90,7 +103,11 @@ pub fn set_in(text: &str, key: &str, value: &str) -> Result<String> {
             doc[&format!("{role}_profile")] = toml_edit::value(value);
         }
         "max_parallel_threads" | "auto_resolve_days" => {
-            let n: i64 = value.parse().ok().filter(|n: &i64| *n >= 0 && *n <= 1000).with_context(|| format!("`{value}` is not a number from 0 to 1000"))?;
+            let n: i64 = value
+                .parse()
+                .ok()
+                .filter(|n: &i64| *n >= 0 && *n <= 1000)
+                .with_context(|| format!("`{value}` is not a number from 0 to 1000"))?;
             if key == "max_parallel_threads" && n == 0 {
                 bail!("max_parallel_threads must be at least 1");
             }
@@ -104,11 +121,18 @@ pub fn set_in(text: &str, key: &str, value: &str) -> Result<String> {
             }
             let path = match repo.machine {
                 Some(_) => repo.path.clone(),
-                None => std::fs::canonicalize(&repo.path).map(|p| p.to_string_lossy().into_owned()).unwrap_or(repo.path.clone()),
+                None => std::fs::canonicalize(&repo.path)
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or(repo.path.clone()),
             };
             normalize_repos(&mut doc)?;
-            let repos = doc["repos"].as_array_of_tables_mut().context("`repos` must be [[repos]] tables")?;
-            if repos.iter().any(|t| t.get("path").and_then(Item::as_str) == Some(path.as_str()) && t.get("machine").and_then(Item::as_str) == repo.machine.as_deref()) {
+            let repos = doc["repos"]
+                .as_array_of_tables_mut()
+                .context("`repos` must be [[repos]] tables")?;
+            if repos.iter().any(|t| {
+                t.get("path").and_then(Item::as_str) == Some(path.as_str())
+                    && t.get("machine").and_then(Item::as_str) == repo.machine.as_deref()
+            }) {
                 bail!("{value} is already listed");
             }
             let mut table = Table::new();
@@ -120,18 +144,26 @@ pub fn set_in(text: &str, key: &str, value: &str) -> Result<String> {
         }
         "repos.remove" => {
             normalize_repos(&mut doc)?;
-            let repos = doc.get_mut("repos").and_then(Item::as_array_of_tables_mut).context("no repos are listed")?;
+            let repos = doc
+                .get_mut("repos")
+                .and_then(Item::as_array_of_tables_mut)
+                .context("no repos are listed")?;
             let before = repos.len();
             let wanted = project::parse_repo_arg(value);
             repos.retain(|t| {
                 let path = t.get("path").and_then(Item::as_str).unwrap_or("");
-                !(path == value || (path == wanted.path && t.get("machine").and_then(Item::as_str) == wanted.machine.as_deref()))
+                !(path == value
+                    || (path == wanted.path
+                        && t.get("machine").and_then(Item::as_str) == wanted.machine.as_deref()))
             });
             if repos.len() == before {
                 bail!("{value} is not listed");
             }
         }
-        other => bail!("unknown setting `{other}`; one of: {}", KEYS.iter().map(|(k, _)| *k).collect::<Vec<_>>().join(", ")),
+        other => bail!(
+            "unknown setting `{other}`; one of: {}",
+            KEYS.iter().map(|(k, _)| *k).collect::<Vec<_>>().join(", ")
+        ),
     }
     let front = doc.to_string();
     // The result must still be the settings the binary reads.
@@ -146,8 +178,19 @@ pub fn set(ctx: &Ctx, slug: &str, key: &str, value: &str) -> Result<()> {
         // A default must be a profile this project may use.
         let role = crate::profiles::Role::parse(role)?;
         let config = crate::profiles::load(&ctx.config_dir)?;
-        config.get(value.trim()).with_context(|| format!("there is no profile `{}`; `profile list` shows them", value.trim()))?;
-        crate::profiles::check_allowed(&config, &project.safety(&ctx.config_dir)?, role, value.trim(), slug)?;
+        config.get(value.trim()).with_context(|| {
+            format!(
+                "there is no profile `{}`; `profile list` shows them",
+                value.trim()
+            )
+        })?;
+        crate::profiles::check_allowed(
+            &config,
+            &project.safety(&ctx.config_dir)?,
+            role,
+            value.trim(),
+            slug,
+        )?;
     }
     let text = std::fs::read_to_string(project.project_md())?;
     let edited = set_in(&text, key, value)?;
@@ -168,16 +211,22 @@ pub fn routine_toggle(ctx: &Ctx, slug: &str, name: &str, to: Option<bool>) -> Re
     let project = Project::load(&ctx.root, slug)?;
     project::validate_slug(name)?;
     let path = project.dir().join("routines").join(format!("{name}.md"));
-    let text = std::fs::read_to_string(&path).with_context(|| format!("no routine `{name}` in `{slug}`"))?;
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("no routine `{name}` in `{slug}`"))?;
     let (front, body) = split(&text)?;
-    let mut doc = front.parse::<DocumentMut>().context("the routine's front matter does not parse")?;
+    let mut doc = front
+        .parse::<DocumentMut>()
+        .context("the routine's front matter does not parse")?;
     let current = doc.get("enabled").and_then(Item::as_bool).unwrap_or(true);
     let enabled = to.unwrap_or(!current);
     doc["enabled"] = toml_edit::value(enabled);
     let edited = join(&doc.to_string(), body);
     crate::routine::parse(name, &edited)?;
     project::write_atomic(&path, edited.as_bytes())?;
-    println!("routine `{name}` is now {}", if enabled { "enabled" } else { "disabled" });
+    println!(
+        "routine `{name}` is now {}",
+        if enabled { "enabled" } else { "disabled" }
+    );
     Ok(())
 }
 
@@ -195,35 +244,67 @@ pub fn is_text(path: &Path) -> bool {
 /// `open-file <path> [--workspace W]`: a text file opens in a new Herdr tab
 /// running `$EDITOR`; anything else with the system opener. No viewer.
 pub fn open_file(ctx: &Ctx, path: &Path, workspace: Option<&str>) -> Result<()> {
-    let path = std::fs::canonicalize(path).with_context(|| format!("{} does not exist", path.display()))?;
+    let path = std::fs::canonicalize(path)
+        .with_context(|| format!("{} does not exist", path.display()))?;
     if path.is_dir() || !is_text(&path) {
         return system_open(ctx, &path.to_string_lossy());
     }
-    let socket = ctx.env.var("HERDR_SOCKET_PATH").context("not inside Herdr: HERDR_SOCKET_PATH is not set")?;
+    let socket = ctx
+        .env
+        .var("HERDR_SOCKET_PATH")
+        .context("not inside Herdr: HERDR_SOCKET_PATH is not set")?;
     let herdr = crate::herdr::Herdr::new(ctx.env.herdr_bin(), socket, ctx.runner);
     let dir = path.parent().unwrap_or(Path::new("/"));
-    let label = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let workspace = workspace.map(str::to_string).or_else(|| ctx.env.var("HERDR_WORKSPACE_ID").map(str::to_string)).unwrap_or_default();
+    let label = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let workspace = workspace
+        .map(str::to_string)
+        .or_else(|| ctx.env.var("HERDR_WORKSPACE_ID").map(str::to_string))
+        .unwrap_or_default();
     let dir_text = dir.to_string_lossy();
-    let mut args = vec!["tab", "create", "--cwd", &dir_text, "--label", &label, "--focus"];
+    let mut args = vec![
+        "tab", "create", "--cwd", &dir_text, "--label", &label, "--focus",
+    ];
     if !workspace.is_empty() {
         args.extend(["--workspace", workspace.as_str()]);
     }
-    let created = herdr.call(&args, crate::herdr::CALL_TIMEOUT).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let pane = created["root_pane"]["pane_id"].as_str().context("herdr's tab reply has no pane")?.to_string();
-    let editor = ctx.env.var("VISUAL").or(ctx.env.var("EDITOR")).unwrap_or("vi");
+    let created = herdr
+        .call(&args, crate::herdr::CALL_TIMEOUT)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let pane = created["root_pane"]["pane_id"]
+        .as_str()
+        .context("herdr's tab reply has no pane")?
+        .to_string();
+    let editor = ctx
+        .env
+        .var("VISUAL")
+        .or(ctx.env.var("EDITOR"))
+        .unwrap_or("vi");
     let command = format!("{editor} {}", crate::remote::quote(&path.to_string_lossy()));
     // A fresh pane's shell needs a moment before it takes input.
     std::thread::sleep(std::time::Duration::from_millis(300));
-    herdr.call(&["pane", "run", &pane, &command], crate::herdr::CALL_TIMEOUT).map_err(|e| anyhow::anyhow!("{e}"))?;
+    herdr
+        .call(
+            &["pane", "run", &pane, &command],
+            crate::herdr::CALL_TIMEOUT,
+        )
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     println!("opened {} in a new tab", path.display());
     Ok(())
 }
 
 /// A URL or a non-text file with the system opener (`open` / `xdg-open`).
 pub fn system_open(ctx: &Ctx, target: &str) -> Result<()> {
-    let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
-    let out = ctx.runner.run(&crate::runner::Cmd::new(opener, std::time::Duration::from_secs(10)).arg(target))?;
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let out = ctx
+        .runner
+        .run(&crate::runner::Cmd::new(opener, std::time::Duration::from_secs(10)).arg(target))?;
     if !out.success() {
         bail!("{opener} {target}: {}", out.error_text());
     }
@@ -236,7 +317,15 @@ pub fn repos_text(settings: &Settings) -> String {
     if settings.repos.is_empty() {
         return "(none)".into();
     }
-    settings.repos.iter().map(|r| match &r.machine { Some(m) => format!("{}@{m}", r.path), None => r.path.clone() }).collect::<Vec<_>>().join(", ")
+    settings
+        .repos
+        .iter()
+        .map(|r| match &r.machine {
+            Some(m) => format!("{}@{m}", r.path),
+            None => r.path.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]
@@ -259,14 +348,28 @@ mod tests {
         assert!(set_in(MD, "max_parallel_threads", "many").is_err());
         assert!(set_in(MD, "thread_profile", "not a name").is_err());
         // The old key is replaced by the new one, never duplicated.
-        let old = set_in("+++\nthread_agent = \"claude\"\n+++\n", "thread_agent", "luna").unwrap();
+        let old = set_in(
+            "+++\nthread_agent = \"claude\"\n+++\n",
+            "thread_agent",
+            "luna",
+        )
+        .unwrap();
         assert_eq!(old, "+++\nthread_profile = \"luna\"\n+++\n");
-        assert_eq!(project::parse_project_md(&set_in(&old, "coordinator_profile", "sol").unwrap()).unwrap().0.coordinator_profile, "sol");
+        assert_eq!(
+            project::parse_project_md(&set_in(&old, "coordinator_profile", "sol").unwrap())
+                .unwrap()
+                .0
+                .coordinator_profile,
+            "sol"
+        );
         assert!(set_in(MD, "whatever", "x").is_err());
         let muted = set_in(MD, "mute", "on").unwrap();
         assert!(project::parse_project_md(&muted).unwrap().0.mute);
         let goal = set_in(MD, "goal", "Ship \"it\"").unwrap();
-        assert_eq!(project::parse_project_md(&goal).unwrap().0.goal, "Ship \"it\"");
+        assert_eq!(
+            project::parse_project_md(&goal).unwrap().0.goal,
+            "Ship \"it\""
+        );
     }
 
     #[test]
@@ -284,7 +387,10 @@ mod tests {
         let fresh = "+++\nname = \"X\"\nrepos = []\nnudge = false\n+++\nBody\n";
         let added = set_in(fresh, "repos.add", "/x@m").unwrap();
         let (settings, body) = project::parse_project_md(&added).unwrap();
-        assert_eq!((settings.repos.len(), settings.nudge, body.as_str()), (1, false, "Body\n"));
+        assert_eq!(
+            (settings.repos.len(), settings.nudge, body.as_str()),
+            (1, false, "Body\n")
+        );
         // A file with no repos yet.
         let bare = "+++\nname = \"X\"\n+++\n";
         let added = set_in(bare, "repos.add", "/x@m").unwrap();
@@ -299,13 +405,23 @@ mod tests {
         std::fs::write(&path, "+++\nschedule = \"daily 02:00\"\n+++\nCheck it.\n").unwrap();
         let env = crate::paths::Env::for_test(root.path(), &[]);
         let runner = crate::runner::fake::FakeRunner::new();
-        let ctx = Ctx { env: &env, root: root.path().to_path_buf(), config_dir: root.path().join("cfg"), runner: &runner, detached_ticker: false };
+        let ctx = Ctx {
+            env: &env,
+            root: root.path().to_path_buf(),
+            config_dir: root.path().join("cfg"),
+            runner: &runner,
+            detached_ticker: false,
+        };
         routine_toggle(&ctx, "demo", "nightly", None).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("enabled = false") && text.ends_with("Check it.\n"));
         assert!(!crate::routine::parse("nightly", &text).unwrap().enabled);
         routine_toggle(&ctx, "demo", "nightly", None).unwrap();
-        assert!(crate::routine::parse("nightly", &std::fs::read_to_string(&path).unwrap()).unwrap().enabled);
+        assert!(
+            crate::routine::parse("nightly", &std::fs::read_to_string(&path).unwrap())
+                .unwrap()
+                .enabled
+        );
         assert!(routine_toggle(&ctx, "demo", "missing", None).is_err());
     }
 

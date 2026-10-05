@@ -1,76 +1,76 @@
-id = "herdr-projects"
-name = "Projects"
-version = "0.2.34"
+id = "herdr-supervisor"
+name = "Supervisor"
+version = "0.1.0"
 min_herdr_version = "0.9.1"
 description = "A coordinator conversation, parallel worker threads, shared memory and an overview of what needs you."
 platforms = ["macos", "linux"]
 
 [[build]]
-# Downloads the release binary; falls back to `cargo build --release --locked`.
-command = ["sh", "scripts/install.sh"]
+# Build this checkout; no upstream release binary is downloaded.
+command = ["cargo", "build", "--release", "--locked"]
 
 [[startup]]
-command = ["target/release/herdr-projects", "startup"]
+command = ["target/release/herdr-supervisor", "startup"]
 
 [[actions]]
 id = "new"
 title = "Projects: new project"
 contexts = ["workspace"]
-command = ["target/release/herdr-projects", "action", "new"]
+command = ["target/release/herdr-supervisor", "action", "new"]
 
 [[actions]]
 id = "open"
 title = "Projects: open project"
 contexts = ["workspace"]
-command = ["target/release/herdr-projects", "action", "open"]
+command = ["target/release/herdr-supervisor", "action", "open"]
 
 [[actions]]
 id = "open-popup"
 title = "Projects"
 contexts = ["global", "workspace"]
-command = ["target/release/herdr-projects", "action", "open-popup"]
+command = ["target/release/herdr-supervisor", "action", "open-popup"]
 
 [[actions]]
 id = "focus"
 title = "Projects: focus sidebar on this project"
 contexts = ["workspace"]
-command = ["target/release/herdr-projects", "action", "focus"]
+command = ["target/release/herdr-supervisor", "action", "focus"]
 
 [[actions]]
 id = "unfocus"
 title = "Projects: clear sidebar focus"
 contexts = ["workspace"]
-command = ["target/release/herdr-projects", "action", "unfocus"]
+command = ["target/release/herdr-supervisor", "action", "unfocus"]
 
 [[actions]]
 id = "adopt-workspace"
 title = "Projects: continue this workspace as a project"
 contexts = ["workspace"]
-command = ["target/release/herdr-projects", "action", "adopt-workspace"]
+command = ["target/release/herdr-supervisor", "action", "adopt-workspace"]
 
 [[actions]]
 id = "pause"
 title = "Projects: pause project"
 contexts = ["workspace"]
-command = ["target/release/herdr-projects", "action", "pause"]
+command = ["target/release/herdr-supervisor", "action", "pause"]
 
 [[actions]]
 id = "resume"
 title = "Projects: resume project"
 contexts = ["workspace"]
-command = ["target/release/herdr-projects", "action", "resume"]
+command = ["target/release/herdr-supervisor", "action", "resume"]
 
 [[actions]]
 id = "configure"
 title = "Projects: set up the sidebar, popup key, progress hooks and skill"
 contexts = ["workspace"]
-command = ["target/release/herdr-projects", "action", "configure"]
+command = ["target/release/herdr-supervisor", "action", "configure"]
 
 [[actions]]
 id = "doctor"
 title = "Projects: check setup"
 contexts = ["workspace"]
-command = ["target/release/herdr-projects", "action", "doctor"]
+command = ["target/release/herdr-supervisor", "action", "doctor"]
 
 [[panes]]
 id = "projects"
@@ -78,22 +78,22 @@ title = "Projects"
 placement = "popup"
 width = "80%"
 height = "80%"
-command = ["target/release/herdr-projects", "pane", "projects"]
+command = ["target/release/herdr-supervisor", "pane", "projects"]
 
 [[panes]]
 id = "new"
 title = "New project"
 placement = "popup"
-command = ["target/release/herdr-projects", "pane", "new"]
+command = ["target/release/herdr-supervisor", "pane", "new"]
 
 [[panes]]
 id = "pick"
 title = "Pick a project"
 placement = "popup"
-command = ["target/release/herdr-projects", "pane", "pick"]
+command = ["target/release/herdr-supervisor", "pane", "pick"]
 
 [[panes]]
 id = "adopt"
 title = "Continue as a project"
 placement = "popup"
-command = ["target/release/herdr-projects", "pane", "adopt"]
+command = ["target/release/herdr-supervisor", "pane", "adopt"]

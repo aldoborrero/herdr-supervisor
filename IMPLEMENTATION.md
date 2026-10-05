@@ -1,0 +1,28 @@
+# Implementation contract
+
+User goal: implement the Herdr supervisor plugin discussed with Projects adaptation, native mailer, NATS coordination, ATProto-inspired identity/records and curated memory. Start local without limiting the topology to one machine.
+
+## Required deliverables
+
+- [ ] Reuse Projects CLI/UI, profiles and Herdr resource workflows under an isolated binary/config/state namespace. Preserve attribution.
+- [ ] Fix remote per-project polling, unknown remote branch state, corrupt inventory and Nix portability.
+- [ ] SQLite authority: runs, versioned tasks/DAG, attempts, role-scoped principals, revisions, journal, transactional capacity and operation idempotency.
+- [ ] Durable effects: outbox, node inbox, reconciliation after lost replies, uncertainty and epoch fencing; no duplicate worktrees or launches on replay.
+- [ ] Private node enrollment, signed versioned records with owner DID and delegated host keys; no owner private-key distribution; validated routes.
+- [ ] Real NATS JetStream controller/node protocol, ACK after persistence, reconnect/offline delivery, per-node ACL example and authenticated tests.
+- [ ] Herdr executor with exact resource/session identity, safe launch of Codex/Claude/Pi, local mailer registration and native delivery; functional worker readiness.
+- [x] Mailer client operation key and exact recipient preconditions as needed, tested independently; separate mailer commit (`7a12d5a`, Nix flake check passed on x86_64-linux).
+- [ ] Supervisor/worker API and CLI (plus MCP facade) with scoped capabilities; pause/resume/cancel and recovery.
+- [ ] Immutable results, independent review/check receipts for exact SHA, Git CAS integration on an owned branch, conservative cleanup.
+- [ ] Memory proposals/approval, provenance/revision/withdrawal, task-specific bounded snapshots and NATS change events.
+- [ ] Projects UI projections and plugin actions use the same authority; managed projects cannot bypass the controller through legacy commands.
+- [ ] Blueprint flake, locked deps, package/plugin resources, devshell, formatter, opt-in NixOS/Home Manager service modules, CI, README and operations guide.
+- [ ] Requirement-by-requirement test evidence, offline Nix build/check, isolated runtime tests and honest distinction between live and mocked model processing.
+
+The inherited docs are architectural references, not claims of implementation. No deployment, public fork, push or host changes in this task.
+
+## Current implementation checkpoint
+
+Controller, signed node transport, curated run memory and scoped controller/worker API/MCP are implemented. The node executor now prepares exact Git/Herdr resources, launches Codex/Claude/Pi through a one-shot wrapper, waits for the controller's resource-binding receipt and bootstraps through native mailer with exact recipient preconditions. `run-node` combines relay, worker API and executor; its full service workflow still needs integration coverage.
+
+Current suite: 352 unit tests and 5 CLI tests pass; the runtime fixtures execute harmless stub processes, not authenticated models. Herdr/mailer launch boundaries are simulated; Git, Unix IPC and dedicated broker tests are real. See docs/validation.md for specific evidence and unresolved requirements. The unchecked deliverables retain the full original scope.

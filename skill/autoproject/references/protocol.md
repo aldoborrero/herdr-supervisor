@@ -5,13 +5,13 @@ The exact formats, templates, and transitions for one autoproject run. `hp` mean
 ## Contents
 
 1. Run state
-2. Step table
-3. Starting a run thread
-4. Maker task and maker-done report
-5. Reviewer task and verdict report
-6. Landing prompt and landing report
-7. Failure rule
-8. Stop report
+1. Step table
+1. Starting a run thread
+1. Maker task and maker-done report
+1. Reviewer task and verdict report
+1. Landing prompt and landing report
+1. Failure rule
+1. Stop report
 
 ## 1. Run state
 
@@ -259,8 +259,8 @@ A `pr` inbox item for the maker showing `state MERGED` counts as landed even wit
 A failed maker start, a failed reviewer start, a maker crash, no commit, `CHECKS: FAIL`, a failed reviewer, a NOT_BETTER verdict, or `LANDING: FAILED` each count as exactly one NOT_BETTER iteration:
 
 1. Add 1 to the streak.
-2. Append one iteration line with the reason.
-3. Resolve every run thread of that iteration that is still open (`hp thread resolve <project> <id>`). Local branches stay, which is accepted.
+1. Append one iteration line with the reason.
+1. Resolve every run thread of that iteration that is still open (`hp thread resolve <project> <id>`). Local branches stay, which is accepted.
 
 Environment refusals (section 3) and blocked threads never count. A `BLOCKED` maker stays open for the user. The run never uses `hp thread restart`, so a repeating failure reaches the streak limit and stops the run.
 
@@ -269,9 +269,9 @@ Environment refusals (section 3) and blocked threads never count. A `BLOCKED` ma
 At stop:
 
 1. If the user said stop while a landing is underway, wait for its `LANDING:` line first. Otherwise resolve this iteration's open run threads, except a `BLOCKED` maker.
-2. Delete the TASKS.md line.
-3. Write `## Stop` in the scratch file: the stop reason and a tally computed from `## Iterations` (iterations, BETTER, NOT_BETTER, MERGED, FAILED, BLOCKED).
-4. Report in chat:
+1. Delete the TASKS.md line.
+1. Write `## Stop` in the scratch file: the stop reason and a tally computed from `## Iterations` (iterations, BETTER, NOT_BETTER, MERGED, FAILED, BLOCKED).
+1. Report in chat:
    - landed SHAs and pull requests
    - any `BLOCKED` maker thread and pull request left open, and the action it needs
    - BETTER and NOT_BETTER counts and the stop reason

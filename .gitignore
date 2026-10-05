@@ -1,2 +1,8 @@
 /target/
 /.dev-root/
+
+result
+result-*
+.direnv/
+.envrc.local
+.cargo-home/
