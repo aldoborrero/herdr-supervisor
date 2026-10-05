@@ -21,6 +21,8 @@ pub struct ExecuteOrder {
     pub credential: String,
     pub memory: Value,
     #[serde(default)]
+    pub memory_version: u64,
+    #[serde(default)]
     pub review: Option<super::model::ReviewContext>,
 }
 
@@ -90,10 +92,22 @@ impl NodeStore {
             }
             2 => (),
             3 => (),
+            4 => (),
             _ => bail!("unsupported node schema"),
         }
         if version <= 2 {
             tx.execute_batch("CREATE TABLE runtime_processes (attempt TEXT PRIMARY KEY REFERENCES jobs(id), epoch INTEGER NOT NULL, state TEXT NOT NULL, doc TEXT NOT NULL) STRICT; PRAGMA user_version=3;")?;
+        }
+        if version <= 3 {
+            tx.execute_batch(super::live_memory::SCHEMA)?;
+            let mut q =
+                tx.prepare("SELECT doc FROM jobs WHERE json_type(doc,'$.contract')='object'")?;
+            let orders = q
+                .query_map([], |r| r.get::<_, String>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            for doc in orders {
+                super::live_memory::initialize(&tx, &serde_json::from_str(&doc)?)?;
+            }
         }
         let existing: (String, String, String, u64) = tx.query_row(
             "SELECT owner,node,key,epoch FROM authority WHERE singleton=1",
@@ -161,6 +175,7 @@ impl NodeStore {
             ],
         )?;
         match kind {
+            "memory_update" => super::live_memory::receive(&tx, body)?,
             "receipt" => {
                 let event = body["event_id"].as_str().context("receipt event ID")?;
                 let operation = body["operation_id"]
@@ -216,6 +231,7 @@ impl NodeStore {
                     Some(_) => bail!("attempt already has an execution intent"),
                     None => {
                         tx.execute("INSERT INTO jobs(id,epoch,state,command,doc) VALUES (?1,?2,'reserved',?3,?4)",params![order.attempt.id,order.attempt.epoch,r.id,serde_json::to_string(&order)?])?;
+                        super::live_memory::initialize(&tx, &order)?;
                     }
                 }
             }

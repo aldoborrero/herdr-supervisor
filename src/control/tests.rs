@@ -1792,3 +1792,6 @@ mod verification_tests;
 
 #[path = "coordinator_launch_tests.rs"]
 mod coordinator_launch_tests;
+
+#[path = "live_memory_tests.rs"]
+mod live_memory_tests;

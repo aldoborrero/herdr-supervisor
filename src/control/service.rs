@@ -44,7 +44,14 @@ fn advance_jobs(
             }
         }
     }
-    Ok(json!({"attempts":results,"lifecycle":lifecycle}))
+    let memory = match super::live_memory::deliver(&mut store, runtime) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("node memory notices: {error}");
+            json!({"unresolved":error.to_string()})
+        }
+    };
+    Ok(json!({"attempts":results,"lifecycle":lifecycle,"memory":memory}))
 }
 
 pub async fn run(

@@ -4,7 +4,7 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
-The local implementation suite currently passes **398 unit tests and 7 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
+The local implementation suite currently passes **403 unit tests and 7 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
 
 | Requirement | Evidence | Limit |
 | --- | --- | --- |
@@ -28,7 +28,12 @@ The local implementation suite currently passes **398 unit tests and 7 CLI tests
 | Managed Projects authority and UI | `managed_projects_render_controller_records_and_decisions_use_exact_revisions`, `managed_binding_blocks_legacy_effects_and_rejects_foreign_owner_decisions`, `project_authority_transition_excludes_existing_operations_and_clones`, `failed_priming_keeps_managed_fence_and_retry_repairs_only_the_view` | Real Unix API/SQLite; legacy Herdr effects observed with a fake runner |
 | Managed memory and actions | `managed_memory_actions_preserve_provenance_revision_and_withdrawal`, `managed_keys_confirm_and_submit_captured_epoch_without_legacy_actions`; extended CLI test attaches, reads, pauses/replays and rejects legacy commands | Popup key test uses the command fixture; CLI test runs the actual binary |
 | Native coordinator focus | `managed_open_focuses_only_the_exact_observed_native_coordinator` | Exact UUID/runtime/terminal checked against simulated Herdr; no model launch |
-| Curated memory | `memory_is_curated_versioned_scoped_and_budgeted` | Run scope; live change delivery and project memory pending |
+| Curated memory | `memory_is_curated_versioned_scoped_and_budgeted` | Run scope; cross-run project memory pending |
+| Atomic live memory and declared consumption | `live_memory_outbox_is_atomic_selected_and_retains_assignment_snapshot` injects an outbox failure, checks topic selection, preserves initial memory and rejects wrong credential/epoch or stale acknowledgement | Acknowledgement is node-local and does not prove model behavior |
+| Reordered updates and withdrawal | `reordered_memory_withdrawal_replay_and_cancellation_never_resurrect_topics`, `memory_rejects_foreign_topics_hashes_budget_run_and_future_epoch` | Owner-signed commands, SQLite persistence; no federation |
+| Memory migration and dispatch version | `memory_versions_fence_updates_older_than_dispatch_and_migrate_v3_without_changing_jobs` | Old unversioned assignments remain version 0 until an update; jobs and startup content preserved |
+| Native memory hint replay | `native_memory_notice_replays_frozen_identity_after_bad_or_lost_receipt_and_retires_on_cancel` checks protocol capability, invalid recipient receipt, SQL receipt loss, node restart, changed sender token, identical replay and cancellation | Mock mailer IPC; its send receipt never acknowledges memory |
+| Live memory through continuous services | `tests/service_workflow.py` approves memory while the author runs, withdraws it while the node is offline, broadcasts to author/reviewer and invokes the real acknowledgement CLI | Restricted real NATS, actual node/controller/wrappers, simulated native delivery/model processing |
 | CLI bootstrap usability | `managed_control_help_and_bootstrap_are_usable_without_herdr` | Does not deploy services |
 | Combined candidate, independent review and owned Git CAS | `combined_candidate_review_and_checks_gate_owned_branch_for_sha1_and_sha256` uses real Git repositories, a divergent accepted base and an untouched dirty user checkout | Model review content simulated; code contracts only |
 | Conflicts and check evidence | `conflicts_are_explicit_and_do_not_change_either_checkout`, `failing_or_mutating_checks_cannot_be_replaced_by_an_author_claim`, `started_check_is_not_rerun_after_unknown_execution_outcome` | Repair/replanning needs explicit lifecycle support |
@@ -102,7 +107,7 @@ Mailer protocol-2 support is an independent local commit **`7a12d5a`** on `feat/
 - Full onboarding, task/profile forms, cross-host resource focus and asynchronous managed view refresh.
 - Aggregate API/wire bounds and large-run context pagination.
 - NATS backoff/expiry handling, node lifecycle operations and deployment ACL examples.
-- Live memory change consumption and optional Markdown projection.
+- Optional project/cross-run memory and Markdown projection.
 - Stronger model-facing validation beyond the isolated continuous-service workflow and protocol fixtures.
 
 No push, public release, host changes or deployment has occurred. Existing user sessions and shared runtime servers were not modified.

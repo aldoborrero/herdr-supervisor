@@ -274,7 +274,7 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
                 tx,
                 node,
                 "execute",
-                &json!({"attempt":a,"contract":t.contract,"profile":prof,"repo":r.repo,"credential":credential,"memory":memory,"review":review}),
+                &json!({"attempt":a,"contract":t.contract,"profile":prof,"repo":r.repo,"credential":credential,"memory":memory,"review":review,"memory_version":super::live_memory::version(tx,&r.id)?}),
                 r.deadline,
             )?;
             i.revision += 1;

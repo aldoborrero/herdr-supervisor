@@ -861,7 +861,7 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
                 tx,
                 node,
                 "execute",
-                &json!({"attempt":a,"contract":t.contract,"profile":prof,"repo":r.repo,"credential":credential,"memory":memory}),
+                &json!({"attempt":a,"contract":t.contract,"profile":prof,"repo":r.repo,"credential":credential,"memory":memory,"memory_version":super::live_memory::version(tx,&r.id)?}),
                 r.deadline,
             )?;
             t.state = "executing".into();
@@ -1265,6 +1265,7 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
                 "UPDATE memory_proposals SET status='approved' WHERE id=?1",
                 [proposal],
             )?;
+            super::live_memory::publish(tx, &run, &topic)?;
             effect(
                 tx,
                 "controller",
@@ -1291,6 +1292,7 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
                 "INSERT INTO memory_revisions VALUES (?1,?2,?3,NULL,'',?4,1)",
                 params![run, topic, current + 1, p.id],
             )?;
+            super::live_memory::publish(tx, run, topic)?;
             effect(
                 tx,
                 "controller",

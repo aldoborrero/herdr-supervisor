@@ -221,6 +221,10 @@ enum ControlCommand {
 
 #[derive(Subcommand)]
 enum WorkerAction {
+    /// Declare that you read this exact current memory version
+    AcknowledgeMemory {
+        version: u64,
+    },
     Context,
     Apply {
         #[arg(long)]
@@ -398,6 +402,14 @@ pub fn run(args: ControlArgs) -> Result<()> {
         } => {
             let token = credential(&path)?;
             let request = match action {
+                WorkerAction::AcknowledgeMemory { version } => {
+                    super::worker::WorkerRequest::AcknowledgeMemory {
+                        token,
+                        attempt,
+                        epoch,
+                        version,
+                    }
+                }
                 WorkerAction::Context => super::worker::WorkerRequest::Context {
                     token,
                     attempt,

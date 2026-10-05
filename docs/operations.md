@@ -282,7 +282,21 @@ This pipeline currently supports `code` contracts. Artifact verification, abando
 
 Workers submit `propose_memory` with `run`, `topic`, `text`, `source_attempt` and `evidence`. The supervisor applies `approve_memory` with the proposal ID and expected topic revision. Withdrawal appends a new revision. Read via `control memory` or the authenticated API/MCP.
 
-Memory is run-scoped and includes provenance; only requested topics plus preferences enter an assignment, bounded to 32,000 UTF-8 text bytes. Cross-run project memory, Markdown projections and delivery of later memory changes to already-running workers remain pending.
+Memory is run-scoped and includes provenance; only requested topics plus preferences enter an assignment, bounded to 32,000 UTF-8 text bytes. Cross-run project memory and Markdown projections remain pending.
+
+Approval/withdrawal and node delivery intents commit in one controller transaction. Each affected active attempt receives a signed `memory_update` with its exact run/attempt/epoch, a monotonically increasing run memory version and a complete selected snapshot with the same text budget. Version gaps are normal: unrelated topics do not trigger that worker's update. Nodes persist before broker ACK, reject foreign scope or content conflicts, and ignore older versions. A complete snapshot makes withdrawal durable even if updates arrive out of order. An update that precedes its execute order remains unacknowledged until the assignment exists.
+
+`worker context` and MCP `worker_context` return both the immutable startup `memory` and `current_memory` (`version`, `snapshot`, `acknowledged_version`). The latter is the latest approved selection replicated to that node, not a promise of instantaneous consistency during a partition. Contracts and their hashes do not change. After reading the current snapshot, the worker declares that version through its existing scoped prefix:
+
+```text
+... worker --credential WORKER_TOKEN --attempt ATTEMPT --epoch EPOCH acknowledge-memory VERSION
+```
+
+MCP exposes the same operation as `worker_acknowledge_memory`. A stale version or foreign/retired credential fails. `acknowledged_version` is null until an explicit acknowledgement, including for initial version 0. The acknowledgement is stored in the node database; it is an agent declaration, not proof of its subsequent behavior or a controller decision.
+
+Once the native bootstrap has completed, the node sends a hint through mailer to the frozen recipient session/epoch. The hint contains context instructions, not memory text or a new task. Delivery has its own durable intent, stable operation ID, exact recipient preconditions and validated receipt. Replays retain the frozen body and sender-token fingerprint; a changed token blocks that retry instead of silently changing origin. Preserve the same mailer state/deduplication database. Mailer must advertise protocol-2 send idempotency and recipient preconditions. Cancellation, epoch retirement and the assignment deadline retire pending hints. The service attempts one hint per cycle and rotates failures using persisted attempt counts. Delivery alone never updates the worker's acknowledgement.
+
+Node schema 4 migrates the existing assignment snapshots and preserves jobs/process receipts/events. Assignments written before `memory_version` existed retain version 0; subsequent approved updates advance them. Existing snapshots are not silently reconstructed from a newer controller history during migration. Nodes must support `memory_update` to consume these events; older nodes reject and leave them pending. This path has real-broker/process tests with simulated model/Herdr/mailer boundaries; it does not prove a live model has read or followed the memory.
 
 ## Backups
 

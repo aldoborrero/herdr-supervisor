@@ -81,6 +81,8 @@ The flake exports opt-in NixOS and Home Manager modules for a controller and ind
 
 The controller stores proposals and revisions in `control.sqlite`, with WAL journaling, foreign keys and full synchronization. Approval records the author, evidence, source attempt and approving principal. Withdrawal creates a new revision without deleting history. Dispatch includes only requested topics plus preferences, with at most 32,000 UTF-8 bytes of text.
 
+Approvals and withdrawals also reach active workers and reviewers through signed NATS updates. The node persists a selected, versioned snapshot and sends a native mailer hint to the exact registered session. Worker context keeps the startup `memory` and the latest replicated `current_memory` separate. Workers explicitly acknowledge a version they have read; message delivery does not acknowledge it. See [memory operations](docs/operations.md#memory).
+
 Memory currently belongs to a **run**. Cross-run project memory and Markdown exports are not implemented. Agent transcripts remain with their runtimes. NATS transports events; it does not replace the controller database.
 
 ## Development

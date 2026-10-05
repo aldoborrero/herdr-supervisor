@@ -36,6 +36,12 @@ impl Access {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkerRequest {
+    AcknowledgeMemory {
+        token: String,
+        attempt: String,
+        epoch: u64,
+        version: u64,
+    },
     Context {
         token: String,
         attempt: String,
@@ -90,6 +96,15 @@ pub fn handle(store: &mut NodeStore, identity: &Identity, request: WorkerRequest
     let _lease = super::api::lock(&store.dir, "execution.lock")?;
     store.grant.verify(jiff::Timestamp::now().as_second())?;
     match request {
+        WorkerRequest::AcknowledgeMemory {
+            token,
+            attempt,
+            epoch,
+            version,
+        } => {
+            let (order, _) = authorized(store, &token, &attempt, Some(epoch))?;
+            super::live_memory::acknowledge(&store.connection, &order, version)
+        }
         WorkerRequest::Context {
             token,
             attempt,
@@ -97,7 +112,7 @@ pub fn handle(store: &mut NodeStore, identity: &Identity, request: WorkerRequest
         } => {
             let (order, state) = authorized(store, &token, &attempt, Some(epoch))?;
             Ok(
-                json!({"attempt":order.attempt,"state":state,"contract":order.contract,"memory":order.memory,"review":order.review}),
+                json!({"attempt":order.attempt,"state":state,"contract":order.contract,"memory":order.memory,"review":order.review,"current_memory":super::live_memory::context(&store.connection,&order)?}),
             )
         }
         WorkerRequest::Apply {
@@ -193,13 +208,20 @@ pub fn mcp(
             }
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({"tools":[
-                {"name":"worker_context","description":"Read your exact assigned contract and approved memory.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}},
+                {"name":"worker_context","description":"Read your immutable assignment memory and current_memory (latest replicated approved snapshot and version).","inputSchema":{"type":"object","properties":{},"additionalProperties":false}},
+                {"name":"worker_acknowledge_memory","description":"Declare that you read the exact current memory version. Delivery alone does not acknowledge it.","inputSchema":{"type":"object","properties":{"version":{"type":"integer","minimum":0}},"required":["version"],"additionalProperties":false}},
                 {"name":"worker_apply","description":"Queue readiness, an author result, an assigned review or a memory proposal with a stable operation_id. Queueing is not controller acceptance; inspect the receipt.","inputSchema":{"type":"object","properties":{"operation_id":{"type":"string"},"command":{"type":"object"}},"required":["operation_id","command"],"additionalProperties":false}},
                 {"name":"worker_receipt","description":"Read controller application receipt for your event.","inputSchema":{"type":"object","properties":{"event":{"type":"string"}},"required":["event"],"additionalProperties":false}}
             ]})),
             "tools/call" => {
                 let args = &request["params"]["arguments"];
                 let op = match request["params"]["name"].as_str().context("tool name")? {
+                    "worker_acknowledge_memory" => WorkerRequest::AcknowledgeMemory {
+                        token: token.into(),
+                        attempt: attempt.into(),
+                        epoch,
+                        version: args["version"].as_u64().context("memory version")?,
+                    },
                     "worker_context" => WorkerRequest::Context {
                         token: token.into(),
                         attempt: attempt.into(),

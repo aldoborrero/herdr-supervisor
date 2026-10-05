@@ -94,6 +94,7 @@ class Fixture:
         self.models = {}
         self.registrations = {}
         self.deliveries = {}
+        self.memory_deliveries = {}
         self.creates = []
         self.launches = []
         self.bootstrap_gate = threading.Event()
@@ -343,7 +344,11 @@ class Fixture:
         resource = self.attempt(attempt)["resource"]
         assert resource["session"] == receiver["location"]
         assert resource["mailer_agent"] == receiver["agent"]
-        self.deliveries[attempt] = request
+        if request["operationId"].startswith("memory-"):
+            version = int(request["operationId"].rsplit("-", 1)[1])
+            self.memory_deliveries[(attempt, version)] = request
+        else:
+            self.deliveries[attempt] = request
         assert self.bootstrap_gate.wait(timeout=10), "test did not release bootstrap"
         return {
             "id": uid(),
@@ -579,6 +584,62 @@ authorization {{ users: [
         # The native wrapper belongs to the pane and survives the relay restart.
         self.start_node()
         context = self.ready(author)
+        proposal = self.apply(
+            "propose_memory",
+            run=self.run,
+            topic="preferences",
+            text="Use UTF-8 byte offsets",
+            source_attempt=None,
+            evidence=["review:workflow-fixture"],
+        )
+        self.apply("approve_memory", proposal=proposal["id"], expected_revision=0)
+        wait_for(
+            "live approved memory native notice",
+            lambda: (author, 1) in self.memory_deliveries,
+        )
+        current = wait_for(
+            "current memory context",
+            lambda: self.worker(author, "context", attempt=author, epoch=1),
+        )
+        assert current["memory"] == context["memory"], "startup snapshot was mutated"
+        assert (
+            current["current_memory"]["snapshot"]["topics"]["preferences"]["text"]
+            == "Use UTF-8 byte offsets"
+        )
+        assert current["current_memory"]["acknowledged_version"] is None, (
+            "native send claimed model acknowledgement"
+        )
+        acknowledged = self.cli(
+            self.node,
+            "worker",
+            "--credential",
+            self.node / "workers" / author / "worker.token",
+            "--attempt",
+            author,
+            "--epoch",
+            "1",
+            "acknowledge-memory",
+            "1",
+        )
+        assert (
+            acknowledged["acknowledged"] and not acknowledged["model_behavior_verified"]
+        )
+        self.stop(self.node_process)
+        self.apply(
+            "withdraw_memory", run=self.run, topic="preferences", expected_revision=1
+        )
+        self.start_node()
+        wait_for(
+            "offline withdrawal reaches same native session",
+            lambda: (author, 2) in self.memory_deliveries,
+        )
+        current = wait_for(
+            "withdrawn memory context",
+            lambda: self.worker(author, "context", attempt=author, epoch=1),
+        )
+        assert current["current_memory"]["version"] == 2
+        assert current["current_memory"]["snapshot"]["topics"] == {}
+        assert current["current_memory"]["acknowledged_version"] == 1
         checkout = Path(self.spaces[author]["cwd"])
         (checkout / "feature.txt").write_text("implemented\n")
         self.git(checkout, "add", "feature.txt")
@@ -619,6 +680,28 @@ authorization {{ users: [
             profile="auto",
         )["attempt"]["id"]
         review_context = self.ready(reviewer)
+        assert review_context["current_memory"]["version"] == 2
+        proposal = self.apply(
+            "propose_memory",
+            run=self.run,
+            topic="preferences",
+            text="Report evidence for every criterion",
+            source_attempt=None,
+            evidence=["review:workflow-broadcast"],
+        )
+        self.apply("approve_memory", proposal=proposal["id"], expected_revision=2)
+        wait_for(
+            "memory broadcast to author and independent reviewer",
+            lambda: all(
+                (attempt, 3) in self.memory_deliveries for attempt in (author, reviewer)
+            ),
+        )
+        latest_review = wait_for(
+            "reviewer memory context",
+            lambda: self.worker(reviewer, "context", attempt=reviewer, epoch=1),
+        )
+        assert latest_review["memory"] == review_context["memory"]
+        assert latest_review["current_memory"]["version"] == 3
         assert reviewer != author
         assert review_context["review"]["candidate_oid"] == checked["candidate_oid"]
         assert (

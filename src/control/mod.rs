@@ -7,6 +7,7 @@ pub mod executor;
 pub mod git_pipeline;
 pub mod identity;
 pub mod lifecycle;
+mod live_memory;
 pub mod model;
 pub mod node;
 pub mod process;
