@@ -1396,7 +1396,7 @@ fn three_native_launchers_bind_exact_sessions_before_idempotent_bootstrap() {
 }
 
 #[test]
-fn registration_recovery_workers_resume_native_launch_after_lost_preregistration_response() {
+fn registration_recovery_workers_resume_native_launch_after_lost_registration_response() {
     native_launchers(true);
 }
 
@@ -1404,7 +1404,7 @@ fn native_launchers(recover_registration: bool) {
     use super::executor::{CheckoutPlan, PaneBinding};
     use super::runtime::{LaunchPlan, RuntimeConfig};
     use crate::runner::{Cmd, Output, RealRunner, Runner};
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::io::{BufRead, Write};
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
@@ -1415,6 +1415,7 @@ fn native_launchers(recover_registration: bool) {
         runtime: String,
         session: RefCell<String>,
         launches: RefCell<Vec<String>>,
+        native_pid: Cell<u32>,
     }
     impl Runner for RuntimeHerdr {
         fn run(&self, cmd: &Cmd) -> anyhow::Result<Output> {
@@ -1425,7 +1426,12 @@ fn native_launchers(recover_registration: bool) {
             let result = if has("workspace") {
                 json!({"workspaces":[{"workspace_id":"w","worktree":{"checkout_path":self.path,"is_linked_worktree":true}}]})
             } else if has("process-info") {
-                json!({"process_info":{"shell_pid":7,"foreground_process_group_id":7,"foreground_processes":[{"pid":7}]}})
+                let pid = if self.session.borrow().is_empty() {
+                    7
+                } else {
+                    self.native_pid.get()
+                };
+                json!({"process_info":{"shell_pid":7,"foreground_process_group_id":pid,"foreground_processes":[{"pid":pid}]}})
             } else if has("run") {
                 self.launches
                     .borrow_mut()
@@ -1591,7 +1597,7 @@ fn native_launchers(recover_registration: bool) {
                 let data = match r["op"].as_str().unwrap() {
                     "register" => {
                         registrations += 1;
-                        if recover_registration && runtime != "codex" && registrations == 1 {
+                        if recover_registration && registrations == 1 {
                             continue;
                         }
                         json!({"session":{"id":id(),"epoch":registrations,"agent":r["agent"],"runtime":r["runtime"],"location":r["location"]},"token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
@@ -1610,6 +1616,7 @@ fn native_launchers(recover_registration: bool) {
             runtime: runtime.into(),
             session: RefCell::new(String::new()),
             launches: RefCell::new(vec![]),
+            native_pid: Cell::new(0),
         };
         if recover_registration && runtime != "codex" {
             assert!(
@@ -1684,6 +1691,19 @@ fn native_launchers(recover_registration: bool) {
             !child().output().unwrap().status.success(),
             "wrapper cannot launch twice"
         );
+        let process_doc: String = node
+            .connection
+            .query_row(
+                "SELECT doc FROM runtime_processes WHERE attempt=?1",
+                [&a.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let process_receipt: Value = serde_json::from_str(&process_doc).unwrap();
+        super::process::require_live_owner(&node.dir, &process_receipt).unwrap();
+        runner
+            .native_pid
+            .set(process_receipt["child_pid"].as_u64().unwrap() as u32);
         let invocation = std::fs::read_to_string(&capture).unwrap();
         assert!(!invocation.contains("wrong-parent"));
         assert!(invocation.contains(&a.id));
@@ -1707,6 +1727,34 @@ fn native_launchers(recover_registration: bool) {
         .unwrap();
         let session = plan.expected_session.unwrap_or_else(id);
         *runner.session.borrow_mut() = session.clone();
+        if recover_registration && runtime == "codex" {
+            assert!(
+                super::runtime::advance(&mut node, &config, &a.id, &f.node_key, &runner).is_err()
+            );
+            let recovery = super::registration_recovery::recover_observed(
+                &node.dir,
+                true,
+                &a.id,
+                a.epoch,
+                "recover-codex",
+                &runner,
+            )
+            .unwrap();
+            assert_eq!(recovery["stage"], "codex_before_binding");
+            assert_eq!(
+                super::registration_recovery::recover_observed(
+                    &node.dir,
+                    true,
+                    &a.id,
+                    a.epoch,
+                    "recover-codex",
+                    &runner
+                )
+                .unwrap(),
+                recovery
+            );
+            assert_eq!(runner.launches.borrow().len(), 1);
+        }
         assert_eq!(
             super::runtime::advance(&mut node, &config, &a.id, &f.node_key, &runner).unwrap()["state"],
             "awaiting_binding"
@@ -1730,6 +1778,12 @@ fn native_launchers(recover_registration: bool) {
             super::runtime::advance(&mut node, &config, &a.id, &f.node_key, &runner).unwrap();
         assert_eq!(boot["state"], "bootstrapped");
         assert_eq!(boot["model_ready"], false);
+        assert!(
+            super::registration_recovery::recover_observed(
+                &node.dir, true, &a.id, a.epoch, "too-late", &runner
+            )
+            .is_err()
+        );
         assert_eq!(
             super::runtime::advance(&mut node, &config, &a.id, &f.node_key, &runner).unwrap(),
             boot
@@ -1739,11 +1793,7 @@ fn native_launchers(recover_registration: bool) {
         assert!(send["recipientSession"].as_str().is_some());
         assert_eq!(
             send["recipientEpoch"],
-            if recover_registration && runtime != "codex" {
-                2
-            } else {
-                1
-            }
+            if recover_registration { 2 } else { 1 }
         );
         assert!(send["body"].as_str().unwrap().contains(&session));
         assert!(!send["body"].as_str().unwrap().contains(&worker));
@@ -1770,6 +1820,7 @@ fn native_launchers(recover_registration: bool) {
         server.join().unwrap();
         std::fs::write(format!("{}.release", capture.display()), b"done").unwrap();
         assert!(launched.wait().success());
+        assert!(super::process::require_live_owner(&node.dir, &process_receipt).is_err());
         assert!(
             super::runtime::advance(&mut node, &config, &a.id, &f.node_key, &runner).is_err(),
             "an exited runtime cannot receive a stale bootstrap"

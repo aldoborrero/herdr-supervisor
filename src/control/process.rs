@@ -5,7 +5,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use rusqlite::{Connection, params};
 use serde_json::json;
 
@@ -112,9 +112,16 @@ fn run_owned(
     } else {
         ("runtime_processes", "attempt", "epoch")
     };
+    let owner_nonce = super::model::id();
+    let state = std::path::Path::new(c.path().context("process database path missing")?)
+        .parent()
+        .context("process state directory missing")?;
+    // Held only by this wrapper, across spawn/watch/terminal-receipt persistence.
+    // The File is close-on-exec, so the native child cannot preserve a dead owner's lease.
+    let _owner = super::api::lock(state, &format!("native-owner-{owner_nonce}.lock"))?;
     let started = super::store::now();
     let mut receipt = json!({"attempt":attempt,"epoch":epoch,"wrapper_pid":std::process::id(),
-        "started_at":started,"deadline":deadline,"scope":"native_process"});
+        "started_at":started,"deadline":deadline,"scope":"native_process","owner_nonce":owner_nonce});
     if coordinator {
         receipt.as_object_mut().unwrap().remove("attempt");
         receipt["launch"] = json!(attempt);
@@ -204,5 +211,46 @@ fn run_owned(
         params![attempt, epoch, serde_json::to_string(&receipt)?],
     )?;
     ensure!(changed == 1, "exit receipt lost its process identity");
+    Ok(())
+}
+
+/// Positive evidence of a live wrapper; never infer child exit from an unlocked lease.
+/// Missing/legacy evidence is an error, not permission to recover a running receiver.
+pub(super) fn require_live_owner(
+    state: &std::path::Path,
+    receipt: &serde_json::Value,
+) -> Result<()> {
+    use std::os::{
+        fd::AsRawFd,
+        unix::fs::{OpenOptionsExt, PermissionsExt},
+    };
+    let nonce = receipt["owner_nonce"]
+        .as_str()
+        .context("wrapper ownership evidence unavailable")?;
+    ensure!(
+        uuid::Uuid::parse_str(nonce)?.to_string() == nonce,
+        "invalid owner nonce"
+    );
+    let path = state.join(format!("native-owner-{nonce}.lock"));
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    ensure!(
+        metadata.is_file() && metadata.permissions().mode() & 0o077 == 0,
+        "private regular ownership lease required"
+    );
+    // SAFETY: valid fd, nonblocking exclusive flock. This probe sends no signal.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        // We acquired it, therefore nobody supplied positive ownership evidence.
+        unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
+        anyhow::bail!("native wrapper is not holding its ownership lease");
+    }
+    let error = std::io::Error::last_os_error();
+    ensure!(
+        error.kind() == std::io::ErrorKind::WouldBlock,
+        "cannot inspect wrapper ownership lease: {error}"
+    );
     Ok(())
 }

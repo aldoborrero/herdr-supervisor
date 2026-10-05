@@ -474,3 +474,79 @@ fn interactive_native_child_gets_foreground_terminal_and_wrapper_restores_it() {
     assert!(child.wait().success());
     assert_eq!(x.receipt()["code"], 0);
 }
+
+#[test]
+fn native_ownership_lease_requires_live_holder_and_rejects_missing_symlink_or_public_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let nonce = id();
+    let receipt = json!({"owner_nonce":nonce});
+    let name = format!("native-owner-{nonce}.lock");
+    let path = dir.path().join(&name);
+    assert!(crate::control::process::require_live_owner(dir.path(), &receipt).is_err());
+    let lease = crate::control::api::lock(dir.path(), &name).unwrap();
+    crate::control::process::require_live_owner(dir.path(), &receipt).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(crate::control::process::require_live_owner(dir.path(), &receipt).is_err());
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    drop(lease);
+    assert!(crate::control::process::require_live_owner(dir.path(), &receipt).is_err());
+    std::fs::remove_file(&path).unwrap();
+    std::os::unix::fs::symlink("missing", &path).unwrap();
+    assert!(crate::control::process::require_live_owner(dir.path(), &receipt).is_err());
+    assert!(
+        crate::control::process::require_live_owner(
+            dir.path(),
+            &json!({"owner_nonce":"../../other"})
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn native_owner_crash_releases_lease_without_claiming_its_child_exited() {
+    struct Release(std::path::PathBuf);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            let _ = std::fs::write(&self.0, b"release");
+        }
+    }
+    let mut x = ProcessFixture::new();
+    let release = Release(std::path::PathBuf::from(format!(
+        "{}.release",
+        x.marker.display()
+    )));
+    let mut child = WrapperChild(x.command(": > \"$HS_PROCESS_MARKER\"; n=0; while [ ! -f \"$HS_PROCESS_MARKER.release\" ] && [ $n -lt 500 ]; do n=$((n+1)); sleep 0.02; done; : > \"$HS_PROCESS_MARKER.done\"",now()+30).spawn().unwrap());
+    x.wait_started();
+    let doc: String = x
+        .node
+        .connection
+        .query_row(
+            "SELECT doc FROM runtime_processes WHERE attempt=?1",
+            [&x.attempt.id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let receipt: Value = serde_json::from_str(&doc).unwrap();
+    crate::control::process::require_live_owner(&x.node.dir, &receipt).unwrap();
+    child.0.kill().unwrap(); // Exact owned test Child handle, never a recovered production PID.
+    assert!(!child.wait().success());
+    assert!(crate::control::process::require_live_owner(&x.node.dir, &receipt).is_err());
+    assert_eq!(
+        unsafe { libc::kill(receipt["child_pid"].as_u64().unwrap() as libc::pid_t, 0) },
+        0,
+        "native test child still exists after wrapper crash"
+    );
+    assert_eq!(
+        lifecycle::reconcile(&mut x.node, &x.config, &x.f.node_key).unwrap()["observed"],
+        json!([])
+    );
+    assert_eq!(x.active(), 1, "missing ownership is not an exit receipt");
+    drop(release);
+    let until = Instant::now() + Duration::from_secs(5);
+    while !std::path::Path::new(&format!("{}.done", x.marker.display())).exists() {
+        assert!(Instant::now() < until, "native fixture did not finish");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}

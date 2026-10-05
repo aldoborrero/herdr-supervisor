@@ -19,7 +19,7 @@ pub struct ControlArgs {
 
 #[derive(Subcommand)]
 enum ControlCommand {
-    /// Local owner maintenance: authorize one registration retry before any native launch
+    /// Local owner maintenance: authorize one registration retry before receiver binding
     RecoverRegistration {
         /// Recover a worker/reviewer in node.sqlite; otherwise recover a coordinator
         #[arg(long)]

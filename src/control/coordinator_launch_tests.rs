@@ -120,7 +120,13 @@ impl Mailer {
                         if lost.load(Ordering::Relaxed) {
                             continue;
                         }
-                        json!({"session":{"id":id(),"agent":req["agent"],"runtime":req["runtime"],"location":req["location"],"epoch":1},"token":"isolated-receiver-token-000000000000000000"})
+                        let epoch = r
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .filter(|v| v["op"] == "register")
+                            .count();
+                        json!({"session":{"id":id(),"agent":req["agent"],"runtime":req["runtime"],"location":req["location"],"epoch":epoch},"token":"isolated-receiver-token-000000000000000000"})
                     }
                     "capabilities" => json!({"idempotentSend":true,"recipientPrecondition":true}),
                     "doctor" => json!({"owner":"did:key:test","agent":"sender"}),
@@ -311,10 +317,22 @@ fn stub(f: &Fixture) -> std::path::PathBuf {
 
 #[test]
 fn three_coordinator_runtimes_bind_exact_native_sessions_bootstrap_and_stop_on_retirement() {
+    coordinator_native(false);
+}
+
+#[test]
+fn codex_registration_recovery_checks_live_owner_native_identity_and_fresh_snapshot() {
+    coordinator_native(true);
+}
+
+fn coordinator_native(recover_registration: bool) {
     for name in ["codex", "claude", "pi"] {
+        if recover_registration && name != "codex" {
+            continue;
+        }
         let mut f = Fixture::new();
         runtime(&mut f, name);
-        let mailer = Mailer::new(&f, false);
+        let mailer = Mailer::new(&f, recover_registration);
         let mut cfg = config(&f);
         cfg.claude_development_channel = true;
         cfg.codex_binary = stub(&f);
@@ -323,6 +341,37 @@ fn three_coordinator_runtimes_bind_exact_native_sessions_bootstrap_and_stop_on_r
         let p = plan(&f, &id);
         let home = launch::files(&f.store.dir, &p).join("home");
         let world = World::new();
+        let process_observation = std::rc::Rc::new(std::cell::RefCell::new(r#"{"result":{"process_info":{"shell_pid":100,"foreground_process_group_id":100,"foreground_processes":[{"pid":100}]}}}"#.to_string()));
+        let observation_change = std::rc::Rc::new(std::cell::Cell::new(0u8));
+        if recover_registration {
+            let reply = process_observation.clone();
+            let change = observation_change.clone();
+            let db = f.store.dir.join("control.sqlite");
+            let target = id.clone();
+            world.runner.on_fn(
+                |c| c.display().contains("pane process-info"),
+                move |_| {
+                    if change.get() != 0 {
+                        let c = rusqlite::Connection::open(&db).unwrap();
+                        c.busy_timeout(Duration::from_millis(200)).unwrap();
+                        if change.get() == 1 {
+                            c.execute(
+                                "UPDATE coordinator_processes SET state='exited' WHERE launch=?1",
+                                [&target],
+                            )
+                            .unwrap();
+                        } else {
+                            c.execute(
+                                "INSERT OR REPLACE INTO meta VALUES ('unrelated-test-write','1')",
+                                [],
+                            )
+                            .unwrap();
+                        }
+                    }
+                    Ok(ok(&reply.borrow()))
+                },
+            );
+        }
         shell(&world, &home, true);
         launch::advance(&mut f.store, &id, &world.runner).unwrap();
         let inv = launch::invocation(&f.store.dir, &p).unwrap();
@@ -353,12 +402,97 @@ fn three_coordinator_runtimes_bind_exact_native_sessions_bootstrap_and_stop_on_r
         observed(&world, &p, &uuid, "changed-terminal", &home);
         assert!(launch::advance(&mut f.store, &id, &world.runner).is_err());
         observed(&world, &p, &uuid, "t1", &home);
+        if recover_registration {
+            assert!(launch::advance(&mut f.store, &id, &world.runner).is_err());
+            assert_eq!(mailer.count("register"), 1);
+            let process_doc: String = f
+                .store
+                .connection
+                .query_row(
+                    "SELECT doc FROM coordinator_processes WHERE launch=?1",
+                    [&id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let process: Value = serde_json::from_str(&process_doc).unwrap();
+            let pgid = process["child_pid"].as_u64().unwrap();
+            crate::control::process::require_live_owner(&f.store.dir, &process).unwrap();
+            let process_info = json!({"result":{"process_info":{"foreground_process_group_id":pgid,"foreground_processes":[{"pid":pgid}]}}}).to_string();
+            *process_observation.borrow_mut() = process_info.clone();
+            let recover = || {
+                crate::control::registration_recovery::recover_observed(
+                    &f.store.dir,
+                    false,
+                    &id,
+                    p.generation,
+                    "recover-codex",
+                    &world.runner,
+                )
+            };
+            observed(&world, &p, &super::id(), "t1", &home);
+            assert!(recover().is_err(), "changed native UUID");
+            observed(&world, &p, &uuid, "foreign-terminal", &home);
+            assert!(recover().is_err(), "changed terminal");
+            observed(&world, &p, &uuid, "t1", &home);
+            *process_observation.borrow_mut() = r#"{"result":{"process_info":{"foreground_process_group_id":1,"foreground_processes":[{"pid":1}]}}}"#.into();
+            assert!(recover().is_err(), "foreground PID must be the owned child");
+            *process_observation.borrow_mut() = process_info.clone();
+            let mut legacy = process.clone();
+            legacy.as_object_mut().unwrap().remove("owner_nonce");
+            f.store
+                .connection
+                .execute(
+                    "UPDATE coordinator_processes SET doc=?2 WHERE launch=?1",
+                    rusqlite::params![id, legacy.to_string()],
+                )
+                .unwrap();
+            assert!(recover().is_err(), "legacy process receipt is insufficient");
+            f.store
+                .connection
+                .execute(
+                    "UPDATE coordinator_processes SET doc=?2 WHERE launch=?1",
+                    rusqlite::params![id, process_doc],
+                )
+                .unwrap();
+            // A process writer can persist exit during read-only Herdr inspection.
+            // Revalidation must reject changed process evidence without resetting it.
+            observation_change.set(1);
+            assert!(recover().is_err(), "changed observation snapshot");
+            assert!(plan(&f, &id).registration_started);
+            f.store
+                .connection
+                .execute(
+                    "UPDATE coordinator_processes SET state='running' WHERE launch=?1",
+                    [&id],
+                )
+                .unwrap();
+            *process_observation.borrow_mut() = process_info.clone();
+            observation_change.set(2); // An unrelated write must not starve this recovery.
+            let receipt = recover().unwrap();
+            assert_eq!(receipt["stage"], "codex_before_binding");
+            assert_eq!(recover().unwrap(), receipt);
+            mailer.lose_register.store(false, Ordering::Relaxed);
+        }
         assert_eq!(
             launch::advance(&mut f.store, &id, &world.runner).unwrap()["state"],
             "bound"
         );
         launch::advance(&mut f.store, &id, &world.runner).unwrap();
-        assert_eq!(mailer.count("register"), 1);
+        assert!(
+            crate::control::registration_recovery::recover_observed(
+                &f.store.dir,
+                false,
+                &id,
+                p.generation,
+                "too-late",
+                &world.runner
+            )
+            .is_err()
+        );
+        assert_eq!(
+            mailer.count("register"),
+            if recover_registration { 2 } else { 1 }
+        );
         let ctx = coordinator::context(&f.store, &p.credential, &f.run).unwrap();
         assert_eq!(
             ctx["native_coordinator"]["endpoint"]["native_session"],
@@ -378,7 +512,10 @@ fn three_coordinator_runtimes_bind_exact_native_sessions_bootstrap_and_stop_on_r
             sent["recipientSession"],
             plan(&f, &id).registration.unwrap()["id"]
         );
-        assert_eq!(sent["recipientEpoch"], 1);
+        assert_eq!(
+            sent["recipientEpoch"],
+            if recover_registration { 2 } else { 1 }
+        );
         let r: Run = document(&f.store.connection, "runs", &f.run).unwrap();
         call(
             &mut f.store,

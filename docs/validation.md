@@ -4,9 +4,9 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
-**Last completed full Nix gate:** commit `010cbd7b47fc31e1ef62646a8ad243491ddd8cd8` passes package build and `nix flake check` on x86_64-linux, with 489 unit and 10 CLI tests offline. It includes owner profile editing and immutable assignments/policy snapshots. Prelaunch registration recovery still requires its package gate. This does not establish other platforms or completion of the remaining feature scope.
+**Last completed full Nix gate:** commit `d7f2aa33df60d41a92258f0d520edbc38e4495ad` passes package build and `nix flake check` on x86_64-linux, with 497 unit and 10 CLI tests offline. It includes explicit prelaunch registration recovery and the separate recovery ledger. The Codex live-ownership extension still requires its package gate. This does not establish other platforms or completion of the remaining feature scope.
 
-The local implementation suite currently passes **497 unit tests and 10 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
+The local implementation suite currently passes **500 unit tests and 10 CLI tests** (local suite with four test threads), including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
 
 | Requirement | Evidence | Limit |
 | --- | --- | --- |
@@ -138,7 +138,7 @@ Mailer protocol-2 support is an independent local commit **`7a12d5a`** on `feat/
 - Broader replanning and abandonment of an uncertain verifier.
 - Recovery/abandonment of uncertain cancelled-run effects and conservative verification checkout cleanup.
 - Recovery after loss of the native wrapper; detached-descendant audit and conservative resource cleanup.
-- Reconciliation of lost mailer registration responses after native launch. Prelaunch Claude/Pi recovery is implemented as explicit local maintenance.
+- Reconciliation for legacy/lost-wrapper registration evidence. Explicit recovery covers prelaunch Claude/Pi and still-owned Codex before binding.
 - Service onboarding and cross-host resource focus. Managed project creation now has a form and resumable CLI.
 - Aggregate API/wire bounds and large-run context pagination.
 - Recovery/requeue of terminal outgoing records and grant/node lifecycle operations.
@@ -295,11 +295,27 @@ The full local suite passes 489 unit tests (8.07 s), 10 CLI tests (26.54 s) and 
 | Atomic checkpoint failure and bounded retained history | `registration_recovery_node_rolls_back_failed_checkpoint_and_bounds_history` |
 | Schema migration preserves prior checkpoint bytes | `registration_recovery_schema_upgrade_preserves_prior_receipts_and_rejects_older_recovery` |
 | Original signed command expiry, owner route, node epoch and content integrity | `registration_recovery_node_requires_unexpired_original_owner_route_and_content` |
-| Lost preregistration response followed by real wrapper/bootstrap with new mailer epoch | `registration_recovery_workers_resume_native_launch_after_lost_preregistration_response` |
+| Lost preregistration response followed by real wrapper/bootstrap with new mailer epoch | `registration_recovery_workers_resume_native_launch_after_lost_registration_response` |
 | Actual local CLI and replay with no secret output | Extended `managed_create_publishes_one_bound_view_through_real_controller_ipc_without_launching_agents` |
 
-These tests use private SQLite/IPC and harmless native subprocesses. Herdr/mailer/model behavior is simulated; they do not prove live model consumption. Codex remains covered by the ordinary bootstrap regression, but its post-launch registration cannot use this recovery. The CLI records authorization without performing a remote registration, and its replay is historical rather than a current health claim. Controller schema 9 and node schema 8 add a separate SQLite recovery ledger and fence older service binaries. The full local suite passes 497 unit tests (8.12 s), 10 CLI tests (23.05 s) and strict all-target Clippy (12.62 s). The additional receipt-write fault checks that authorization rolls back with its missing receipt. The full package gate remains pending. Logs: `.direnv/registration-recovery-focused.log` and `.direnv/registration-recovery-full.log`.
+These tests use private SQLite/IPC and harmless native subprocesses. Herdr/mailer/model behavior is simulated; they do not prove live model consumption. At this checkpoint Codex had only ordinary bootstrap coverage; the subsequent live-ownership extension below adds its pre-binding recovery. The CLI records authorization without performing a remote registration, and its replay is historical rather than a current health claim. Controller schema 9 and node schema 8 add a separate SQLite recovery ledger and fence older service binaries. The full local suite passes 497 unit tests (8.12 s), 10 CLI tests (23.05 s) and strict all-target Clippy (12.62 s). The additional receipt-write fault checks that authorization rolls back with its missing receipt. Commit `d7f2aa3` subsequently passed its full package gate. Logs: `.direnv/registration-recovery-focused.log` and `.direnv/registration-recovery-full.log`.
 
 ## Owner-profile package gate
 
 Commit `010cbd7b47fc31e1ef62646a8ad243491ddd8cd8` passes full Nix build and flake check on x86_64-linux. Compilation took 7 min 12 s and check phase 6 min 46 s, including 489 unit tests (95.79 s) and 10 CLI tests (48.81 s). Formatter/service-module checks pass; incompatible platforms were omitted. Output: `/nix/store/7ahyvkcwyaaiznk0agb8phv2l89lplgs-herdr-supervisor-0.1.0`. Logs: `.direnv/run-profiles-nix-build.log` and `.direnv/run-profiles-nix-check.log`. This package predates the registration-recovery change and its schemas.
+
+## Prelaunch recovery package gate
+
+Commit `d7f2aa33df60d41a92258f0d520edbc38e4495ad` passes full Nix build and flake check on x86_64-linux. Compilation took 6 min 35 s and check phase 5 min 22 s, including 497 unit tests (94.43 s) and 10 CLI tests (43.77 s). Formatter/service-module checks pass; incompatible platforms were omitted. Output: `/nix/store/p4i4vvw90aaj4qxfzm5rkrzbjbknnvk6-herdr-supervisor-0.1.0`. Logs: `.direnv/registration-recovery-nix-build.log` and `.direnv/registration-recovery-nix-check.log`. This predates Codex recovery with positive live-wrapper evidence.
+
+## Codex recovery and wrapper ownership
+
+| Requirement | Evidence |
+| --- | --- |
+| Recover one existing Codex without another launch; bind/bootstrap use the new receiver epoch | Extended `registration_recovery_workers_resume_native_launch_after_lost_registration_response`, retaining all three runtime routes |
+| Exact live coordinator, mismatched UUID/terminal/PID, missing legacy ownership evidence, replay and no recovery after binding | `codex_registration_recovery_checks_live_owner_native_identity_and_fresh_snapshot` |
+| Process exit can be written during observation and prevents stale authorization; unrelated writes permit recovery | Same coordinator test mutates SQLite from the Herdr observation fixture |
+| Positive lock holder, private regular file, no symlink or path traversal | `native_ownership_lease_requires_live_holder_and_rejects_missing_symlink_or_public_file` |
+| Wrapper crash releases ownership despite a living native child; capacity remains occupied | `native_owner_crash_releases_lease_without_claiming_its_child_exited` |
+
+The wrappers and harmless child processes are real; Herdr/mailer/model boundaries remain simulated. The first fully parallel local run passed 498 of 500 unit tests but failed two existing NATS cases with connection refusal/request timeout; log `.direnv/codex-registration-first-failure.log` retains the evidence. Both cases pass independently, and the complete suite passes with four test threads: 500 unit tests (31.03 s) and 10 CLI tests (22.46 s). After the Clippy-requested late-initialization cleanup, nine recovery regressions and both ownership regressions pass again, with strict all-target Clippy (10.82 s). No assertion is skipped or weakened. The package gate remains pending. Logs: `.direnv/codex-registration-focused.log`, `.direnv/codex-registration-guards.log`, `.direnv/codex-registration-full.log` and `.direnv/codex-registration-final.log`. Ownership is positive evidence only: it never establishes exit when absent, and legacy process receipts are not upgraded by guessing.
