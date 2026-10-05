@@ -229,6 +229,8 @@ pub struct Integration {
     pub base_oid: String,
     pub result_oid: String,
     pub candidate_oid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<super::artifacts::Candidate>,
     pub tree_oid: Option<String>,
     pub contract_hash: String,
     pub policy_hash: String,
@@ -242,6 +244,8 @@ pub struct Integration {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReviewContext {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<super::artifacts::Candidate>,
     pub integration: String,
     pub candidate_oid: String,
     pub base_oid: String,
@@ -266,6 +270,23 @@ pub struct CriterionReview {
     deny_unknown_fields
 )]
 pub enum Mutation {
+    FetchArtifactChunk {
+        attempt: String,
+        epoch: u64,
+        integration: String,
+        name: String,
+        index: u32,
+    },
+    SubmitArtifactReview {
+        attempt: String,
+        epoch: u64,
+        integration: String,
+        manifest_hash: String,
+        contract_hash: String,
+        approve: bool,
+        criteria: Vec<CriterionReview>,
+        findings: Vec<String>,
+    },
     PutArtifact {
         attempt: String,
         epoch: u64,

@@ -7,15 +7,30 @@ const BIN: &str = env!("CARGO_BIN_EXE_herdr-supervisor");
 
 #[test]
 fn continuous_services_deliver_review_integrate_and_stop_across_node_restart() {
+    continuous_workflow(false);
+}
+
+#[test]
+fn continuous_services_verify_artifacts_before_native_review_and_complete_without_git_integration()
+{
+    continuous_workflow(true);
+}
+
+fn continuous_workflow(artifact: bool) {
     let python = std::env::var_os("PYTHON").unwrap_or_else(|| "python3".into());
     let nats = std::env::var_os("NATS_SERVER").unwrap_or_else(|| "nats-server".into());
-    let output = Command::new(python)
+    let mut command = Command::new(python);
+    command
         .arg(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/service_workflow.py"
         ))
         .args(["--binary", BIN, "--nats-server"])
-        .arg(nats)
+        .arg(nats);
+    if artifact {
+        command.arg("--artifact");
+    }
+    let output = command
         .output()
         .expect("Python 3 and NATS are required for the continuous service acceptance test");
     assert!(

@@ -385,3 +385,173 @@ fn enqueue_when_available(state: &Path, request: &super::worker::WorkerRequest) 
         }
     }
 }
+
+/// Explicit artifact identity; it is never a Git object name.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Candidate {
+    pub manifest: Manifest,
+    pub manifest_hash: String,
+}
+impl Candidate {
+    pub fn validate(&self) -> Result<()> {
+        super::model::identifier(&self.manifest.attempt)?;
+        hash(&self.manifest.contract_hash)?;
+        hash(&self.manifest_hash)?;
+        ensure!(
+            self.manifest.version == 1
+                && !self.manifest.files.is_empty()
+                && self.manifest.files.len() <= MAX_FILES as usize,
+            "invalid artifact manifest version or file count"
+        );
+        let mut total = 0;
+        for (name, file) in &self.manifest.files {
+            self::name(name)?;
+            hash(&file.sha256)?;
+            ensure!(file.size <= MAX_FILE_BYTES, "artifact file too large");
+            total += file.size;
+        }
+        ensure!(
+            total <= MAX_ATTEMPT_BYTES
+                && digest(&serde_json::to_vec(&self.manifest)?) == self.manifest_hash,
+            "artifact manifest content mismatch or quota exceeded"
+        );
+        Ok(())
+    }
+    pub fn reference(&self) -> String {
+        format!("artifact:sha256:{}", self.manifest_hash)
+    }
+}
+
+// Fetches use the sealed metadata and validate the selected chunk. Rehashing all
+// files for every chunk would make review transfer quadratic in artifact size.
+fn sealed_candidate(c: &Connection, a: &Attempt) -> Result<Candidate> {
+    let text: String = c.query_row(
+        "SELECT doc FROM results WHERE attempt=?1 AND contract_hash=?2",
+        params![a.id, a.contract_hash],
+        |r| r.get(0),
+    )?;
+    let value: Value = serde_json::from_str(&text)?;
+    ensure!(
+        value["commit"].is_null(),
+        "artifact result must not contain a code commit"
+    );
+    let candidate = Candidate {
+        manifest: serde_json::from_value(value["artifact_manifest"].clone())?,
+        manifest_hash: value["artifact_manifest_hash"]
+            .as_str()
+            .context("sealed artifact manifest missing")?
+            .into(),
+    };
+    candidate.validate()?;
+    ensure!(
+        candidate.manifest.attempt == a.id && candidate.manifest.contract_hash == a.contract_hash,
+        "artifact result scope mismatch"
+    );
+    Ok(candidate)
+}
+
+pub fn candidate(c: &Connection, a: &Attempt) -> Result<Candidate> {
+    let candidate = sealed_candidate(c, a)?;
+    for (name, file) in &candidate.manifest.files {
+        verify(c, &a.id, name, file)?;
+    }
+    Ok(candidate)
+}
+
+pub fn content(c: &Connection, candidate: &Candidate, name: &str) -> Result<Vec<u8>> {
+    candidate.validate()?;
+    let file = candidate
+        .manifest
+        .files
+        .get(name)
+        .context("artifact not selected in manifest")?;
+    let mut q=c.prepare("SELECT chunk_index,data FROM artifact_chunks WHERE attempt=?1 AND name=?2 ORDER BY chunk_index")?;
+    let mut rows = q.query(params![candidate.manifest.attempt, name])?;
+    let mut bytes = Vec::new();
+    let mut index = 0;
+    while let Some(row) = rows.next()? {
+        let chunk = Chunk {
+            name: name.into(),
+            sha256: file.sha256.clone(),
+            size: file.size,
+            index: row.get(0)?,
+            data: row.get(1)?,
+        };
+        chunk.validate()?;
+        ensure!(chunk.index == index, "artifact chunk sequence mismatch");
+        bytes.extend(chunk.data);
+        index += 1;
+    }
+    ensure!(
+        bytes.len() as u64 == file.size
+            && index as u64 == chunks(file.size)
+            && digest(&bytes) == file.sha256,
+        "artifact content mismatch"
+    );
+    Ok(bytes)
+}
+
+pub fn fetch(
+    tx: &Transaction<'_>,
+    p: &Principal,
+    attempt: &str,
+    epoch: u64,
+    integration: &str,
+    name: &str,
+    index: u32,
+) -> Result<Value> {
+    let a: Attempt = document(tx, "attempts", attempt)?;
+    worker(p, &a, epoch)?;
+    ensure!(
+        a.role == "reviewer" && ["awaiting_ready", "running"].contains(&a.state.as_str()),
+        "artifact fetch requires the assigned bound reviewer"
+    );
+    let assigned: String = tx.query_row(
+        "SELECT integration FROM review_assignments WHERE attempt=?1",
+        [attempt],
+        |r| r.get(0),
+    )?;
+    ensure!(
+        assigned == integration,
+        "reviewer is assigned to a different integration"
+    );
+    let i = super::verification::integration(tx, integration)?;
+    let (run, task) = super::verification::current(tx, &i)?;
+    super::store::active_run(&run)?;
+    ensure!(
+        i.state == "awaiting_review" && task.contract.kind == "artifact",
+        "artifact review is no longer current"
+    );
+    let source: Attempt = document(tx, "attempts", &i.attempt)?;
+    let candidate = sealed_candidate(tx, &source)?;
+    ensure!(
+        i.artifact.as_ref() == Some(&candidate),
+        "artifact candidate changed"
+    );
+    let file = candidate
+        .manifest
+        .files
+        .get(name)
+        .context("artifact not assigned for review")?;
+    ensure!(
+        u64::from(index) < chunks(file.size),
+        "artifact chunk outside file"
+    );
+    let data: Vec<u8> = tx.query_row(
+        "SELECT data FROM artifact_chunks WHERE attempt=?1 AND name=?2 AND chunk_index=?3",
+        params![source.id, name, index],
+        |r| r.get(0),
+    )?;
+    let chunk = Chunk {
+        name: name.into(),
+        sha256: file.sha256.clone(),
+        size: file.size,
+        index,
+        data,
+    };
+    chunk.validate()?;
+    Ok(
+        json!({"id":attempt,"integration":integration,"manifest_hash":candidate.manifest_hash,"chunk":chunk}),
+    )
+}

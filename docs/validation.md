@@ -6,7 +6,7 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 **Current full Nix gate:** commit `5afb1d9a02b4649dec6ffa874d341c235d578ffd` passes package build and `nix flake check` on x86_64-linux, with all 441 unit and 7 CLI tests executed offline inside the package build. This supersedes the storage-related validation backlog recorded below; it does not establish builds on other platforms or completion of the remaining feature scope.
 
-The local implementation suite currently passes **441 unit tests and 7 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
+The local implementation suite currently passes **449 unit tests and 8 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
 
 | Requirement | Evidence | Limit |
 | --- | --- | --- |
@@ -27,7 +27,7 @@ The local implementation suite currently passes **441 unit tests and 7 CLI tests
 | Fairness across denied routes | `denied_outgoing_route_does_not_starve_incoming_events_or_other_nodes` receives a worker proposal and delivers its receipt while another destination is denied by real NATS ACLs | Incoming consumer/service outages remain separate failures |
 | Bounded retry schedule and private inspection | `retry_schedule_survives_restart_is_bounded_and_operator_projection_omits_credentials`; continuous CLI workflow invokes `delivery-status` | At most 100 recent metadata rows, with full state counts; no terminal requeue command |
 | Retry migration and native binding lookup | `node_v4_retry_migration_preserves_wire_jobs_memory_and_idempotent_operations`; extended three-runtime bootstrap test retains a malformed event row | Node schema 5; no native model calls or grant renewal |
-| Artifact content before immutable result | `artifact_result_requires_verified_bytes_and_seals_exact_attempt_contract_and_manifest`, `artifact_hash_mismatch_and_empty_files_have_no_false_completion` | Stored hashes alone are insufficient; contract checks and independent artifact acceptance remain pending |
+| Artifact content before immutable result | `artifact_result_requires_verified_bytes_and_seals_exact_attempt_contract_and_manifest`, `artifact_hash_mismatch_and_empty_files_have_no_false_completion` | Stored hashes alone are insufficient; separate artifact pipeline tests below cover checks and independent acceptance |
 | Artifact replay, corruption and rollback | `artifact_chunks_are_immutable_replayable_and_finalization_rolls_back_with_journal`, `concurrent_artifact_chunks_commit_one_complete_content_and_manifest` | Journal contains metadata/digests; private signed inboxes still retain wire bytes |
 | Artifact authorization and bounded reservation | `artifact_scope_and_epoch_checks_apply_at_node_and_authority`, `artifact_shape_paths_and_reserved_capacity_are_bounded` | Author/attempt/epoch scope; logical 8 MiB file, 32-file/32 MiB attempt limits |
 | Signed artifact transport and prerequisite ordering | `real_nats_artifact_chunks_recover_result_before_content_across_restart` | Real restricted NATS clients, no model; each wire fits the existing 300,000-byte frame |
@@ -135,7 +135,7 @@ Mailer protocol-2 support is an independent local commit **`7a12d5a`** on `feat/
 
 ## Still required
 
-- Artifact verification without a synthetic code commit; broader replanning and abandonment of an uncertain verifier.
+- Broader replanning and abandonment of an uncertain verifier.
 - Recovery/abandonment of uncertain cancelled-run effects and conservative verification checkout cleanup.
 - Recovery after loss of the native wrapper; detached-descendant audit and conservative resource cleanup.
 - Idempotent/reconcilable mailer registration after a lost registration response.
@@ -167,3 +167,21 @@ nix --option min-free 0 flake check \
 ```
 
 The explicit pinned URL avoids this checkout's previously observed shallow-Git source lookup issue. Output: `/nix/store/v5vl9qs4rp3b36vs2z07wj9ch75c5g42-herdr-supervisor-0.1.0`, now referenced by `result`. Logs are `.direnv/artifacts-nix-build.log` and `.direnv/artifacts-nix-check.log` in the implementation worktree. The flake check includes the package, formatter and module checks; incompatible platforms were not built. No host/service activation, publication or shared daemon configuration change was performed. A documentation-only follow-up records this evidence; the tested implementation revision remains the pinned commit above.
+
+## Artifact verification and independent acceptance
+
+The new artifact pipeline has focused evidence separate from the earlier content-upload checkpoint:
+
+| Invariant | Evidence | Limit |
+| --- | --- | --- |
+| Artifact identity, acceptance and process lifecycle | `artifact_pipeline_acceptance_completes_task_without_git_or_releasing_process_capacity` | Empty repository configuration and nonexistent source checkout; no Git binding is created; process exits remain separate |
+| Checks cannot mutate declared inputs | `artifact_pipeline_successful_check_cannot_modify_its_inputs` | Executes a real shell check that changes a file and exits zero; the candidate still fails |
+| Owned preparation and conservative recovery | `artifact_pipeline_materialization_recovers_only_owned_incomplete_inputs` | Refuses preexisting directories, recovers a lost ready receipt, rejects changed ready bytes and symlinks |
+| Lost check outcome | `artifact_pipeline_lost_check_receipt_does_not_repeat_external_command` | Real append side effect occurs once; SQL fault leaves a started receipt and retry fails conservatively |
+| Atomic acceptance and cancellation | `artifact_pipeline_acceptance_rolls_back_and_cancelled_retry_cannot_complete` | Injected journal failure rolls back task acceptance; cancellation retires the queued acceptance before process exit |
+| Full content revalidation | `artifact_pipeline_acceptance_revalidates_source_and_materialized_bytes` | Source chunks or ready filesystem copies changed after checks prevent acceptance |
+| Reviewer distribution and independent decision | `artifact_pipeline_cross_node_review_fetches_exact_content_over_restricted_nats` | Real restricted broker, two logical nodes, eighteen chunks, restart and exact manifest/role/epoch scope; simulated reviewer decision, not a live model |
+| Node migration | `artifact_pipeline_node_schema_upgrade_preserves_jobs_and_pending_signed_events` | Schema 6 to 7 preserves existing jobs and frozen pending event bytes |
+| Continuous artifact lifecycle | CLI `continuous_services_verify_artifacts_before_native_review_and_complete_without_git_integration` | Actual services and CLI upload, Git worktrees, native wrappers, IPC and NATS; fixture asserts files/hash/path at mailer bootstrap, criterion review and process exit before run completion; model/Herdr/mailer boundaries simulated |
+
+The checkpoint passes `cargo test --locked --offline` (449 unit tests in 7.60 s and 8 CLI tests in 23.66 s), strict all-target Clippy (10.35 s after removing two redundant references), and `nix fmt`. Full package validation is in progress; this section does not yet replace the pinned full Nix gate above. No host, live session, shared broker or publication has been changed.

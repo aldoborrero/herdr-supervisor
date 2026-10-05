@@ -265,7 +265,9 @@ impl Store {
                 );
                 attempt
             }
-            Mutation::PutArtifact { attempt, .. }
+            Mutation::FetchArtifactChunk { attempt, .. }
+            | Mutation::SubmitArtifactReview { attempt, .. }
+            | Mutation::PutArtifact { attempt, .. }
             | Mutation::WorkerReady { attempt, .. }
             | Mutation::SubmitResult { attempt, .. }
             | Mutation::SubmitReview { attempt, .. } => {
@@ -664,6 +666,7 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
         }
         Mutation::RequestVerification { .. }
         | Mutation::RequestReview { .. }
+        | Mutation::SubmitArtifactReview { .. }
         | Mutation::SubmitReview { .. }
         | Mutation::ApplyIntegration { .. } => super::verification::mutate(tx, p, command),
         Mutation::EnrollNode {
@@ -974,6 +977,13 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
             save_attempt(tx, &a)?;
             Ok(serde_json::to_value(a)?)
         }
+        Mutation::FetchArtifactChunk {
+            attempt,
+            epoch,
+            integration,
+            name,
+            index,
+        } => super::artifacts::fetch(tx, p, attempt, *epoch, integration, name, *index),
         Mutation::PutArtifact {
             attempt,
             epoch,

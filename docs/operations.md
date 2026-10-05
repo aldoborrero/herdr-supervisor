@@ -336,7 +336,7 @@ This pipeline currently supports `code` contracts. Artifact verification, abando
 
 ## Artifact content and immutable results
 
-Ready authors can upload binary files through their scoped node API. The same private NATS protocol carries these bytes to the controller; no shared filesystem, worker-supplied URL or synthetic Git commit is required for content submission. This is the **content and result-sealing layer**. Running contract checks on artifact snapshots, distributing those snapshots to independent reviewers and accepting an artifact task remain pending. `request_verification` still rejects `artifact` contracts; content verification alone never marks a task complete.
+Ready authors can upload binary files through their scoped node API. The same private NATS protocol carries these bytes to the controller; no shared filesystem, worker-supplied URL or synthetic Git commit is required for content submission. An `artifact` contract has a complete verification/review/acceptance path. Content verification alone never marks a task complete; use the decisions below after sealing the result.
 
 Using the worker prefix supplied at bootstrap:
 
@@ -362,7 +362,21 @@ herdr-supervisor control --state NODE_DIR worker \
 
 After verification, an `artifact` result uses `commit: null` and an `artifacts` map such as `{"report.pdf":"<sha256>"}`. The controller rehashes stored chunks while sealing the immutable result, binds a version-1 manifest to the exact attempt/contract, and records its manifest hash. Missing chunks, unuploaded hashes or corrupted stored content prevent result submission. A result arriving before its chunks uses the durable rejected-delivery queue and can succeed later after all prerequisites arrive. Code results may also reference uploaded attachments; existing commit verification remains required.
 
-Controller schema 7 adds `artifact_uploads` and `artifact_chunks`; node schema stays 6 and uses its existing signed event outbox. Upload, application receipt and audit metadata commit in the ordinary controller transaction. The journal stores chunk size and SHA-256 instead of duplicating file bytes. Raw signed records and file chunks remain private SQLite state. None of these receipts proves that a model read an artifact or that an independent reviewer approved it.
+Controller schema 7 adds `artifact_uploads` and `artifact_chunks`; node schema 7 adds owned reviewer staging while preserving existing jobs and signed events. Upload, application receipt and audit metadata commit in the ordinary controller transaction. The journal stores chunk size and SHA-256 instead of duplicating file bytes. Raw signed records and file chunks remain private SQLite state. None of these receipts proves that a model read an artifact or that an independent reviewer approved it.
+
+## Verify, review and accept artifacts
+
+Use the same `request_verification` decision as for code, with the author attempt and current task revision. The resulting integration has an `artifact` object containing the sealed manifest and `manifest_hash`. Its receipt identity is `artifact:sha256:<manifest_hash>`; `candidate_oid` and `tree_oid` are null and `result_oid` is empty. `base_oid` remains an actual Git commit for reviewer worktrees. Never pass the manifest hash to Git.
+
+The controller materializes private inputs at `CONTROLLER_DIR/verification/INTEGRATION/inputs`. It persists ownership before creating files, writes and fsyncs them atomically, and runs the contract's named policy-approved check argv with this directory as the working directory. Checks can read the manifest's filenames directly. Full hashes are checked before and after checks and again before acceptance. A ready copy with changed bytes or a symlink is rejected rather than silently repaired. Lost check receipts remain uncertain and cannot trigger an automatic rerun.
+
+When the policy requires review, `request_review` assigns a different attempt/native session. Its node fetches only that integration's declared files using signed `fetch_artifact_chunk` requests and controller receipts over NATS; shared mounts are unnecessary. Staging queues at most sixteen new requests per cycle and preserves their operation IDs through reconnect/restart. The native mailer bootstrap waits for all files to be verified, then identifies the manifest and `.herdr-supervisor-artifacts-ATTEMPT` directory inside the reviewer worktree.
+
+The reviewer reads its original contract and `review.artifact` using worker context, then submits `submit_artifact_review` with `attempt`, `epoch`, `integration`, `manifest_hash`, `contract_hash`, `approve`, every criterion's assessment and actionable `findings`. The scoped worker API rehashes its prepared copies before queueing the review. Code-style `submit_review` and mismatched manifest/session/epoch assignments cannot approve an artifact candidate. The controller binds approval to the exact manifest and its check receipts; a native send or broker receipt is not review approval.
+
+Finally, `apply_integration` with the current integration revision queues acceptance. The controller rechecks its evidence and transactionally marks the task `completed` and integration `applied`, leaving the run's Git OID and refs unchanged. Cancellation fences this acceptance immediately, including while worker exits are pending. Task completion can satisfy dependencies, but occupied process slots remain until explicit exit receipts; stop the workers and then use `complete_run`.
+
+Node schema 7 is required for artifact review assignments. Older nodes must be upgraded before assignment; they do not interpret artifact hashes as code candidates. Code assignments retain their existing representation. Staging files, chunks, receipts and check outputs are retained as evidence; automatic cleanup remains pending.
 
 ## Memory
 

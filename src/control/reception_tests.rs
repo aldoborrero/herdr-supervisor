@@ -372,6 +372,9 @@ fn schema_five_upgrade_preserves_existing_jobs_and_frozen_outbox() {
         .connection
         .execute_batch("DROP TABLE artifact_chunks; DROP TABLE artifact_uploads;")
         .unwrap();
+    node.connection
+        .execute_batch("DROP TABLE artifact_staging;")
+        .unwrap();
     for c in [&node.connection, &f.store.connection] {
         c.execute_batch("DROP TABLE reception_failures; PRAGMA user_version=5;")
             .unwrap();
@@ -379,7 +382,7 @@ fn schema_five_upgrade_preserves_existing_jobs_and_frozen_outbox() {
     drop(node);
     let node = node_store(&f);
     f.store = Store::open(&f.store.dir).unwrap();
-    for (c, version) in [(&node.connection, 6), (&f.store.connection, 7)] {
+    for (c, version) in [(&node.connection, 7), (&f.store.connection, 7)] {
         assert_eq!(
             c.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
                 .unwrap(),

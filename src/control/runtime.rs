@@ -460,6 +460,20 @@ pub fn advance(
     if applied.is_none() {
         return Ok(json!({"state":"awaiting_binding","model_ready":false}));
     }
+    let artifact_inputs = if order
+        .review
+        .as_ref()
+        .is_some_and(|review| review.artifact.is_some())
+    {
+        let Some(path) =
+            super::artifact_review::stage(store, &order, &plan.checkout.worktree, identity)?
+        else {
+            return Ok(json!({"state":"awaiting_artifacts","model_ready":false}));
+        };
+        Some(path)
+    } else {
+        None
+    };
     if plan.bootstrap.is_none() {
         let token = credential(&dir.join("mailer.token"))?;
         let caps = super::api::call_json(
@@ -483,10 +497,28 @@ pub fn advance(
             epoch
         );
         let assignment = if let Some(review) = &order.review {
-            format!(
-                "You are the independent reviewer, not the author of this task. Inspect the exact candidate {} from base {} and assess every criterion in the original contract. Do not edit or integrate it. Submit method submit_review with attempt, epoch, integration {}, candidate_oid, contract_hash, approve (boolean), criteria (one object per zero-based criterion index, with passed and evidence), and actionable findings. The check receipt digest for this assignment is {}.",
-                review.candidate_oid, review.base_oid, review.integration, review.checks_digest
-            )
+            if let Some(artifact) = &review.artifact {
+                format!(
+                    "You are the independent artifact reviewer. Read the exact manifest {} from worker context and its verified files at {}. The worktree base {} is a Git commit; the artifact manifest hash is not a Git object. Assess every original contract criterion, without editing inputs or integrating code. Submit method submit_artifact_review with attempt, epoch, integration {}, manifest_hash {}, contract_hash, approve, criteria (criterion index, passed, evidence) and actionable findings. Check receipt digest: {}.",
+                    artifact.manifest_hash,
+                    quote(
+                        artifact_inputs
+                            .as_ref()
+                            .context("artifact inputs missing")?
+                            .to_str()
+                            .context("artifact path UTF8")?
+                    ),
+                    review.base_oid,
+                    review.integration,
+                    artifact.manifest_hash,
+                    review.checks_digest
+                )
+            } else {
+                format!(
+                    "You are the independent reviewer, not the author of this task. Inspect the exact candidate {} from base {} and assess every criterion in the original contract. Do not edit or integrate it. Submit method submit_review with attempt, epoch, integration {}, candidate_oid, contract_hash, approve (boolean), criteria (one object per zero-based criterion index, with passed and evidence), and actionable findings. The check receipt digest for this assignment is {}.",
+                    review.candidate_oid, review.base_oid, review.integration, review.checks_digest
+                )
+            }
         } else {
             format!(
                 "Execute only the assigned contract. Submit a result with its exact contract_hash and commit/artifact hashes; do not integrate or decide other tasks. Upload any artifact with: {prefix} upload-artifact NAME FILE . Inspect {prefix} artifact-status NAME SHA256 until content_verified is true before referencing it in artifacts. An artifact contract uses commit:null and a name-to-SHA256 map. Verified content is not task approval. You may propose memory with evidence; approval belongs to the supervisor."

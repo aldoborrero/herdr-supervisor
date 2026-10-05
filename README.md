@@ -8,7 +8,7 @@ Use `control broker-policy` to generate the controller and per-node NATS permiss
 
 Outgoing delivery retries survive restarts without changing message identity. `control delivery-status` exposes pending, expired and invalid delivery metadata; those states remain separate from task completion. See [delivery operations](docs/operations.md#outgoing-delivery-and-retries).
 
-**In development.** The controller, signed node protocol, curated memory, scoped worker API, native worker launch/stop path and code review/integration pipeline are implemented. Projects can now display a bound controller run and submit scoped lifecycle/memory actions. Projects can also request an owned Codex, Claude or Pi coordinator through a configured controller launcher. Artifact verification, broader onboarding, recovery and cleanup remain in progress. The full delivery contract is in [IMPLEMENTATION.md](IMPLEMENTATION.md).
+**In development.** The controller, signed node protocol, curated memory, scoped worker API, native worker launch/stop path and code review/integration pipeline are implemented. Projects can now display a bound controller run and submit scoped lifecycle/memory actions. Projects can also request an owned Codex, Claude or Pi coordinator through a configured controller launcher. Artifact contracts now support content checks, independent review and acceptance without advancing Git. Broader onboarding, recovery and cleanup remain in progress. The full delivery contract is in [IMPLEMENTATION.md](IMPLEMENTATION.md).
 
 ## What is different
 
@@ -53,7 +53,7 @@ See [operations](docs/operations.md) for the request shape, node enrollment and 
 
 A worker receives its assignment only after the controller accepts the exact resource binding. Its private API/CLI/MCP permits reading its contract and selected memory, reporting readiness/results, uploading bounded artifacts, proposing memory and inspecting its own event receipts. A reviewer receives the exact candidate and reports criterion-by-criterion findings through the same scoped transport. Neither role can dispatch agents, approve memory or alter run policy.
 
-Authors can upload binary artifacts with resumable chunk operations and inspect controller-verified content hashes. Results seal an attempt/contract-bound manifest. Artifact contract checks and independent acceptance remain in development; see [artifact operations](docs/operations.md#artifact-content-and-immutable-results).
+Authors can upload binary artifacts with resumable chunk operations and inspect controller-verified content hashes. Results seal an attempt/contract-bound manifest. The controller checks verified copies, sends exact files to assigned reviewers and accepts the task only after its check/review gates; see [artifact operations](docs/operations.md#artifact-content-and-immutable-results).
 
 An existing native coordinator session on the controller host can be attached with `control connect-supervisor`. It receives durable notices through mailer and reads current state through `control context` or `supervisor_context`. Replacing it revokes its previous capability; pending notices never change recipients. See [coordinator setup](docs/operations.md#connect-a-native-coordinator).
 

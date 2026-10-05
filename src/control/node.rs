@@ -95,6 +95,7 @@ impl NodeStore {
             4 => (),
             5 => (),
             6 => (),
+            7 => (),
             _ => bail!("unsupported node schema"),
         }
         if version <= 2 {
@@ -116,6 +117,9 @@ impl NodeStore {
         }
         if version <= 5 {
             tx.execute_batch(super::reception::SCHEMA)?;
+        }
+        if version <= 6 {
+            tx.execute_batch(super::artifact_review::SCHEMA)?;
         }
         let existing: (String, String, String, u64) = tx.query_row(
             "SELECT owner,node,key,epoch FROM authority WHERE singleton=1",
@@ -200,10 +204,24 @@ impl NodeStore {
                 );
                 if order.attempt.role == "reviewer" {
                     let review = order.review.as_ref().context("review assignment missing")?;
-                    ensure!(
-                        review.candidate_oid == order.attempt.base_oid,
-                        "review base differs from assigned candidate"
-                    );
+                    if let Some(artifact) = &review.artifact {
+                        artifact.validate()?;
+                        ensure!(
+                            order.contract.kind == "artifact"
+                                && review.candidate_oid.is_empty()
+                                && review.result_oid.is_empty()
+                                && review.base_oid == order.attempt.base_oid
+                                && artifact.manifest.contract_hash == order.attempt.contract_hash
+                                && artifact.manifest.attempt != order.attempt.id,
+                            "artifact review assignment mismatch"
+                        );
+                    } else {
+                        ensure!(
+                            order.contract.kind == "code"
+                                && review.candidate_oid == order.attempt.base_oid,
+                            "review base differs from assigned candidate"
+                        );
+                    }
                 } else {
                     ensure!(
                         order.review.is_none(),

@@ -25,7 +25,7 @@ pub(super) fn save(c: &Connection, i: &Integration) -> Result<()> {
         "UPDATE integrations SET candidate=?2,state=?3,doc=?4 WHERE id=?1",
         params![
             i.id,
-            i.candidate_oid.as_deref().unwrap_or(""),
+            candidate_reference(i)?.unwrap_or_default(),
             i.state,
             serde_json::to_string(i)?
         ],
@@ -49,10 +49,39 @@ pub(super) fn current(c: &Connection, i: &Integration) -> Result<(Run, Task)> {
     Ok((r, t))
 }
 
+pub(super) fn candidate_reference(i: &Integration) -> Result<Option<String>> {
+    if let Some(artifact) = &i.artifact {
+        artifact.validate()?;
+        ensure!(
+            i.candidate_oid.is_none() && i.result_oid.is_empty() && i.tree_oid.is_none(),
+            "artifact candidate contains Git result identity"
+        );
+        Ok(Some(artifact.reference()))
+    } else {
+        Ok(i.candidate_oid.clone())
+    }
+}
+
 pub(super) fn gates(c: &Connection, i: &Integration) -> Result<()> {
     let (r, t) = current(c, i)?;
-    let candidate = i.candidate_oid.as_ref().context("candidate not prepared")?;
-    oid(candidate)?;
+    let candidate = candidate_reference(i)?.context("candidate not prepared")?;
+    if let Some(artifact) = &i.artifact {
+        ensure!(
+            t.contract.kind == "artifact",
+            "artifact candidate has code contract"
+        );
+        let source: Attempt = document(c, "attempts", &i.attempt)?;
+        ensure!(
+            &super::artifacts::candidate(c, &source)? == artifact,
+            "sealed artifact candidate changed"
+        );
+    } else {
+        ensure!(
+            t.contract.kind == "code",
+            "code candidate has artifact contract"
+        );
+        oid(&candidate)?;
+    }
     let mut receipts = Vec::<Value>::new();
     for name in &t.contract.checks {
         let (state, doc): (String, String) = c
@@ -66,7 +95,7 @@ pub(super) fn gates(c: &Connection, i: &Integration) -> Result<()> {
         let receipt: Value = serde_json::from_str(&doc)?;
         ensure!(
             state == "passed"
-                && receipt["candidate"] == *candidate
+                && receipt["candidate"] == candidate
                 && receipt["policy_hash"] == i.policy_hash,
             "check is not a passed receipt for this candidate/policy"
         );
@@ -117,19 +146,20 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
                 ["awaiting_review", "changes_requested"].contains(&t.state.as_str()),
                 "task is not awaiting verification"
             );
-            ensure!(
-                t.contract.kind == "code",
-                "artifact verification requires an artifact verifier"
-            );
-            let result_oid: String = tx
-                .query_row(
-                    "SELECT commit_oid FROM results WHERE attempt=?1 AND contract_hash=?2",
-                    params![attempt, t.contract_hash],
-                    |r| r.get(0),
-                )
-                .optional()?
-                .context("immutable result missing")?;
-            oid(&result_oid)?;
+            let (result_oid, artifact) = if t.contract.kind == "artifact" {
+                (String::new(), Some(super::artifacts::candidate(tx, &a)?))
+            } else {
+                let result_oid: String = tx
+                    .query_row(
+                        "SELECT commit_oid FROM results WHERE attempt=?1 AND contract_hash=?2",
+                        params![attempt, t.contract_hash],
+                        |r| r.get(0),
+                    )
+                    .optional()?
+                    .context("immutable result missing")?;
+                oid(&result_oid)?;
+                (result_oid, None)
+            };
             let i = Integration {
                 id: id(),
                 run: r.id.clone(),
@@ -138,6 +168,7 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
                 base_oid: r.integration_oid.clone(),
                 result_oid,
                 candidate_oid: None,
+                artifact,
                 tree_oid: None,
                 contract_hash: t.contract_hash.clone(),
                 policy_hash: policy_hash(&r, &t)?,
@@ -233,10 +264,13 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
                 node: node.clone(),
                 profile: profile.clone(),
                 role: "reviewer".into(),
-                base_oid: i
-                    .candidate_oid
-                    .clone()
-                    .context("review candidate missing")?,
+                base_oid: if i.artifact.is_some() {
+                    i.base_oid.clone()
+                } else {
+                    i.candidate_oid
+                        .clone()
+                        .context("review candidate missing")?
+                },
                 contract_hash: t.contract_hash.clone(),
                 state: "reserved".into(),
                 native_session: None,
@@ -260,8 +294,9 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
             )?;
             let credential = issue(tx, "reviewer", Some(&a.run), Some(&a.id), None, a.epoch)?;
             let review = ReviewContext {
+                artifact: i.artifact.clone(),
                 integration: i.id.clone(),
-                candidate_oid: a.base_oid.clone(),
+                candidate_oid: i.candidate_oid.clone().unwrap_or_default(),
                 base_oid: i.base_oid.clone(),
                 result_oid: i.result_oid.clone(),
                 checks_digest: i
@@ -285,7 +320,17 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
             attempt,
             epoch,
             integration: integration_id,
-            candidate_oid,
+            candidate_oid: candidate,
+            contract_hash,
+            approve,
+            criteria,
+            findings,
+        }
+        | Mutation::SubmitArtifactReview {
+            attempt,
+            epoch,
+            integration: integration_id,
+            manifest_hash: candidate,
             contract_hash,
             approve,
             criteria,
@@ -309,13 +354,22 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
             let mut i = integration(tx, integration_id)?;
             let (r, mut t) = current(tx, &i)?;
             active_run(&r)?;
+            let is_artifact = matches!(command, Mutation::SubmitArtifactReview { .. });
+            let same_candidate = if is_artifact {
+                i.artifact
+                    .as_ref()
+                    .is_some_and(|artifact| artifact.manifest_hash == *candidate)
+                    && a.base_oid == i.base_oid
+            } else {
+                i.artifact.is_none()
+                    && i.candidate_oid.as_deref() == Some(candidate)
+                    && a.base_oid == *candidate
+            };
             ensure!(
-                i.state == "awaiting_review"
-                    && i.candidate_oid.as_deref() == Some(candidate_oid)
-                    && i.contract_hash == *contract_hash
-                    && a.base_oid == *candidate_oid,
+                i.state == "awaiting_review" && same_candidate && i.contract_hash == *contract_hash,
                 "review candidate or contract is stale"
             );
+            let candidate_ref = candidate_reference(&i)?.context("review candidate missing")?;
             let author: Attempt = document(tx, "attempts", &i.attempt)?;
             ensure!(
                 a.id != author.id
@@ -349,13 +403,13 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
                 findings.len() <= 100 && findings.iter().all(|s| s.len() <= 8192),
                 "review findings too large"
             );
-            let receipt = json!({"id":attempt,"integration":integration_id,"candidate":candidate_oid,"contract_hash":contract_hash,"checks_digest":i.checks_digest,"approve":approve,"criteria":criteria,"findings":findings,"reviewer":p.id});
+            let receipt = json!({"id":attempt,"integration":integration_id,"candidate":candidate_ref,"contract_hash":contract_hash,"checks_digest":i.checks_digest,"approve":approve,"criteria":criteria,"findings":findings,"reviewer":p.id});
             tx.execute(
                 "INSERT INTO reviews VALUES (?1,?2,?3,?4,?5,?6)",
                 params![
                     attempt,
                     t.id,
-                    candidate_oid,
+                    candidate_ref,
                     p.id,
                     contract_hash,
                     serde_json::to_string(&receipt)?
@@ -390,7 +444,7 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
             let (r, _) = current(tx, &i)?;
             active_run(&r)?;
             ensure!(
-                i.state == "verified" && r.integration_oid == i.base_oid,
+                i.state == "verified" && (i.artifact.is_some() || r.integration_oid == i.base_oid),
                 "candidate must be verified against the current integration base"
             );
             gates(tx, &i)?;

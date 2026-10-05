@@ -1824,5 +1824,7 @@ mod delivery_tests;
 #[path = "reception_tests.rs"]
 mod reception_tests;
 
+#[path = "artifact_pipeline_tests.rs"]
+mod artifact_pipeline_tests;
 #[path = "artifacts_tests.rs"]
 mod artifacts_tests;

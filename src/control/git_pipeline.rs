@@ -521,7 +521,7 @@ fn checks(
     store: &mut Store,
     config: &Config,
     i: &mut Integration,
-    repo: &Path,
+    repo: Option<&Path>,
     runner: &dyn Runner,
 ) -> Result<()> {
     let (r, t) = current(&store.connection, i)?;
@@ -529,7 +529,17 @@ fn checks(
         r.state == "active" && now() < r.deadline,
         "run not active for checks"
     );
-    let path = checkout(store, i, repo, runner)?;
+    let path = if i.artifact.is_some() {
+        super::artifact_inputs::controller(store, i)?
+    } else {
+        checkout(
+            store,
+            i,
+            repo.context("code verifier repository missing")?,
+            runner,
+        )?
+    };
+    let candidate = super::verification::candidate_reference(i)?.context("candidate missing")?;
     let mut receipts = Vec::<Value>::new();
     for name in &t.contract.checks {
         let fresh: Run = document(&store.connection, "runs", &i.run)?;
@@ -559,7 +569,7 @@ fn checks(
         }
         let argv = &r.policy.checks[name];
         let (program, program_hash) = executable(&argv[0], &path)?;
-        let mut receipt = json!({"id":id(),"integration":i.id,"name":name,"candidate":i.candidate_oid,"tree":i.tree_oid,"policy_hash":i.policy_hash,"argv":argv,"cwd":path,"program":program,"program_hash":program_hash,"environment_hash":environment_hash()?,"timeout_secs":config.check_timeout_secs,"started_at":now()});
+        let mut receipt = json!({"id":id(),"integration":i.id,"name":name,"candidate":candidate,"tree":i.tree_oid,"policy_hash":i.policy_hash,"argv":argv,"cwd":path,"program":program,"program_hash":program_hash,"environment_hash":environment_hash()?,"timeout_secs":config.check_timeout_secs,"started_at":now()});
         store.connection.execute(
             "INSERT INTO check_runs VALUES (?1,?2,?3,'started',?4)",
             params![
@@ -583,7 +593,16 @@ fn checks(
         let output = runner.run(&cmd)?;
         receipt["output"] = check_evidence(&output, path.parent().unwrap(), name)?;
         receipt["finished_at"] = json!(now());
-        let clean = verify_checkout(runner, repo, &path, i.candidate_oid.as_ref().unwrap());
+        let clean = if let Some(artifact) = &i.artifact {
+            super::artifact_inputs::verify(&path, artifact)
+        } else {
+            verify_checkout(
+                runner,
+                repo.context("code verifier repository missing")?,
+                &path,
+                i.candidate_oid.as_ref().context("code candidate missing")?,
+            )
+        };
         let passed = output.success() && clean.is_ok();
         if let Err(error) = clean {
             receipt["checkout_error"] = json!(error.to_string());
@@ -715,17 +734,88 @@ pub fn advance(
             "run not active for verification"
         );
     }
+    if i.artifact.is_some() {
+        match i.state.as_str() {
+            "preparing" => {
+                let source: Attempt = document(&store.connection, "attempts", &i.attempt)?;
+                ensure!(
+                    i.artifact.as_ref()
+                        == Some(&super::artifacts::candidate(&store.connection, &source)?),
+                    "artifact candidate changed"
+                );
+                super::artifact_inputs::controller(store, &i)?;
+                let tx = store
+                    .connection
+                    .transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let (fresh, _) = current(&tx, &i)?;
+                super::store::active_run(&fresh)?;
+                i.state = "checking".into();
+                i.revision += 1;
+                save(&tx, &i)?;
+                journal(&tx, &i, "artifact_candidate_prepared")?;
+                tx.commit()?;
+                checks(store, config, &mut i, None, runner)?;
+            }
+            "checking" => checks(store, config, &mut i, None, runner)?,
+            "applying" => apply_artifact(store, &mut i)?,
+            _ => (),
+        }
+        return Ok(i);
+    }
     let (repo, reference) = binding(store, &r, config, runner)?;
     match i.state.as_str() {
         "preparing" => {
             prepare(store, config, &mut i, &repo, &reference, runner)?;
             if i.state == "checking" {
-                checks(store, config, &mut i, &repo, runner)?;
+                checks(store, config, &mut i, Some(&repo), runner)?;
             }
         }
-        "checking" => checks(store, config, &mut i, &repo, runner)?,
+        "checking" => checks(store, config, &mut i, Some(&repo), runner)?,
         "applying" => apply(store, &mut i, &repo, &reference, runner)?,
         _ => (),
     }
     Ok(i)
+}
+
+fn apply_artifact(store: &mut Store, i: &mut Integration) -> Result<()> {
+    let tx = store
+        .connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let (mut run, mut task) = current(&tx, i)?;
+    if ["cancelling", "cancelled"].contains(&run.state.as_str()) {
+        i.state = "superseded".into();
+        i.revision += 1;
+        save(&tx, i)?;
+        journal(&tx, i, "artifact_acceptance_cancelled")?;
+        tx.execute("UPDATE outbox SET state='cancelled' WHERE target='controller' AND kind='integrate_candidate' AND json_extract(payload,'$.id')=?1",[&i.id])?;
+        tx.commit()?;
+        return Ok(());
+    }
+    super::store::active_run(&run)?;
+    gates(&tx, i)?;
+    let artifact = i.artifact.as_ref().context("artifact candidate missing")?;
+    let (path, state): (String, String) = tx.query_row(
+        "SELECT path,state FROM verification_worktrees WHERE integration=?1",
+        [&i.id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let expected = store.dir.join("verification").join(&i.id).join("inputs");
+    ensure!(
+        Path::new(&path) == expected && state == "ready",
+        "artifact inputs not ready or path changed"
+    );
+    super::artifact_inputs::verify(&expected, artifact)?;
+    super::store::active_run(&run)?;
+    task.state = "completed".into();
+    task.revision += 1;
+    save_task(&tx, &task)?;
+    run.revision += 1;
+    save_run(&tx, &run)?; // integration_oid deliberately remains the actual Git base.
+    i.state = "applied".into();
+    i.revision += 1;
+    save(&tx, i)?;
+    journal(&tx, i, "integration_applied")?;
+    tx.execute("UPDATE outbox SET state='applied' WHERE target='controller' AND kind='integrate_candidate' AND json_extract(payload,'$.id')=?1",[&i.id])?;
+    tx.commit()?;
+    Ok(())
 }

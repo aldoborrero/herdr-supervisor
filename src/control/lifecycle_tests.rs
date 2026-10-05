@@ -368,7 +368,7 @@ fn node_v2_migration_preserves_pending_events_and_does_not_invent_process_receip
     let old = serde_json::to_value(x.node.pending().unwrap()).unwrap();
     x.node
         .connection
-        .execute_batch("ALTER TABLE events DROP COLUMN tries; ALTER TABLE events DROP COLUMN available_at; ALTER TABLE events DROP COLUMN last_error; DROP TABLE memory_notices; DROP TABLE worker_memory; DROP TABLE runtime_processes; DROP TABLE reception_failures; PRAGMA user_version=2;")
+        .execute_batch("ALTER TABLE events DROP COLUMN tries; ALTER TABLE events DROP COLUMN available_at; ALTER TABLE events DROP COLUMN last_error; DROP TABLE memory_notices; DROP TABLE worker_memory; DROP TABLE runtime_processes; DROP TABLE artifact_staging; DROP TABLE reception_failures; PRAGMA user_version=2;")
         .unwrap();
     x.node = node_store(&x.f);
     assert_eq!(

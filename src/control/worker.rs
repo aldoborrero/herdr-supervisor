@@ -151,7 +151,9 @@ pub fn handle(store: &mut NodeStore, identity: &Identity, request: WorkerRequest
         } => {
             identifier(&operation_id)?;
             let (attempt, epoch) = match command.as_ref() {
-                Mutation::PutArtifact { attempt, epoch, .. }
+                Mutation::FetchArtifactChunk { attempt, epoch, .. }
+                | Mutation::SubmitArtifactReview { attempt, epoch, .. }
+                | Mutation::PutArtifact { attempt, epoch, .. }
                 | Mutation::WorkerReady { attempt, epoch, .. }
                 | Mutation::SubmitResult { attempt, epoch, .. }
                 | Mutation::SubmitReview { attempt, epoch, .. } => (attempt, Some(*epoch)),
@@ -166,6 +168,26 @@ pub fn handle(store: &mut NodeStore, identity: &Identity, request: WorkerRequest
                 }
             };
             let (order, _) = authorized(store, &token, attempt, epoch)?;
+            if let Mutation::SubmitArtifactReview {
+                integration,
+                manifest_hash,
+                ..
+            } = command.as_ref()
+            {
+                let review = order
+                    .review
+                    .as_ref()
+                    .context("artifact review assignment missing")?;
+                ensure!(
+                    review.integration == *integration
+                        && review
+                            .artifact
+                            .as_ref()
+                            .is_some_and(|a| a.manifest_hash == *manifest_hash),
+                    "artifact review candidate mismatch"
+                );
+                super::artifact_review::verify_ready(store, &order)?;
+            }
             if let Mutation::PutArtifact { chunk, .. } = command.as_ref() {
                 ensure!(
                     order.attempt.role == "worker",

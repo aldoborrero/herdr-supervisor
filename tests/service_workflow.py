@@ -79,10 +79,11 @@ class JsonServer(socketserver.UnixStreamServer):
 
 
 class Fixture:
-    def __init__(self, root, binary, nats):
+    def __init__(self, root, binary, nats, artifact=False):
         self.root = root
         self.binary = str(binary)
         self.nats = str(nats)
+        self.artifact_mode = artifact
         self.controller = root / "controller"
         self.node = root / "node"
         self.repo = root / "repo"
@@ -348,6 +349,14 @@ class Fixture:
             version = int(request["operationId"].rsplit("-", 1)[1])
             self.memory_deliveries[(attempt, version)] = request
         else:
+            if self.artifact_mode and self.attempt(attempt)["role"] == "reviewer":
+                inputs = (
+                    Path(self.spaces[attempt]["cwd"])
+                    / f".herdr-supervisor-artifacts-{attempt}"
+                )
+                assert (inputs / "evidence.bin").read_bytes() == bytes(range(256)) * 65
+                assert str(inputs) in request["body"]
+                assert "submit_artifact_review" in request["body"]
             self.deliveries[attempt] = request
         assert self.bootstrap_gate.wait(timeout=10), "test did not release bootstrap"
         return {
@@ -506,7 +515,13 @@ class Fixture:
                 "require_review": True,
                 "profiles": {"auto": {"runtime": "codex", "argv": [], "limit": 2}},
                 "checks": {
-                    "test": ["sh", "-c", 'test "$(cat feature.txt)" = implemented']
+                    "test": [
+                        "sh",
+                        "-c",
+                        'test "$(wc -c < evidence.bin)" -eq 16640'
+                        if self.artifact_mode
+                        else 'test "$(cat feature.txt)" = implemented',
+                    ]
                 },
             },
         )
@@ -571,7 +586,7 @@ class Fixture:
                 "title": "Implement fixture",
                 "instructions": "Write feature.txt",
                 "criteria": ["Feature is implemented"],
-                "kind": "code",
+                "kind": "artifact" if self.artifact_mode else "code",
                 "checks": ["test"],
                 "memory_topics": [],
             },
@@ -695,16 +710,20 @@ class Fixture:
         )
         assert not verified["task_accepted"]
         checkout = Path(self.spaces[author]["cwd"])
-        (checkout / "feature.txt").write_text("implemented\n")
-        self.git(checkout, "add", "feature.txt")
-        self.git(checkout, "commit", "-qm", "implementation")
-        commit = self.git(checkout, "rev-parse", "HEAD")
+        commit = None
+        if not self.artifact_mode:
+            (checkout / "feature.txt").write_text("implemented\n")
+            self.git(checkout, "add", "feature.txt")
+            self.git(checkout, "commit", "-qm", "implementation")
+            commit = self.git(checkout, "rev-parse", "HEAD")
         self.report(
             author,
             "submit_result",
             contract_hash=context["attempt"]["contract_hash"],
             commit=commit,
-            artifacts={},
+            artifacts={"evidence.bin": uploaded["sha256"]}
+            if self.artifact_mode
+            else {},
             summary="Fixture implementation",
         )
         revision = self.snapshot()["tasks"][0]["revision"]
@@ -757,23 +776,33 @@ class Fixture:
         assert latest_review["memory"] == review_context["memory"]
         assert latest_review["current_memory"]["version"] == 3
         assert reviewer != author
-        assert review_context["review"]["candidate_oid"] == checked["candidate_oid"]
+        if self.artifact_mode:
+            assert checked["candidate_oid"] is None
+            assert review_context["review"]["artifact"] == checked["artifact"]
+            review_identity = {"manifest_hash": checked["artifact"]["manifest_hash"]}
+            review_base = checked["base_oid"]
+        else:
+            assert review_context["review"]["candidate_oid"] == checked["candidate_oid"]
+            review_identity = {"candidate_oid": checked["candidate_oid"]}
+            review_base = checked["candidate_oid"]
         assert (
             self.git(Path(self.spaces[reviewer]["cwd"]), "rev-parse", "HEAD")
-            == checked["candidate_oid"]
+            == review_base
         )
         self.report(
             reviewer,
-            "submit_review",
+            "submit_artifact_review" if self.artifact_mode else "submit_review",
             integration=integration["id"],
-            candidate_oid=checked["candidate_oid"],
+            **review_identity,
             contract_hash=checked["contract_hash"],
             approve=True,
             criteria=[
                 {
                     "criterion": 0,
                     "passed": True,
-                    "evidence": "Read feature.txt in exact candidate",
+                    "evidence": "Read the exact manifest and evidence.bin"
+                    if self.artifact_mode
+                    else "Read feature.txt in exact candidate",
                 }
             ],
             findings=[],
@@ -786,14 +815,32 @@ class Fixture:
             integration=integration["id"],
             expected_revision=verified["revision"],
         )
-        applied = wait_for("owned-ref CAS", lambda: integration_state("applied"))
-        assert (
-            self.git(self.repo, "rev-parse", f"refs/heads/hs/integration/{self.run}")
-            == applied["candidate_oid"]
+        applied = wait_for(
+            "verified candidate acceptance", lambda: integration_state("applied")
         )
-        assert self.git(self.repo, "rev-parse", "HEAD") != applied["candidate_oid"], (
-            "user branch was changed"
-        )
+        if self.artifact_mode:
+            assert self.snapshot()["tasks"][0]["state"] == "completed"
+            assert self.snapshot()["run"]["integration_oid"] == checked["base_oid"]
+            assert self.git(self.repo, "rev-parse", "HEAD") == checked["base_oid"]
+            assert (
+                self.git(
+                    self.repo,
+                    "for-each-ref",
+                    "--format=%(refname)",
+                    f"refs/heads/hs/integration/{self.run}",
+                )
+                == ""
+            )
+        else:
+            assert (
+                self.git(
+                    self.repo, "rev-parse", f"refs/heads/hs/integration/{self.run}"
+                )
+                == applied["candidate_oid"]
+            )
+            assert (
+                self.git(self.repo, "rev-parse", "HEAD") != applied["candidate_oid"]
+            ), "user branch was changed"
         for attempt in (author, reviewer):
             self.apply(
                 "stop_attempt",
@@ -836,7 +883,7 @@ class Fixture:
         assert not (self.node / "worker.sock").exists()
         assert not (self.controller / "control.sock").exists()
         print(
-            "PASS: continuous services, offline dispatch, node restart, native binding, result, checks, review, CAS, stop, completion"
+            f"PASS: continuous services, offline dispatch, node restart, native binding, result, checks, review, {'artifact acceptance' if self.artifact_mode else 'Git CAS'}, stop, completion"
         )
 
 
@@ -866,11 +913,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True, type=Path)
     parser.add_argument("--nats-server", required=True, type=Path)
+    parser.add_argument("--artifact", action="store_true")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="hs-workflow-") as directory:
         nats = shutil.which(str(args.nats_server))
         assert nats, "NATS server is required; this test never silently skips"
-        fixture = Fixture(Path(directory), args.binary.resolve(), Path(nats).resolve())
+        fixture = Fixture(
+            Path(directory), args.binary.resolve(), Path(nats).resolve(), args.artifact
+        )
         try:
             fixture.setup()
             fixture.workflow()

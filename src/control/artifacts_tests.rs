@@ -5,7 +5,7 @@ use crate::control::{
     worker::{self, WorkerRequest},
 };
 
-fn fixture() -> (Fixture, Attempt, String, NodeStore) {
+pub(super) fn fixture() -> (Fixture, Attempt, String, NodeStore) {
     let mut f = Fixture::new();
     let r: Run = document(&f.store.connection, "runs", &f.run).unwrap();
     let mut c = contract();
@@ -38,7 +38,7 @@ fn fixture() -> (Fixture, Attempt, String, NodeStore) {
         .unwrap();
     (f, a, token, node)
 }
-fn chunks(name: &str, bytes: &[u8]) -> Vec<Chunk> {
+pub(super) fn chunks(name: &str, bytes: &[u8]) -> Vec<Chunk> {
     let sha256 = digest(bytes);
     (0..bytes.len().div_ceil(CHUNK_BYTES).max(1))
         .map(|index| {
@@ -53,7 +53,7 @@ fn chunks(name: &str, bytes: &[u8]) -> Vec<Chunk> {
         })
         .collect()
 }
-fn put(token: &str, a: &Attempt, chunk: Chunk) -> Request {
+pub(super) fn put(token: &str, a: &Attempt, chunk: Chunk) -> Request {
     request(
         token,
         Mutation::PutArtifact {
@@ -63,7 +63,7 @@ fn put(token: &str, a: &Attempt, chunk: Chunk) -> Request {
         },
     )
 }
-fn result(token: &str, a: &Attempt, artifacts: BTreeMap<String, String>) -> Request {
+pub(super) fn result(token: &str, a: &Attempt, artifacts: BTreeMap<String, String>) -> Request {
     request(
         token,
         Mutation::SubmitResult {
