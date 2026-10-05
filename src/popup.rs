@@ -3046,7 +3046,18 @@ fn focus(ctx: &Ctx, socket: &str, machine: &str, pane: &str) {
 /// The popup's loop, on the terminal Herdr gives the popup (or any terminal,
 /// through `popup [slug]`).
 pub fn run(ctx: &Ctx, scope: Option<String>, workspace: String) -> Result<()> {
-    let mut popup = Popup::new(ctx, scope, workspace);
+    run_popup(Popup::new(ctx, scope, workspace))
+}
+
+/// The plugin's New action enters the same form as N in the Projects popup.
+pub fn run_setup(ctx: &Ctx, workspace: String) -> Result<()> {
+    let mut popup = Popup::new(ctx, None, workspace);
+    popup.mode = Mode::Setup(Box::new(crate::managed_setup_form::Form::new()));
+    run_popup(popup)
+}
+
+fn run_popup(mut popup: Popup<'_>) -> Result<()> {
+    let ctx = popup.ctx;
     let mut out = std::io::stdout();
     terminal::enable_raw_mode()?;
     execute!(out, terminal::EnterAlternateScreen, cursor::Hide)?;

@@ -576,3 +576,18 @@ fn ticker_start_without_projects_creates_nothing() {
     assert!(!home.path().join(".herdr-supervisor").exists());
     assert!(!home.path().join(".config").exists());
 }
+
+#[test]
+fn plugin_new_pane_opens_managed_form_and_cancel_creates_no_project() {
+    let output = Command::new(std::env::var_os("PYTHON").unwrap_or_else(|| "python3".into()))
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/popup_setup.py"))
+        .arg(env!("CARGO_BIN_EXE_herdr-supervisor"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

@@ -14,7 +14,7 @@ command = ["target/release/herdr-supervisor", "startup"]
 
 [[actions]]
 id = "new"
-title = "Projects: new project"
+title = "Supervisor: new managed project"
 contexts = ["workspace"]
 command = ["target/release/herdr-supervisor", "action", "new"]
 
@@ -82,7 +82,7 @@ command = ["target/release/herdr-supervisor", "pane", "projects"]
 
 [[panes]]
 id = "new"
-title = "New project"
+title = "New supervised project"
 placement = "popup"
 command = ["target/release/herdr-supervisor", "pane", "new"]
 

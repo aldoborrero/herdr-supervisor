@@ -281,17 +281,7 @@ pub fn run_pane(ctx: &Ctx, id: &str) -> Result<()> {
                 true,
             );
         }
-        "new" => (|| {
-            println!("New project\n");
-            let name = ask("Name", "")?;
-            if name.is_empty() {
-                bail!("no name given");
-            }
-            let goal = ask("Goal (one line, optional)", "")?;
-            let project = project::create(&ctx.root, &name, &goal, Vec::new())?;
-            println!("created `{}` at {}", project.slug, project.dir().display());
-            run_on_slug(ctx, "open", &project.slug)
-        })(),
+        "new" => return crate::popup::run_setup(ctx, handoff.workspace_id.clone()),
         "pick" => (|| {
             println!("Which project should `{}` act on?\n", handoff.command);
             let slug = overview::pick(ctx)?;

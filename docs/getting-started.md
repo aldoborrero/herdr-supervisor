@@ -20,7 +20,7 @@ Follow [operations](operations.md) for enrollment, broker permissions and runtim
 herdr-supervisor --root PROJECTS_DIR popup
 ```
 
-Press **N** in the project list or picker (outside its search field). Enter the name, objective, controller directory, repository identity and full base commit. An empty credential field uses `admin.token` in the controller directory. Repository identity is the absolute logical path configured in the controller and node maps; the base must be a real commit available to those repositories.
+The plugin menu action **Supervisor: new managed project** opens this form directly. From an existing popup, press **N** in the project list or picker (outside its search field). Enter the name, objective, controller directory, repository identity and full base commit. An empty credential field uses `admin.token` in the controller directory. Repository identity is the absolute logical path configured in the controller and node maps; the base must be a real commit available to those repositories.
 
 Use Tab/Up/Down to navigate and Left/Right to choose Codex, Claude or Pi. The form creates a single profile named `auto`, reserves one agent slot for independent review and requires review. Set the active-agent limit, task-attempt limit and run duration. An optional model becomes a literal `--model` argument. Enter a check as JSON argv, for example `["cargo", "test", "--locked"]`; it is named `test`. `[]` configures no check. Shell expansion is not applied to this argv.
 
