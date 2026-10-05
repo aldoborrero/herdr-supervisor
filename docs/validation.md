@@ -4,9 +4,56 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
+### Scoped questions and one-time resolutions
+
+Controller schema 15 adds `task_questions`; node schema 12 adds the bounded local
+projection and its native hint outbox. Worker/reviewer `ask_question` and current
+owner/supervisor `answer_question` share ordinary authenticated operation replay,
+revision, audit and transaction rules. A resolution commits with its NATS intent.
+It preserves attempt/epoch/contract identity, and does not change the task or
+grant integration permission. The coordinator receives journal-derived notices;
+its paginated `questions` collection also preserves open questions after a
+coordinator replacement. The worker receives an exact-session mailer hint and
+reads the replicated answer in its context. The managed Inbox exposes the same
+records as a read-only list, with replies through the API/CLI/MCP.
+
+Four initial regressions pass (0.46 s) and strict Clippy passes (18.36 s), in
+`.direnv/questions-focused.log`. After adding the native delivery regression and
+the actual disconnected-node workflow, the full suite passes 636 unit tests
+(58.14 s), 21 CLI tests (28.59 s) and strict Clippy (18.76 s), in
+`.direnv/questions-full.log`. Both continuous workflows use real NATS, SQLite,
+Git, processes and IPC; their Herdr/mailer/model interactions remain fixtures.
+`nix fmt` passes, formatting only the Python workflow (`.direnv/questions-fmt.log`).
+
+Two additional tests cover latest-schema migration and MCP over actual private
+sockets. The first run passed six of seven question tests; the MCP scenario
+completed its assertions but dropped its temporary root before the owned servers
+removed their sockets (`.direnv/questions-final-focused.log`). The fixture now
+retains that root through graceful shutdown. All seven focused tests now pass
+(0.80 s), followed by strict Clippy (17.91 s), in
+`.direnv/questions-final-corrected.log`. No production assertion or authorization
+check was relaxed. Final package validation remains pending.
+
+| Regression | Evidence boundary |
+| --- | --- |
+| `questions_scoped_roundtrip_reorders_replays_and_keeps_contract_immutable` | Signed worker request, idempotent controller receipt/resolution, reordered delivery, restart, conflicting content refusal, unchanged task |
+| `questions_authenticate_workers_supervisor_replacement_and_cancelled_attempts` | Role and attempt boundaries, retired supervisor refusal, cancellation fencing and no stale native hint |
+| `questions_resolution_is_transactional_and_only_one_concurrent_answer_wins` | Failed outbox rolls back the resolution; eight competing answers produce one resolution |
+| `questions_bound_text_count_and_preserve_foreign_run_privacy` | UTF-8 byte and per-attempt limits; question collection authorization |
+| `questions_native_notice_replays_frozen_identity_after_bad_or_lost_receipt_and_retires_on_cancel` | Real Unix IPC with protocol fixture: capability refusal, wrong receipt, lost SQL receipt, restart, sender change, identical retry bytes and cancellation |
+| `questions_migration_preserves_old_jobs_and_failure_rolls_back_partial_schema` | Existing controller/node rows retained; collision during node migration rolls back prior DDL and keeps schema 11 |
+| `questions_real_mcp_ipc_routes_notices_and_exposes_managed_inbox` | Real scoped worker/controller MCP and sockets, one coordinator notice, shared page projection and answer context without exposed credentials |
+| Both continuous CLI workflows | Ask through worker API, stop the node relay, answer while disconnected, restart, exact native recipient and unchanged contract |
+
+The hint uses mailer's idempotent send operation and recipient preconditions; it
+does not repurpose mailer's ask/reply `correlation` field. Supervisor conversation
+state remains in supervisor SQLite. Broker receipt, native submission and model
+consumption remain distinct; authenticated runtime/remote-host acceptance is
+still open.
+
 ### Current audit findings beyond the passing suite
 
-The requirement audit must inspect the proposed operations as well as the fourteen broad deliverables. At `1eeaa4e`, the scoped task-question contract in `supervisor-design.md` (tools and mailer sections) is **not implemented**: `model::Mutation` has no question/answer operation, `worker::WorkerRequest` has no question projection, and worker context contains assignment, contract, memory and review only. `runtime.rs` and `coordinator.rs` send native bootstrap/notices, but do not implement this missing conversation workflow. Existing legacy Projects inbox behavior and mailer's standalone ask/reply commands do not prove scoped managed-task questions. This requires durable question/resolution state, authorized API/CLI/MCP access, native hints and replay/epoch/replacement tests before acceptance can close.
+The requirement audit must inspect the proposed operations as well as the fourteen broad deliverables. At `1eeaa4e`, the scoped task-question contract in `supervisor-design.md` (tools and mailer sections) was absent: assignment notices and standalone mailer ask/reply did not provide the managed conversation workflow. The implementation and evidence for that finding are now recorded above; its final package gate remains pending.
 
 The persistence matrix requires disk-full behavior. Existing `RAISE(ABORT,'disk full')` tests establish statement-error rollback, not the SQLite pager's `SQLITE_FULL` behavior. The new isolated `storage_fault_tests.rs` test bounds a temporary database with `max_page_count` and attempts a larger allocation from effect/audit insertion triggers; it checks the real error code, automatic transaction rollback, complete application-row equality, restart and idempotent retry. The real JetStream persistence test uses the same pager fault on job insertion and checks that the broker message remains unacknowledged. Validation of these additions is tracked below; no host filesystem is filled.
 
@@ -20,7 +67,7 @@ Conservative uncertainty is an intended contract: a missing exit or ambiguous ef
 
 Node schema 11 preserves existing staging records while adding the `retired` state and exact local decisions. `cleanup-artifact-review` requires a controller-applied stop, native-exit or no-launch evidence, the current attempt epoch, original Git/Herdr binding and explicit process/receipt-retention attestations. It reassembles application-accepted cached chunks and checks complete content hashes before removing only the assigned staging directory. Copy retirement and checkout retirement share the execution lease; an unfinished staging receipt blocks checkout removal. The original controller bytes, cached chunk responses and all other worktree files remain intact.
 
-Five focused tests pass (1.62 s), followed by strict all-target Clippy (39.06 s), in `.direnv/reviewer-retirement-focused.log`. The first full run passed 627/630 unit tests; three event-recovery status tests exposed a stale schema-10 guard after the schema-11 migration (`.direnv/reviewer-retirement-full.log`). The guard now requires schema 11, consistently with node startup and local inspection. The corrected full suite passes 630 unit tests (72.02 s) and 21 CLI tests (31.60 s), with four test threads, in `.direnv/reviewer-retirement-final.log`. This includes the checkout-ordering guard, event-recovery regressions, actual CLI test and both continuous workflows. `nix fmt` passes, formatting only the Python workflow (`.direnv/reviewer-retirement-fmt.log`). Strict all-target Clippy also passes (40.31 s). The package gate for this source remains pending.
+Five focused tests pass (1.62 s), followed by strict all-target Clippy (39.06 s), in `.direnv/reviewer-retirement-focused.log`. The first full run passed 627/630 unit tests; three event-recovery status tests exposed a stale schema-10 guard after the schema-11 migration (`.direnv/reviewer-retirement-full.log`). The guard now requires schema 11, consistently with node startup and local inspection. The corrected full suite passes 630 unit tests (72.02 s) and 21 CLI tests (31.60 s), with four test threads, in `.direnv/reviewer-retirement-final.log`. This includes the checkout-ordering guard, event-recovery regressions, actual CLI test and both continuous workflows. `nix fmt` passes, formatting only the Python workflow (`.direnv/reviewer-retirement-fmt.log`). Strict all-target Clippy also passes (40.31 s). Commit `1eeaa4ebd7d44251673b1e4ca804b1f610cd81c8` passes the x86_64-linux Nix build/check: 630 unit tests (178.40 s), 21 CLI tests (53.84 s). Output: `/nix/store/5mybf0n072ydckr63jq86c2rhqv41z2x-herdr-supervisor-0.1.0`; logs: `.direnv/reviewer-retirement-nix-build.log` and `.direnv/reviewer-retirement-nix-check.log`.
 
 | Evidence | Boundary exercised |
 | --- | --- |
@@ -38,7 +85,7 @@ Git, SQLite, process wrappers, NATS and CLI commands in the continuous fixture a
 
 Controller schema 14 adds owner-local `cleanup-artifact-inputs`. It binds a terminal integration/revision/manifest, stopped run effects, complete authoritative SQLite content and explicit process/source-retention attestations before removing verifier copies. The ledger stores directory identity; a private operation marker precedes the removing phase. Remaining flat files are hash-checked before deletion. No recursive deletion or source pruning occurs. Results, source chunks, checks and reviews remain intact; the retired verifier resource is not recreated by a terminal execution request.
 
-The first focused run passed five of six unit cases (`.direnv/artifact-retirement-focused.log`, 1.27 s). Its last assertion incorrectly expected verification to run after the run was completed. The corrected assertion requires rejection, unchanged applied integration and no recreated input directory. No production lifecycle check was relaxed. The full source suite passes all 625 unit tests (68.44 s), 20 CLI tests (28.99 s) and strict all-target Clippy (38.48 s), with four test threads, in `.direnv/artifact-retirement-full.log`. Both continuous workflows pass, including the new actual owner CLI path with retained SQLite bytes. `nix fmt` passes, formatting only the Python workflow (`.direnv/artifact-retirement-fmt.log`). Full package validation remains pending.
+The first focused run passed five of six unit cases (`.direnv/artifact-retirement-focused.log`, 1.27 s). Its last assertion incorrectly expected verification to run after the run was completed. The corrected assertion requires rejection, unchanged applied integration and no recreated input directory. No production lifecycle check was relaxed. The full source suite passes all 625 unit tests (68.44 s), 20 CLI tests (28.99 s) and strict all-target Clippy (38.48 s), with four test threads, in `.direnv/artifact-retirement-full.log`. Both continuous workflows pass, including the new actual owner CLI path with retained SQLite bytes. `nix fmt` passes, formatting only the Python workflow (`.direnv/artifact-retirement-fmt.log`). Commit `ebeaa0767bf512ac4b3886cd23ae889afa588527` passes the x86_64-linux Nix build/check: 625 unit tests (194.17 s), 20 CLI tests (52.03 s). Output: `/nix/store/9fxrnd8bbdx4mh4484kchl28whpbnbr9-herdr-supervisor-0.1.0`; logs: `.direnv/artifact-retirement-nix-build.log` and `.direnv/artifact-retirement-nix-check.log`.
 
 | Evidence | Boundary exercised |
 | --- | --- |

@@ -398,7 +398,7 @@ fn coordinator_retirement_migration_preserves_launch_and_lock_fences_effects() {
     let original = serde_json::to_string(&plan(&x.f, &x.request.launch)).unwrap();
     x.f.store
         .connection
-        .execute_batch("DROP TABLE artifact_retirements; DROP TABLE coordinator_retirements; PRAGMA user_version=12;")
+        .execute_batch("DROP TABLE task_questions; DROP TABLE artifact_retirements; DROP TABLE coordinator_retirements; PRAGMA user_version=12;")
         .unwrap();
     x.f.store = Store::open(&x.f.store.dir).unwrap();
     assert_eq!(

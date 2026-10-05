@@ -51,7 +51,14 @@ fn advance_jobs(
             json!({"unresolved":error.to_string()})
         }
     };
-    Ok(json!({"attempts":results,"lifecycle":lifecycle,"memory":memory}))
+    let questions = match super::question_delivery::deliver(&mut store, runtime) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("node question notices: {error}");
+            json!({"unresolved":error.to_string()})
+        }
+    };
+    Ok(json!({"attempts":results,"lifecycle":lifecycle,"memory":memory,"questions":questions}))
 }
 
 pub async fn run(

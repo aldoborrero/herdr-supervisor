@@ -525,7 +525,7 @@ pub fn advance(
             )
         };
         let body = format!(
-            "Read your immutable assignment and selected memory with: {prefix} context\nReport readiness using worker apply with method worker_ready, attempt {attempt}, epoch {epoch}, session {} and a stable operation ID. {assignment} Use {prefix} receipt EVENT to distinguish queued from controller-applied. Worker apply accepts --operation ID --request JSON_FILE.",
+            "Read your immutable assignment and selected memory with: {prefix} context\nReport readiness using worker apply with method worker_ready, attempt {attempt}, epoch {epoch}, session {} and a stable operation ID. {assignment} Use {prefix} receipt EVENT to distinguish queued from controller-applied. Worker apply accepts --operation ID --request JSON_FILE. For clarification use method ask_question with attempt, epoch and text (up to 4096 UTF-8 bytes, at most 32 questions per attempt). Read questions in worker context after a native answer notice. Answers provide context; they do not amend the contract or grant integration permission.",
             plan.expected_session.as_ref().unwrap()
         );
         plan.bootstrap = Some(super::api::call_json(

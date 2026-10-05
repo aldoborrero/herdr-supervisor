@@ -29,6 +29,8 @@ mod node_lifecycle;
 pub mod pagination;
 pub mod process;
 mod process_recovery;
+mod question_delivery;
+pub mod questions;
 mod reception;
 mod recovery;
 mod registration_recovery;

@@ -214,6 +214,7 @@ class Fixture:
         self.registrations = {}
         self.deliveries = {}
         self.memory_deliveries = {}
+        self.question_deliveries = {}
         self.creates = []
         self.launches = []
         self.wrappers = {}
@@ -492,7 +493,9 @@ class Fixture:
         resource = self.attempt(attempt)["resource"]
         assert resource["session"] == receiver["location"]
         assert resource["mailer_agent"] == receiver["agent"]
-        if request["operationId"].startswith("memory-"):
+        if request["operationId"].startswith("question-"):
+            self.question_deliveries[attempt] = request
+        elif request["operationId"].startswith("memory-"):
             version = int(request["operationId"].rsplit("-", 1)[1])
             self.memory_deliveries[(attempt, version)] = request
         else:
@@ -724,6 +727,36 @@ class Fixture:
         # The native wrapper belongs to the pane and survives the relay restart.
         self.start_node()
         context = self.ready(author)
+        asked = self.report(
+            author, "ask_question", text="Should I preserve the existing contract?"
+        )
+        question = asked["result"]["question"]
+        assert question["answer"] is None
+        self.stop(self.node_process)
+        answer = self.apply(
+            "answer_question",
+            question=question["id"],
+            expected_revision=1,
+            answer="Yes. Keep the original contract and its acceptance criteria.",
+        )
+        assert author not in self.question_deliveries
+        self.start_node()
+        wait_for(
+            "native question answer after disconnected node restart",
+            lambda: author in self.question_deliveries,
+        )
+        current = self.worker(author, "context", attempt=author, epoch=1)
+        assert current["questions"] == [answer["question"]]
+        assert current["contract"] == context["contract"]
+        assert question["id"] in self.question_deliveries[author]["body"]
+        assert (
+            self.question_deliveries[author]["recipientSession"]
+            == self.deliveries[author]["recipientSession"]
+        )
+        assert (
+            self.question_deliveries[author]["recipientEpoch"]
+            == self.deliveries[author]["recipientEpoch"]
+        )
         wait_for(
             "native status subscription for the exact author pane",
             lambda: self.native_events.has_pane(self.spaces[author]["pane_id"]),

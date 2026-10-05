@@ -35,7 +35,7 @@ pub(super) fn scope(c: &mut Connection, id: &str, epoch: u64) -> Result<Scope> {
 
 pub(super) fn scope_in(c: &Connection, id: &str, epoch: u64) -> Result<Scope> {
     ensure!(
-        c.pragma_query_value(None, "user_version", |r| r.get::<_, u64>(0))? == 11,
+        c.pragma_query_value(None, "user_version", |r| r.get::<_, u64>(0))? == 12,
         "unsupported cleanup inspection schema; run the current node service migration first"
     );
     let result = Scope {

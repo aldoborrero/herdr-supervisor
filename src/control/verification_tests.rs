@@ -1277,7 +1277,7 @@ fn migration_preserves_v2_authority_credentials_and_operation_replays() {
         .query_row("SELECT count(*) FROM journal", [], |r| r.get(0))
         .unwrap();
     // Restore the actual v2 schema, retaining the authoritative rows and signed outbox.
-    f.store.connection.execute_batch("DROP TABLE coordinator_processes; DROP TABLE coordinator_launches; DROP TABLE coordinator_notices; DROP TABLE coordinator_routes; DROP TABLE verification_worktrees; DROP TABLE check_runs; DROP TABLE review_assignments; DROP TABLE repository_bindings; DROP INDEX active_integration; DROP TABLE integration_policies; DROP TABLE attempt_profiles; DROP TABLE artifact_chunks; DROP TABLE artifact_uploads; DROP TABLE reception_failures; DROP TABLE event_recoveries; DROP TABLE registration_recoveries; DROP TABLE artifact_retirements; DROP TABLE coordinator_retirements; DROP TABLE verification_retirements; ALTER TABLE nodes DROP COLUMN draining; ALTER TABLE nodes DROP COLUMN revision; PRAGMA user_version=2;").unwrap();
+    f.store.connection.execute_batch("DROP TABLE coordinator_processes; DROP TABLE coordinator_launches; DROP TABLE coordinator_notices; DROP TABLE coordinator_routes; DROP TABLE verification_worktrees; DROP TABLE check_runs; DROP TABLE review_assignments; DROP TABLE repository_bindings; DROP INDEX active_integration; DROP TABLE integration_policies; DROP TABLE attempt_profiles; DROP TABLE artifact_chunks; DROP TABLE artifact_uploads; DROP TABLE reception_failures; DROP TABLE event_recoveries; DROP TABLE registration_recoveries; DROP TABLE task_questions; DROP TABLE artifact_retirements; DROP TABLE coordinator_retirements; DROP TABLE verification_retirements; ALTER TABLE nodes DROP COLUMN draining; ALTER TABLE nodes DROP COLUMN revision; PRAGMA user_version=2;").unwrap();
     let state = f.store.dir.clone();
     f.store = Store::open(&state).unwrap();
     assert_eq!(f.store.snapshot(&f.supervisor, &f.run).unwrap(), before);
@@ -1522,7 +1522,7 @@ fn run_profiles_updates_preserve_migrated_check_receipts_and_inflight_reviewer_b
     x.f.store
         .connection
         .execute_batch(
-            "DROP TABLE attempt_profiles; DROP TABLE integration_policies; DROP TABLE event_recoveries; DROP TABLE registration_recoveries; DROP TABLE artifact_retirements; DROP TABLE coordinator_retirements; DROP TABLE verification_retirements; ALTER TABLE nodes DROP COLUMN draining; ALTER TABLE nodes DROP COLUMN revision; PRAGMA user_version=7;",
+            "DROP TABLE attempt_profiles; DROP TABLE integration_policies; DROP TABLE event_recoveries; DROP TABLE registration_recoveries; DROP TABLE task_questions; DROP TABLE artifact_retirements; DROP TABLE coordinator_retirements; DROP TABLE verification_retirements; ALTER TABLE nodes DROP COLUMN draining; ALTER TABLE nodes DROP COLUMN revision; PRAGMA user_version=7;",
         )
         .unwrap();
     x.f.store = Store::open(&x.f.store.dir).unwrap();

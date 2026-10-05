@@ -19,6 +19,7 @@ const ENVELOPE_RESERVE: usize = 8192;
 #[serde(rename_all = "snake_case")]
 #[value(rename_all = "snake_case")]
 pub enum Collection {
+    Questions,
     Tasks,
     Attempts,
     Results,
@@ -37,7 +38,8 @@ pub enum Collection {
     CoordinatorLaunches,
 }
 impl Collection {
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
+        Self::Questions,
         Self::Tasks,
         Self::Attempts,
         Self::Results,
@@ -57,6 +59,7 @@ impl Collection {
     ];
     pub fn name(self) -> &'static str {
         match self {
+            Self::Questions => "questions",
             Self::Tasks => "tasks",
             Self::Attempts => "attempts",
             Self::Results => "results",
@@ -80,6 +83,7 @@ impl Collection {
     }
     pub(super) fn source(self) -> String {
         match self {
+            Self::Questions => "SELECT rowid AS key,doc FROM task_questions WHERE run=?1".into(),
             Self::Tasks => "SELECT t.rowid AS key,json_set(t.doc,'$.dependencies',json((SELECT json_group_array(d.predecessor) FROM dependencies d WHERE d.task=t.id))) AS doc FROM tasks t WHERE t.run=?1".into(),
             Self::Attempts => "SELECT a.rowid AS key,json_set(a.doc,'$.profile_snapshot',json(p.profile),'$.cancellation_delivery',json((SELECT json_object('command',o.id,'state',o.state,'expires_at',o.expires_at) FROM outbox o WHERE o.target=a.node AND o.kind='cancel' AND json_extract(o.payload,'$.attempt.id')=a.id AND json_extract(o.payload,'$.attempt.epoch')=a.epoch ORDER BY o.rowid DESC LIMIT 1))) AS doc FROM attempts a LEFT JOIN attempt_profiles p ON p.attempt=a.id WHERE a.run=?1".into(),
             Self::Results => "SELECT r.rowid AS key,r.doc FROM results r JOIN tasks t ON t.id=r.task WHERE t.run=?1".into(),
@@ -378,6 +382,9 @@ pub fn project_page(
     context["record_references"] = json!(references);
     context["kind"] = json!("project_page");
     match collection {
+        Questions => {
+            context["questions"] = json!(values);
+        }
         Tasks => {
             let checks:String = tx.query_row("SELECT json_group_array(j.key) FROM runs r,json_each(r.doc,'$.policy.checks') j WHERE r.id=?1",[run],|r|r.get(0))?;
             ensure!(

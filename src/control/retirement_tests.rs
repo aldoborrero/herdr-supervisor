@@ -181,7 +181,7 @@ fn retirement_schema_upgrade_keeps_jobs_and_durable_removal_survives_restart() {
         .unwrap();
     s.node
         .connection
-        .execute_batch("DROP TABLE artifact_copy_retirements; DROP TABLE checkout_retirements; PRAGMA user_version=9;")
+        .execute_batch("DROP TABLE question_notices; DROP TABLE worker_questions; DROP TABLE artifact_copy_retirements; DROP TABLE checkout_retirements; PRAGMA user_version=9;")
         .unwrap();
     drop(s.node);
     s.node = node_store(&s.f);

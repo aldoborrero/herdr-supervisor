@@ -277,6 +277,16 @@ pub struct CriterionReview {
     deny_unknown_fields
 )]
 pub enum Mutation {
+    AskQuestion {
+        attempt: String,
+        epoch: u64,
+        text: String,
+    },
+    AnswerQuestion {
+        question: String,
+        expected_revision: u64,
+        answer: String,
+    },
     FetchArtifactChunk {
         attempt: String,
         epoch: u64,

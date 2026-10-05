@@ -349,7 +349,7 @@ fn reviewer_copy_retirement_migration_preserves_staging_and_receipts_and_fences_
     let mut x = Review::new();
     let r = x.decision();
     let cached = x.cached();
-    x.s.node.connection.execute_batch("DROP TABLE artifact_copy_retirements; ALTER TABLE artifact_staging RENAME TO latest_staging; CREATE TABLE artifact_staging (attempt TEXT PRIMARY KEY REFERENCES jobs(id),epoch INTEGER NOT NULL,manifest_hash TEXT NOT NULL,path TEXT NOT NULL UNIQUE,state TEXT NOT NULL CHECK(state IN ('creating','ready'))) STRICT; INSERT INTO artifact_staging SELECT * FROM latest_staging; DROP TABLE latest_staging; PRAGMA user_version=10;").unwrap();
+    x.s.node.connection.execute_batch("DROP TABLE question_notices; DROP TABLE worker_questions; DROP TABLE artifact_copy_retirements; ALTER TABLE artifact_staging RENAME TO latest_staging; CREATE TABLE artifact_staging (attempt TEXT PRIMARY KEY REFERENCES jobs(id),epoch INTEGER NOT NULL,manifest_hash TEXT NOT NULL,path TEXT NOT NULL UNIQUE,state TEXT NOT NULL CHECK(state IN ('creating','ready'))) STRICT; INSERT INTO artifact_staging SELECT * FROM latest_staging; DROP TABLE latest_staging; PRAGMA user_version=10;").unwrap();
     x.s.node = node_store(&x.s.f);
     assert_eq!(x.cached(), cached);
     assert!(x.path.join("evidence.txt").exists());

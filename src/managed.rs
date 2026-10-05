@@ -774,7 +774,7 @@ pub fn page_collections(
     use crate::{control::pagination::Collection::*, popup::Section};
     match section {
         Section::Threads => &[Attempts],
-        Section::Inbox => &[PendingNotices, Notices],
+        Section::Inbox => &[PendingNotices, Questions, Notices],
         Section::Memory => &[Memory, PendingMemory, MemoryProposals],
         Section::Tasks => &[Tasks, Dependencies, Integrations, Checks, Reviews, Results],
         Section::Settings => &[Profiles, Nodes, CoordinatorLaunches],
@@ -1045,6 +1045,21 @@ fn panel_rows(
             }
         }
         Section::Inbox => {
+            for q in c["questions"].as_array().into_iter().flatten() {
+                add(
+                    format!(
+                        "Question · {} · {}",
+                        if q["answer"].is_null() {
+                            "open"
+                        } else {
+                            "answered"
+                        },
+                        q["text"].as_str().unwrap_or_default()
+                    ),
+                    q.clone(),
+                    vec![],
+                );
+            }
             for n in c["notices"].as_array().into_iter().flatten() {
                 let actions = if n["acknowledged_by"].is_null() {
                     vec![action(

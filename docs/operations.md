@@ -259,6 +259,66 @@ Profile forms capture the run revision and selected profile page. Creating a pro
 
 The synchronous full-context CLI commands and older aggregate mutation responses still need migration. In particular, `set_profile` retains its full-run response; an oversized response can occur after a committed change. Inspect current state and preserve the operation ID as described in the API limits section.
 
+## Ask and resolve task questions
+
+A worker or reviewer can ask for clarification through its existing scoped
+`worker apply` command (or `worker_apply` MCP tool). Save this command as JSON and
+use a stable operation ID:
+
+```json
+{
+  "method": "ask_question",
+  "params": {
+    "attempt": "ASSIGNED_ATTEMPT_UUID",
+    "epoch": 1,
+    "text": "Should offsets count UTF-8 bytes?"
+  }
+}
+```
+
+The initial `queued` response is local persistence. Inspect the event with
+`worker receipt EVENT_UUID` until `controller_applied`; `result.question.id` is
+the controller's question ID. A question and its replication intent commit in
+one transaction. The current coordinator receives an ordinary native notice and
+reads the `questions` collection through `control page` / `supervisor_page`.
+The managed Inbox exposes Questions with **v**; Enter shows the complete record.
+The list is a read-only conversation view; answers use the controller API below.
+
+An owner or current supervisor resolves a question with `control apply`,
+`managed apply`, or `supervisor_apply`, using this command and its own stable
+operation ID:
+
+```json
+{
+  "method": "answer_question",
+  "params": {
+    "question": "QUESTION_UUID",
+    "expected_revision": 1,
+    "answer": "Yes. Keep the original contract and count bytes."
+  }
+}
+```
+
+Only one resolution is accepted. Identical operation replay returns the prior
+receipt; a second decision or changed replay fails. Replacing the coordinator
+retires its old capability but preserves unresolved questions for its successor.
+Cancelled/stopped attempts and closed/expired runs cannot receive a new answer.
+Paused runs may exchange clarifications without resuming their scheduler.
+
+NATS durably carries the resolution to the execution node, including after a
+disconnect. Mailer then sends a hint to the original recipient session/epoch.
+The worker reads its `questions` context field for the text and provenance.
+An answer is context; it changes neither the contract nor integration authority.
+Native send receipts do not establish model consumption. Questions and answers
+are limited to 4096 UTF-8 bytes each, with at most 32 questions per attempt.
+
+Controller schema 15 and node schema 12 add these records without rewriting
+existing assignments, commands or receipts. Upgrade both services. The node
+keeps resolved history across restart, rejects conflicting same-revision data,
+and never lets delayed open-question records undo a resolution. Cancellation
+retires pending native hints. A prepared send freezes its body, recipient and
+sender identity, so receipt loss retries the same mailer operation.
+
 ## Edit run profiles
 
 In **Settings**, an owner view can select **Create a run profile…** (Enter/`n`), press **e** on an existing profile, or **d** to confirm removal. A run-scoped supervisor view displays profiles read-only. The form captures the run revision and accepts a name, Codex/Claude/Pi runtime, a JSON array of model/tuning arguments and a positive active-attempt limit. Existing names are fixed; create another profile to use another name. Runtime arguments cannot override permissions, session identity or checkout. At least one profile must remain.

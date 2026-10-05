@@ -24,6 +24,9 @@ mod event_recovery_tests;
 #[path = "storage_fault_tests.rs"]
 mod storage_fault_tests;
 
+#[path = "questions_tests.rs"]
+mod questions_tests;
+
 fn policy() -> Policy {
     Policy {
         max_active: 2,

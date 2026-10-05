@@ -245,7 +245,9 @@ fn artifact_retirement_preserves_recreated_directory_and_migrates_existing_resul
             .unwrap();
     x.f.store
         .connection
-        .execute_batch("DROP TABLE artifact_retirements; PRAGMA user_version=13")
+        .execute_batch(
+            "DROP TABLE task_questions; DROP TABLE artifact_retirements; PRAGMA user_version=13",
+        )
         .unwrap();
     x.f.store = Store::open(&x.f.store.dir).unwrap();
     assert_eq!(

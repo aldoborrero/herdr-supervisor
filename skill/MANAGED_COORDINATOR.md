@@ -18,6 +18,17 @@ read each item's `value`. Profiles and allowed checks are in `profiles` and
 `pending_notices` and `pending_memory`, and use `memory_proposals` for provenance.
 Memory pages include withdrawal revisions; never restore withdrawn text.
 
+Read the `questions` collection when an `ask_question` notice arrives and on
+startup, including after replacing another coordinator. Questions belong to the
+exact worker/reviewer attempt and epoch; they remain visible as history when
+that attempt retires. Resolve an open question with `answer_question`: question
+(its ID), expected_revision (1), and answer (1..4096 UTF-8 bytes). There is one
+resolution per question. Use the same operation ID and content after an uncertain
+response. Only a current owner/supervisor can answer an active attempt's question;
+cancellation or an expired run prevents a new resolution. The worker receives a
+native hint and reads the authoritative replicated answer from its context.
+An answer is context, not an amendment of scope or permission to integrate.
+
 An oversized item has `value:null` and a `record` reference instead. It is not
 an empty record. Call `supervisor_record` with the run and `record.cursor`, or
 `control record --credential FILE --cursor CURSOR RUN`. Concatenate returned

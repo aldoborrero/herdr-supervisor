@@ -100,6 +100,7 @@ impl NodeStore {
             9 => (),
             10 => (),
             11 => (),
+            12 => (),
             _ => bail!("unsupported node schema"),
         }
         if version <= 2 {
@@ -138,6 +139,9 @@ impl NodeStore {
         }
         if version <= 10 {
             tx.execute_batch(super::artifact_review_retirement::SCHEMA)?;
+        }
+        if version <= 11 {
+            tx.execute_batch(super::questions::NODE_SCHEMA)?;
         }
         let existing: (String, String, String, u64) = tx.query_row(
             "SELECT owner,node,key,epoch FROM authority WHERE singleton=1",
@@ -205,6 +209,7 @@ impl NodeStore {
             ],
         )?;
         match kind {
+            "question_update" => super::questions::receive(&tx, body)?,
             "memory_update" => super::live_memory::receive(&tx, body)?,
             "receipt" => super::event_recovery::receive_receipt(&tx, body)?,
             "execute" => {

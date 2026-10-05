@@ -238,14 +238,14 @@ fn registration_recovery_schema_upgrade_preserves_prior_receipts_and_rejects_old
         })
         .unwrap();
     node.connection
-        .execute_batch("DROP TABLE artifact_copy_retirements; DROP TABLE checkout_retirements; DROP TABLE event_recoveries; DROP TABLE registration_recoveries")
+        .execute_batch("DROP TABLE question_notices; DROP TABLE worker_questions; DROP TABLE artifact_copy_retirements; DROP TABLE checkout_retirements; DROP TABLE event_recoveries; DROP TABLE registration_recoveries")
         .unwrap();
     node.connection
         .pragma_update(None, "user_version", 7)
         .unwrap();
     f.store
         .connection
-        .execute_batch("DROP TABLE event_recoveries; DROP TABLE registration_recoveries; DROP TABLE artifact_retirements; DROP TABLE coordinator_retirements; DROP TABLE verification_retirements; ALTER TABLE nodes DROP COLUMN draining; ALTER TABLE nodes DROP COLUMN revision;")
+        .execute_batch("DROP TABLE event_recoveries; DROP TABLE registration_recoveries; DROP TABLE task_questions; DROP TABLE artifact_retirements; DROP TABLE coordinator_retirements; DROP TABLE verification_retirements; ALTER TABLE nodes DROP COLUMN draining; ALTER TABLE nodes DROP COLUMN revision;")
         .unwrap();
     f.store
         .connection
@@ -264,14 +264,14 @@ fn registration_recovery_schema_upgrade_preserves_prior_receipts_and_rejects_old
         node.connection
             .pragma_query_value(None, "user_version", |r| r.get::<_, u64>(0))
             .unwrap(),
-        11
+        12
     );
     assert_eq!(
         f.store
             .connection
             .pragma_query_value(None, "user_version", |r| r.get::<_, u64>(0))
             .unwrap(),
-        14
+        15
     );
     let after: String = node
         .connection

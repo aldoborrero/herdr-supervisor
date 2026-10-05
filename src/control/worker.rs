@@ -141,7 +141,7 @@ pub fn handle(store: &mut NodeStore, identity: &Identity, request: WorkerRequest
         } => {
             let (order, state) = authorized(store, &token, &attempt, Some(epoch))?;
             Ok(
-                json!({"attempt":order.attempt,"state":state,"contract":order.contract,"memory":order.memory,"review":order.review,"current_memory":super::live_memory::context(&store.connection,&order)?}),
+                json!({"attempt":order.attempt,"state":state,"contract":order.contract,"memory":order.memory,"review":order.review,"current_memory":super::live_memory::context(&store.connection,&order)?,"questions":super::questions::context(&store.connection,&order)?}),
             )
         }
         WorkerRequest::Apply {
@@ -151,7 +151,8 @@ pub fn handle(store: &mut NodeStore, identity: &Identity, request: WorkerRequest
         } => {
             identifier(&operation_id)?;
             let (attempt, epoch) = match command.as_ref() {
-                Mutation::FetchArtifactChunk { attempt, epoch, .. }
+                Mutation::AskQuestion { attempt, epoch, .. }
+                | Mutation::FetchArtifactChunk { attempt, epoch, .. }
                 | Mutation::SubmitArtifactReview { attempt, epoch, .. }
                 | Mutation::PutArtifact { attempt, epoch, .. }
                 | Mutation::WorkerReady { attempt, epoch, .. }
@@ -163,7 +164,7 @@ pub fn handle(store: &mut NodeStore, identity: &Identity, request: WorkerRequest
                 } => (attempt, None),
                 _ => {
                     bail!(
-                        "workers may only upload artifacts or report readiness, results, reviews or memory proposals"
+                        "workers may only ask scoped questions, upload artifacts or report readiness, results, reviews or memory proposals"
                     )
                 }
             };
@@ -273,9 +274,9 @@ pub fn mcp(
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({"tools":[
                 {"name":"worker_artifact_status","description":"Inspect your upload's controller content-verification receipts. Content verification is not task acceptance.","inputSchema":{"type":"object","properties":{"name":{"type":"string"},"sha256":{"type":"string"}},"required":["name","sha256"],"additionalProperties":false}},
-                {"name":"worker_context","description":"Read your immutable assignment memory and current_memory (latest replicated approved snapshot and version).","inputSchema":{"type":"object","properties":{},"additionalProperties":false}},
+                {"name":"worker_context","description":"Read your immutable assignment, replicated questions/answers and current_memory (latest approved snapshot and version).","inputSchema":{"type":"object","properties":{},"additionalProperties":false}},
                 {"name":"worker_acknowledge_memory","description":"Declare that you read the exact current memory version. Delivery alone does not acknowledge it.","inputSchema":{"type":"object","properties":{"version":{"type":"integer","minimum":0}},"required":["version"],"additionalProperties":false}},
-                {"name":"worker_apply","description":"Queue an artifact chunk, readiness, an author result, an assigned review or a memory proposal with a stable operation_id. Queueing is not controller acceptance; inspect the receipt.","inputSchema":{"type":"object","properties":{"operation_id":{"type":"string"},"command":{"type":"object"}},"required":["operation_id","command"],"additionalProperties":false}},
+                {"name":"worker_apply","description":"Queue a scoped ask_question, artifact chunk, readiness, result, review or memory proposal with a stable operation_id. Queueing is not controller acceptance; inspect the receipt.","inputSchema":{"type":"object","properties":{"operation_id":{"type":"string"},"command":{"type":"object"}},"required":["operation_id","command"],"additionalProperties":false}},
                 {"name":"worker_receipt","description":"Read controller application receipt for your event.","inputSchema":{"type":"object","properties":{"event":{"type":"string"}},"required":["event"],"additionalProperties":false}}
             ]})),
             "tools/call" => {

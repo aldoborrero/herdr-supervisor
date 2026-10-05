@@ -133,6 +133,7 @@ impl Store {
             12 => (),
             13 => (),
             14 => (),
+            15 => (),
             _ => bail!("unsupported controller schema {version}; no migration applied"),
         }
         if version <= 2 {
@@ -175,6 +176,9 @@ impl Store {
         }
         if version <= 13 {
             tx.execute_batch(super::artifact_retirement::SCHEMA)?;
+        }
+        if version <= 14 {
+            tx.execute_batch(super::questions::CONTROLLER_SCHEMA)?;
         }
         tx.commit()?;
         Ok(Self {
@@ -224,6 +228,7 @@ impl Store {
             Mutation::StartCoordinator { run, .. } => run.clone(),
             command => {
                 let (table, id) = match command {
+                    Mutation::AnswerQuestion { question, .. } => ("task_questions", question),
                     Mutation::StopAttempt { attempt, .. }
                     | Mutation::RenewCancellation { attempt, .. }
                     | Mutation::RequestVerification { attempt, .. } => ("attempts", attempt),
@@ -310,7 +315,8 @@ impl Store {
                     );
                     attempt
                 }
-                Mutation::FetchArtifactChunk { attempt, .. }
+                Mutation::AskQuestion { attempt, .. }
+                | Mutation::FetchArtifactChunk { attempt, .. }
                 | Mutation::SubmitArtifactReview { attempt, .. }
                 | Mutation::PutArtifact { attempt, .. }
                 | Mutation::WorkerReady { attempt, .. }
@@ -771,6 +777,9 @@ fn add_dependency(c: &Connection, task: &Task, predecessor: &str) -> Result<()> 
 
 pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) -> Result<Value> {
     match command {
+        Mutation::AskQuestion { .. } | Mutation::AnswerQuestion { .. } => {
+            super::questions::mutate(tx, p, command)
+        }
         Mutation::RenewCancellation { .. } => super::cancellation_recovery::renew(tx, p, command),
         Mutation::SetNodeDrain { .. } | Mutation::RevokeNode { .. } => {
             super::node_lifecycle::change(tx, p, command)
