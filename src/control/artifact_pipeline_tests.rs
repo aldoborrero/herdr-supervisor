@@ -354,6 +354,23 @@ async fn artifact_pipeline_cross_node_review_fetches_exact_content_over_restrict
     };
     let bytes: Vec<u8> = (0..CHUNK_BYTES * 17 + 9).map(|n| (n % 251) as u8).collect();
     let mut x = Artifacts::with_bytes("true", true, &bytes);
+    let run: Run = document(&x.f.store.connection, "runs", &x.f.run).unwrap();
+    let bound = call(
+        &mut x.f.store,
+        &x.f.owner,
+        Mutation::BindCoordinator {
+            run: run.id,
+            expected_revision: run.revision,
+            endpoint: crate::control::coordinator::Endpoint {
+                agent: "supervisor".into(),
+                mailer_session: id(),
+                mailer_epoch: 1,
+                runtime: "codex".into(),
+                native_session: id(),
+            },
+        },
+    );
+    x.f.supervisor = text(&bound, "credential");
     let i = x.advance().unwrap();
     assert_eq!(i.state, "awaiting_review");
     let owner = Identity::load(&x.f.store.dir.join("owner.key")).unwrap();
@@ -614,13 +631,25 @@ async fn artifact_pipeline_cross_node_review_fetches_exact_content_over_restrict
         &key,
         WorkerRequest::Receipt {
             token: order.credential,
-            attempt: reviewer.id,
+            attempt: reviewer.id.clone(),
             epoch: 1,
             event: text(&submitted, "event"),
         },
     )
     .unwrap();
     assert_eq!(receipt["state"], "controller_applied");
+    crate::control::coordinator::collect(&mut x.f.store).unwrap();
+    let notices = || {
+        x.f.store.connection.query_row(
+        "SELECT count(*) FROM coordinator_notices WHERE kind='submit_artifact_review' AND aggregate_id=?1 AND state='pending'",
+        [&reviewer.id], |r| r.get::<_, u64>(0),
+    ).unwrap()
+    };
+    assert_eq!(
+        notices(),
+        1,
+        "artifact review must wake the assigned supervisor"
+    );
     assert_eq!(
         verification::integration(&x.f.store.connection, &i.id)
             .unwrap()

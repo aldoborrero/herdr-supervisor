@@ -4,7 +4,7 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
-**Current full Nix gate:** commit `5afb1d9a02b4649dec6ffa874d341c235d578ffd` passes package build and `nix flake check` on x86_64-linux, with all 441 unit and 7 CLI tests executed offline inside the package build. This supersedes the storage-related validation backlog recorded below; it does not establish builds on other platforms or completion of the remaining feature scope.
+**Last completed full Nix gate:** commit `bec9f949376391bfbf64bd52dd1561d8ab72d49a` passes package build and `nix flake check` on x86_64-linux, with all 449 unit and 8 CLI tests executed offline inside the package build. The later coordinator-notice correction is validated locally and awaits its own package gate. This supersedes the storage-related validation backlog recorded below; it does not establish builds on other platforms or completion of the remaining feature scope.
 
 The local implementation suite currently passes **449 unit tests and 8 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
 
@@ -184,4 +184,12 @@ The new artifact pipeline has focused evidence separate from the earlier content
 | Node migration | `artifact_pipeline_node_schema_upgrade_preserves_jobs_and_pending_signed_events` | Schema 6 to 7 preserves existing jobs and frozen pending event bytes |
 | Continuous artifact lifecycle | CLI `continuous_services_verify_artifacts_before_native_review_and_complete_without_git_integration` | Actual services and CLI upload, Git worktrees, native wrappers, IPC and NATS; fixture asserts files/hash/path at mailer bootstrap, criterion review and process exit before run completion; model/Herdr/mailer boundaries simulated |
 
-The checkpoint passes `cargo test --locked --offline` (449 unit tests in 7.60 s and 8 CLI tests in 23.66 s), strict all-target Clippy (10.35 s after removing two redundant references), and `nix fmt`. Full package validation is in progress; this section does not yet replace the pinned full Nix gate above. No host, live session, shared broker or publication has been changed.
+The checkpoint passes `cargo test --locked --offline` (449 unit tests in 7.60 s and 8 CLI tests in 23.66 s), strict all-target Clippy (10.35 s after removing two redundant references), and `nix fmt`. The same artifact-pipeline commit `bec9f94` subsequently passed full package build and flake check; the coordinator-notice follow-up below requires a new package gate. No host, live session, shared broker or publication has been changed.
+
+### Artifact review wakes the coordinator
+
+A follow-up review found that the coordinator journal filter selected `submit_review` but omitted the new `submit_artifact_review` event. The cross-node artifact test now binds a native coordinator route and requires one pending notice for the exact reviewer after controller application. It failed against `bec9f94` (zero notices) and passes with the filter correction. All eight coordinator regressions and strict all-target Clippy also pass. Logs: `.direnv/artifact-notice-regression.log` and `.direnv/artifact-notice-fix.log`. This is durable notice creation; the existing notifier tests separately cover native delivery, lost responses and exact recipient fencing. Package validation must include this follow-up before treating the current head as fully Nix-validated.
+
+### Full package gate for the artifact pipeline
+
+Commit `bec9f949376391bfbf64bd52dd1561d8ab72d49a` passes full `nix build` and `nix flake check` on x86_64-linux using the same explicit full-revision URL, `--cores 1 --max-jobs 1` and offline package tests. Build compilation took 5 min 42 s and the check phase 6 min 45 s, including all 449 unit tests (81.18 s) and 8 CLI tests (43.33 s). Formatter and module checks pass. The installed `control --help` smoke also passes. Output: `/nix/store/fcrrs7n2k5qslidfddnfz9h4n94c15an-herdr-supervisor-0.1.0`. Logs: `.direnv/artifact-pipeline-nix-build.log` and `.direnv/artifact-pipeline-nix-check.log`. This package predates the coordinator-notice fix described above; no validation claim is transferred to unbuilt changes.
