@@ -10,6 +10,20 @@ notice. Notifications carry a run and coordinator generation; they never grant
 permission. Acknowledge inspected IDs with `acknowledge_notices`. Do not wake
 workers periodically merely to ask whether they finished.
 
+`supervisor_context` / `control context` returns a bounded overview. Complete
+records live in `collections`: read `supervisor_page` with run, collection and
+its cursor, or `control page --credential FILE --collection NAME --cursor CURSOR RUN`. Omit the cursor to start a new scan. Follow `next_cursor` until null and
+read each item's `value`. Profiles and allowed checks are in `profiles` and
+`policy_checks`; do not schedule from the overview alone. Inspect
+`pending_notices` and `pending_memory`, and use `memory_proposals` for provenance.
+Memory pages include withdrawal revisions; never restore withdrawn text.
+
+Each page is a current SQLite read snapshot. Row updates may appear between
+pages, and rows added after the scan began require a fresh context/scan. Profile
+and check pages reject a changed run revision. Cursors confer no authority and
+do not acknowledge notices. Re-read relevant state/revisions before decisions;
+never infer that an omitted collection or an unfinished page has no records.
+
 Use `supervisor_apply` or `control apply` for decisions. Supply a stable
 operation ID, a `method`, and its `params`. Retry an uncertain response with the
 same ID and identical content. Read current revisions before new decisions.

@@ -4,7 +4,7 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
-**Last completed full Nix gate:** commit `737eb14217fcb40bbef57c96e9c7e0ed9d65845a` passes package build and `nix flake check` on x86_64-linux, with 500 unit and 10 CLI tests offline. It includes Codex registration recovery with live ownership. The passive kernel-exit recovery extension still requires its package gate. This does not establish other platforms or completion of the remaining feature scope.
+**Last completed full Nix gate:** commit `27ed1aeb94e81e591edb1cdf0167394811b33047` passes package build and `nix flake check` on x86_64-linux, with 511 unit and 10 CLI tests offline. It includes passive Linux recovery and transactional signed-record budgets. The paginated-context extension requires its own package gate. This does not establish other platforms or completion of the remaining feature scope.
 
 The local implementation suite currently passes **511 unit tests and 10 CLI tests** (local suite with four test threads), including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
 
@@ -140,7 +140,7 @@ Mailer protocol-2 support is an independent local commit **`7a12d5a`** on `feat/
 - Recovery of still-live orphans, legacy capture gaps, changed boots/namespaces and non-Linux wrapper loss; detached-descendant audit and conservative resource cleanup.
 - Reconciliation for legacy/lost-wrapper registration evidence. Explicit recovery covers prelaunch Claude/Pi and still-owned Codex before binding.
 - Service onboarding and cross-host resource focus. Managed project creation now has a form and resumable CLI.
-- Aggregate API/wire bounds and large-run context pagination.
+- Projects/legacy snapshot pagination, oversized individual-record retrieval and remaining aggregate API bounds. Signed-record budgets and coordinator CLI/MCP collection pages are implemented.
 - Recovery/requeue of terminal outgoing records and grant/node lifecycle operations.
 - Optional project/cross-run memory and Markdown projection.
 - Stronger model-facing validation beyond the isolated continuous-service workflow and protocol fixtures.
@@ -352,3 +352,15 @@ The controller now checks the complete command envelope before committing each r
 | Envelope and future numeric widths included | `wire_limits_command_budget_includes_future_epoch_and_full_json_envelope` | Exact command-preflight boundary, one byte over, larger epoch before signing, exact wire limit and excess whitespace rejection |
 
 The final local suite passes 511 unit tests (42.68 s), 10 CLI tests (25.35 s), all six focused size regressions and strict all-target Clippy (30.44 s), with four test threads. `nix fmt` passes. Logs: `.direnv/wire-limits-final.log` and `.direnv/wire-limits-fmt.log`. The full Nix gate remains pending. These tests do not establish aggregate API pagination or recovery of previously oversized terminal deliveries.
+
+## Bounded coordinator context pages
+
+`control context` and `supervisor_context` now return a bounded overview with counts/cursors; `control page` and `supervisor_page` read complete records from sixteen authorized collections. Policy maps are separate, so accumulating profiles does not inflate the overview. Each read authenticates within its SQLite snapshot. Cursors bind owner, run, principal and collection; policy pages additionally reject a changed run revision. Ordinary scans bound appended rowids and report current-per-page consistency, not frozen history. No cursor grants authority or acknowledges a notice.
+
+The regressions `paginated_context_preserves_all_large_tasks_and_separates_growing_policy_maps`, `pagination_cursors_recheck_scope_authority_limits_and_policy_revision`, `pagination_reads_current_updates_but_new_rows_require_a_new_scan`, `pagination_collections_preserve_provenance_withdrawal_and_hide_capabilities` and `pagination_oversized_legacy_record_fails_without_partial_json` cover a context above 4 MiB, all 32 full contracts without duplicates, growing profiles, retired/foreign/worker credentials, bounded cursors, concurrent-between-page changes, explicit withdrawal, proposal evidence, assigned-profile snapshots and credential-free coordinator summaries. The large-context case also runs the real Unix API and MCP facade. `pagination_legacy_memory_access_remains_inside_worker_or_reviewer_assignment` also covers the legacy snapshot/memory boundary, own-topic reads, unrelated-topic refusal, reviewer scope and retirement. The existing native-attachment CLI test invokes the new `page` command; the API/MCP regression reads a node through its returned collection cursor.
+
+Response regressions `api_response_encoder_accepts_exact_frame_and_rejects_one_more_byte`, `api_response_client_requires_complete_bounded_json_line` and `mcp_response_overflow_returns_one_complete_error_and_keeps_next_request` check exact encoded limits, escaped expansion, a real socket's truncated/oversized response and MCP stream continuity. These paths use mocked model/Herdr/mailer boundaries. Pages do not solve oversized individual records or the legacy Projects view's aggregate query. The final local suite passes 520 unit tests (37.16 s), 10 CLI tests (23.83 s) and strict all-target Clippy (16.82 s), with four test threads; log: `.direnv/pagination-keyset-final.log`. Numeric collections compare and order raw rowids rather than formatted cursor strings; SQLite query-plan inspection confirms an integer-primary-key range scan for tasks. The package gate for this checkpoint remains pending.
+
+The prior recovery commit `35ccfef` completed its x86_64-linux gate with 505 unit tests (115.33 s) and 10 CLI tests (48.35 s); build phase 13 min 17 s, check phase 10 min 2 s. Output: `/nix/store/sbwfybpb156d5bfm3cc166whga4z44h3-herdr-supervisor-0.1.0`. Logs: `.direnv/kernel-recovery-nix-build.log` and `.direnv/kernel-recovery-nix-check.log`. Other systems were not built.
+
+The signed-record budget commit `27ed1ae` completed its x86_64-linux Nix build/flake gate with 511 unit tests (114.74 s) and 10 CLI tests (47.93 s). Output: `/nix/store/040nd0m2l7gwmbksfi7imwfqmnj5lkrs-herdr-supervisor-0.1.0`. Logs: `.direnv/wire-limits-nix-build.log` and `.direnv/wire-limits-nix-check.log`. Other systems were not built.

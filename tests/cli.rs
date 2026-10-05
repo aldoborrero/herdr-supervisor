@@ -539,6 +539,31 @@ fn connect_native_coordinator_publishes_private_capability_and_context_without_p
             .contains("independent reviewer")
     );
     assert!(!context.to_string().contains(&token));
+    assert_eq!(context["kind"], "paginated_context");
+    let page = hp(
+        home.path(),
+        &[
+            "control",
+            "--state",
+            state_arg,
+            "page",
+            "--credential",
+            credential,
+            "--collection",
+            "tasks",
+            "--limit",
+            "1",
+            run,
+        ],
+    );
+    assert!(
+        page.status.success(),
+        "{}",
+        String::from_utf8_lossy(&page.stderr)
+    );
+    let page: Value = serde_json::from_slice(&page.stdout).unwrap();
+    assert_eq!(page["collection"], "tasks");
+    assert_eq!(page["items"], serde_json::json!([]));
     let root = home.path().join("projects root");
     let root_arg = root.to_str().unwrap();
     assert!(

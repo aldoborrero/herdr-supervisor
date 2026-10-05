@@ -975,7 +975,17 @@ async fn private_api_and_mcp_share_authorization_and_incomplete_clients_do_not_b
         let context: Value =
             serde_json::from_str(results[2]["result"]["content"][0]["text"].as_str().unwrap())
                 .unwrap();
-        assert_eq!(context["nodes"][0]["id"], "local");
+        assert_eq!(context["collections"]["nodes"]["count"], 1);
+        let input = format!(
+            "{}\n",
+            json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"supervisor_page","arguments":{"run":run,"collection":"nodes","cursor":context["collections"]["nodes"]["cursor"]}}})
+        );
+        let mut page_output = Vec::new();
+        api::mcp(&state, &token, input.as_bytes(), &mut page_output).unwrap();
+        let reply: Value = serde_json::from_slice(&page_output).unwrap();
+        let page: Value =
+            serde_json::from_str(reply["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(page["items"][0]["value"]["id"], "local");
         assert!(
             context["instructions"]
                 .as_str()
@@ -1947,3 +1957,6 @@ mod registration_recovery_tests;
 
 #[path = "wire_limits_tests.rs"]
 mod wire_limits_tests;
+
+#[path = "pagination_tests.rs"]
+mod pagination_tests;

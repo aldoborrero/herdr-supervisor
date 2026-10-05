@@ -83,15 +83,41 @@ herdr-supervisor control --state CONTROLLER_DIR connect-supervisor \
 
 The receiving credential is also a registered mailer session token. The command reads its exact agent, mailer session/epoch, runtime and native UUID through mailer's `doctor`, then atomically creates a new supervisor generation and bootstrap notice. It prints the private controller credential **path**, never the token. Retry with the same operation ID and unchanged registration after a lost response. A changed registration requires an explicit new binding, not reuse of the old operation.
 
-The coordinator receives a context command pointing to that run's capability file. `control --state CONTROLLER_DIR context --credential CAPABILITY_FILE RUN_ID` and the `supervisor_context` MCP tool return objective/policy, tasks, attempts, dependency edges, node capacity, review/integration state, approved memory, pending memory proposals and notices. Instructions describe how to schedule through the scoped API. No global MCP configuration is installed.
+The coordinator receives a context command pointing to that run's capability file. `control --state CONTROLLER_DIR context --credential CAPABILITY_FILE RUN_ID` and the `supervisor_context` MCP tool return a bounded objective/policy overview and collection cursors. `control page` and `supervisor_page` expose complete tasks, attempts, dependency edges, node capacity, review/integration state, profiles, approved memory, memory proposals and notices. Instructions describe how to schedule through the scoped API. No global MCP configuration is installed.
 
 Notice intent and journal cursor commit together in SQLite. Before delivery, the notifier freezes content, destination, sender owner/agent and operation ID; retries preserve them after a lost mailer response or SQL receipt. Results, review/check outcomes, stopped attempts and memory decisions generate notices. They carry references rather than executing agent-authored text. Changing the logical sender blocks retry until the original sender is restored, because mailer scopes operation IDs by owner/author. Sender session/token rotation under the same owner/agent preserves that scope. Preserve the same authoritative mailer database; replacing it with an empty or stale copy loses its deduplication receipts. Only notices eligible for delivery contact mailer; an idle notifier needs no daemon connection.
 
-`mailer_stored` means mailer accepted persistence for the exact recipient. It does not establish native delivery or model processing. The coordinator explicitly submits `acknowledge_notices` with `run` and `ids` after inspecting context; an owner acknowledgement identifies the owner separately. Context prioritizes the oldest unacknowledged notices (100 per response) and includes their total count. Acknowledging a page makes the next page visible; it does not approve a task or result.
+`mailer_stored` means mailer accepted persistence for the exact recipient. It does not establish native delivery or model processing. The coordinator explicitly submits `acknowledge_notices` with `run` and `ids` after inspecting context; an owner acknowledgement identifies the owner separately. The overview includes the unacknowledged count. Scan `pending_notices` to inspect the oldest outstanding notices, up to 100 records per page, and acknowledge inspected IDs separately. Following a cursor does not acknowledge anything or approve a task/result. The older Projects projection retains its 100-notice view.
 
 Replacing the coordinator revokes the old capability and retires its pending notices. Retired notices keep their original destination; an already accepted or in-flight send cannot be undone. In particular, `superseded` does not prove the old recipient never received it. New generations receive a fresh bootstrap and current SQLite context.
 
-The context still inherits the snapshot API's aggregate size limit; large-run pagination remains required. Pending memory proposals are limited to ten per context. This integration has isolated IPC/broker tests with mocked mailer replies, not proof of a live coordinator model consuming its bootstrap.
+Coordinator CLI/MCP context now uses the paginated path below. Projects and the legacy snapshot API still use their full projection; their large-run UI migration remains pending. This integration has isolated IPC/broker tests with mocked mailer replies, not proof of a live coordinator model consuming its bootstrap.
+
+## Read large coordinator contexts
+
+```bash
+herdr-supervisor control --state CONTROLLER_DIR context \
+  --credential CAPABILITY_FILE RUN_ID
+herdr-supervisor control --state CONTROLLER_DIR page \
+  --credential CAPABILITY_FILE --collection tasks --limit 50 \
+  --cursor CURSOR_FROM_CONTEXT_OR_PREVIOUS_PAGE RUN_ID
+```
+
+The overview's `collections` map gives counts and starting cursors. Read each page's `items[].value`, then follow `next_cursor` until it is null. Omit `--cursor` to start a new scan with current bounds. MCP exposes the same operation as `supervisor_page` with `run`, `collection`, optional `cursor` and optional `limit`. The default limit is 50; valid limits are 1–100. Do not interpret an unqueried collection as empty.
+
+| Collections | Contents |
+| --- | --- |
+| `tasks`, `attempts`, `results` | Contracts, exact assigned profiles, resource/state records and immutable results |
+| `integrations`, `checks`, `reviews` | Candidate, check and independent-review evidence |
+| `dependencies`, `nodes` | Task edges and public execution capacity |
+| `profiles`, `policy_checks` | Owner-approved policy maps, separated from the overview |
+| `memory`, `memory_proposals`, `pending_memory` | Current topic revisions including withdrawals, proposal provenance/history, and pending decisions |
+| `notices`, `pending_notices` | Current-generation notices or only those awaiting acknowledgement |
+| `coordinator_launches` | Public launch/process/registration-recovery summaries; no launcher credentials |
+
+The overview and each page are independently consistent SQLite read transactions. They are **not one frozen snapshot**. A rowid high-water mark bounds ordinary scans; newly appended records require a new scan. Updates, removals and replaced dependency edges may change between pages. Profile/check maps instead require the captured run revision to remain current. Refresh context and re-read relevant revisions before deciding; mutation revision/epoch checks remain authoritative. Cursors are bounded positions, not capabilities: every request reauthenticates the current owner/supervisor and checks run, principal and collection scope. Retired or worker/node credentials cannot use these pages. The legacy whole-run snapshot now also requires owner/supervisor authority. A worker/reviewer using the controller memory endpoint can read only its exact attempt contract's topics plus preferences; role, run, epoch and contract checks share the memory read transaction.
+
+A page contains at most 1 MiB of encoded JSON and returns complete records. A single projected record over 768 KiB fails explicitly; it is never truncated or silently skipped. Retrieval of oversized individual records remains pending. The private API and MCP cap serialized response lines at 4 MiB, and the client rejects oversized or incomplete lines. Legacy oversized queries receive a complete error directing the caller to pagination. If an oversized response follows a mutation, do not infer that the mutation rolled back or resubmit it with a new operation ID; preserve its exact retry identity and inspect current state. This response cap does not make the legacy Projects query or snapshot builder internally paginated.
 
 ## Launch a coordinator from Projects
 

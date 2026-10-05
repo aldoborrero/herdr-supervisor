@@ -19,6 +19,18 @@ pub struct ControlArgs {
 
 #[derive(Subcommand)]
 enum ControlCommand {
+    /// Read one bounded collection page from the authorized run
+    Page {
+        #[arg(long)]
+        credential: PathBuf,
+        #[arg(long, value_enum)]
+        collection: super::pagination::Collection,
+        #[arg(long)]
+        cursor: Option<String>,
+        #[arg(long, default_value_t = 50)]
+        limit: u32,
+        run: String,
+    },
     /// Local owner maintenance: authorize one registration retry before receiver binding
     RecoverRegistration {
         /// Recover a worker/reviewer in node.sqlite; otherwise recover a coordinator
@@ -167,7 +179,7 @@ enum ControlCommand {
         expected_revision: u64,
         run: String,
     },
-    /// Read authoritative coordinator context, instructions and native notice receipts
+    /// Read a bounded coordinator overview and cursors for complete record pages
     Context {
         #[arg(long)]
         credential: PathBuf,
@@ -298,6 +310,22 @@ fn credential(path: &Path) -> Result<String> {
 
 pub fn run(args: ControlArgs) -> Result<()> {
     let result = match args.command {
+        ControlCommand::Page {
+            credential: path,
+            collection,
+            cursor,
+            limit,
+            run,
+        } => super::api::call(
+            &args.state,
+            &super::api::ApiRequest::RunPage {
+                token: credential(&path)?,
+                run,
+                collection,
+                cursor,
+                limit,
+            },
+        )?,
         ControlCommand::RunController {
             broker,
             repositories,
@@ -318,7 +346,7 @@ pub fn run(args: ControlArgs) -> Result<()> {
             run,
         } => super::api::call(
             &args.state,
-            &super::api::ApiRequest::CoordinatorContext {
+            &super::api::ApiRequest::CoordinatorOverview {
                 token: credential(&path)?,
                 run,
             },

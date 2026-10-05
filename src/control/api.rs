@@ -14,10 +14,45 @@ use super::model::{Mutation, Request};
 use super::store::{Store, private_dir};
 
 const MAX_FRAME: usize = 300000;
+pub(super) const MAX_RESPONSE: usize = 4 * 1024 * 1024;
+
+fn response_bytes(value: &Value) -> Result<Vec<u8>> {
+    struct Bounded(Vec<u8>);
+    impl Write for Bounded {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.len() > MAX_RESPONSE - 1 - self.0.len() {
+                return Err(std::io::Error::other(
+                    "API response too large; use control context/page or supervisor_page",
+                ));
+            }
+            self.0.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut output = Bounded(Vec::new());
+    serde_json::to_writer(&mut output, value)?;
+    output.0.push(b'\n');
+    Ok(output.0)
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ApiRequest {
+    CoordinatorOverview {
+        token: String,
+        run: String,
+    },
+    RunPage {
+        token: String,
+        run: String,
+        collection: super::pagination::Collection,
+        #[serde(default)]
+        cursor: Option<String>,
+        limit: u32,
+    },
     ProjectApply {
         token: String,
         run: String,
@@ -47,6 +82,16 @@ pub enum ApiRequest {
 
 pub fn handle(store: &mut Store, request: ApiRequest) -> Result<Value> {
     match request {
+        ApiRequest::CoordinatorOverview { token, run } => {
+            super::pagination::overview(store, &token, &run)
+        }
+        ApiRequest::RunPage {
+            token,
+            run,
+            collection,
+            cursor,
+            limit,
+        } => super::pagination::page(store, &token, &run, collection, cursor.as_deref(), limit),
         ApiRequest::ProjectApply {
             token,
             run,
@@ -224,8 +269,10 @@ async fn connection(
         Ok(value) => json!({"data":value}),
         Err(error) => json!({"error":error.to_string()}),
     };
-    let mut bytes = serde_json::to_vec(&response)?;
-    bytes.push(b'\n');
+    let bytes = response_bytes(&response).unwrap_or_else(|_| {
+        b"{\"error\":\"API response too large; use control context/page or supervisor_page\"}\n"
+            .to_vec()
+    });
     writer.write_all(&bytes).await?;
     Ok(())
 }
@@ -243,10 +290,14 @@ pub fn call_json(socket: &Path, request: &Value) -> Result<Value> {
     bytes.push(b'\n');
     ensure!(bytes.len() <= MAX_FRAME, "request too large");
     stream.write_all(&bytes)?;
-    let mut reader = std::io::BufReader::new(stream.take(4 * 1024 * 1024));
-    let mut response = String::new();
-    reader.read_line(&mut response)?;
-    let response: Value = serde_json::from_str(&response)?;
+    let mut reader = std::io::BufReader::new(stream.take((MAX_RESPONSE + 1) as u64));
+    let mut response = Vec::new();
+    reader.read_until(b'\n', &mut response)?;
+    ensure!(
+        response.len() <= MAX_RESPONSE && response.last() == Some(&b'\n'),
+        "incomplete or oversized API response"
+    );
+    let response: Value = serde_json::from_slice(&response)?;
     if let Some(error) = response.get("error") {
         anyhow::bail!("{}", error.as_str().unwrap_or("API error"));
     }
@@ -308,8 +359,13 @@ pub fn mcp_loop(
                 json!({"jsonrpc":"2.0","id":id,"error":{"code":-32602,"message":error.to_string()}})
             }
         };
-        serde_json::to_writer(&mut output, &response)?;
-        output.write_all(b"\n")?;
+        let bytes = match response_bytes(&response) {
+            Ok(bytes) => bytes,
+            Err(_) => response_bytes(
+                &json!({"jsonrpc":"2.0","id":id,"error":{"code":-32001,"message":"MCP response too large; use supervisor_context and supervisor_page"}}),
+            )?,
+        };
+        output.write_all(&bytes)?;
         output.flush()?;
     }
 }
@@ -330,7 +386,8 @@ fn mcp_request(dir: &Path, token: &str, request: &Value) -> Result<Value> {
         }
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({"tools":[
-            {"name":"supervisor_context","description":"Read current run authority, notices, curated memory and coordinator instructions. Notices are hints, not approval.","inputSchema":{"type":"object","properties":{"run":{"type":"string"}},"required":["run"],"additionalProperties":false}},
+            {"name":"supervisor_context","description":"Read a bounded run overview and collection cursors. Read supervisor_page for tasks, profiles, checks, memory and notices before deciding.","inputSchema":{"type":"object","properties":{"run":{"type":"string"}},"required":["run"],"additionalProperties":false}},
+            {"name":"supervisor_page","description":"Read complete records from one authorized collection. Follow next_cursor until null. Pages are current read snapshots, not one frozen scan; refresh context for new rows and recheck revisions before decisions.","inputSchema":{"type":"object","properties":{"run":{"type":"string"},"collection":{"type":"string","enum":super::pagination::Collection::ALL.iter().map(|c|c.name()).collect::<Vec<_>>()},"cursor":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":100,"default":50}},"required":["run","collection"],"additionalProperties":false}},
             {"name":"supervisor_apply","description":"Submit a scoped decision with a stable operation ID and explicit aggregate revision. Never interprets delivery as approval.","inputSchema":{"type":"object","properties":{"operation_id":{"type":"string"},"command":{"type":"object"}},"required":["operation_id","command"],"additionalProperties":false}},
             {"name":"supervisor_snapshot","description":"Read authoritative tasks and attempts for the authorized run.","inputSchema":{"type":"object","properties":{"run":{"type":"string"}},"required":["run"],"additionalProperties":false}},
             {"name":"supervisor_memory","description":"Read approved, versioned memory relevant to these topics.","inputSchema":{"type":"object","properties":{"run":{"type":"string"},"topics":{"type":"array","items":{"type":"string"}}},"required":["run","topics"],"additionalProperties":false}}
@@ -344,9 +401,23 @@ fn mcp_request(dir: &Path, token: &str, request: &Value) -> Result<Value> {
                     .into())
             };
             let api = match request["params"]["name"].as_str().context("tool name")? {
-                "supervisor_context" => ApiRequest::CoordinatorContext {
+                "supervisor_context" => ApiRequest::CoordinatorOverview {
                     token: token.into(),
                     run: get("run")?,
+                },
+                "supervisor_page" => ApiRequest::RunPage {
+                    token: token.into(),
+                    run: get("run")?,
+                    collection: serde_json::from_value(args["collection"].clone())?,
+                    cursor: args
+                        .get("cursor")
+                        .map(|v| serde_json::from_value(v.clone()))
+                        .transpose()?,
+                    limit: args
+                        .get("limit")
+                        .map(|v| serde_json::from_value(v.clone()))
+                        .transpose()?
+                        .unwrap_or(50),
                 },
                 "supervisor_apply" => ApiRequest::Apply {
                     token: token.into(),
@@ -393,5 +464,72 @@ mod lease_tests {
         assert!(super::lock(&dir, "effect.lock").is_err());
         drop(next);
         assert!(super::lock(&dir, "effect.lock").is_ok());
+    }
+}
+
+#[cfg(test)]
+mod response_tests {
+    use super::*;
+    #[test]
+    fn api_response_encoder_accepts_exact_frame_and_rejects_one_more_byte() {
+        let overhead = response_bytes(&json!({"data":""})).unwrap().len();
+        let exact = json!({"data":"x".repeat(MAX_RESPONSE-overhead)});
+        assert_eq!(response_bytes(&exact).unwrap().len(), MAX_RESPONSE);
+        assert!(response_bytes(&json!({"data":"x".repeat(MAX_RESPONSE-overhead+1)})).is_err());
+        assert!(response_bytes(&json!({"data":"\u{1}".repeat(MAX_RESPONSE/6)})).is_err());
+    }
+    #[test]
+    fn api_response_client_requires_complete_bounded_json_line() {
+        for mode in ["exact", "overflow", "truncated"] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("api.sock");
+            let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+            let sender = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                let mut line = String::new();
+                std::io::BufReader::new(socket.try_clone().unwrap())
+                    .read_line(&mut line)
+                    .unwrap();
+                let mut response = b"{\"data\":true}".to_vec();
+                if mode != "truncated" {
+                    response.resize(MAX_RESPONSE - 1 + usize::from(mode == "overflow"), b' ');
+                    response.push(b'\n');
+                }
+                let _ = socket.write_all(&response);
+            });
+            let response = call_json(&path, &json!({}));
+            if mode == "exact" {
+                assert_eq!(response.unwrap(), true);
+            } else {
+                assert!(
+                    response
+                        .unwrap_err()
+                        .to_string()
+                        .contains("incomplete or oversized")
+                );
+            }
+            sender.join().unwrap();
+        }
+    }
+    #[test]
+    fn mcp_response_overflow_returns_one_complete_error_and_keeps_next_request() {
+        let input = b"{\"jsonrpc\":\"2.0\",\"id\":1}\n{\"jsonrpc\":\"2.0\",\"id\":2}\n";
+        let mut output = Vec::new();
+        mcp_loop(&input[..], &mut output, |req| {
+            Ok(if req["id"] == 1 {
+                json!({"huge":"x".repeat(MAX_RESPONSE)})
+            } else {
+                json!({"ok":true})
+            })
+        })
+        .unwrap();
+        let values: Vec<Value> = std::str::from_utf8(&output)
+            .unwrap()
+            .lines()
+            .map(|s| serde_json::from_str(s).unwrap())
+            .collect();
+        assert_eq!(values.len(), 2);
+        assert_eq!(values[0]["error"]["code"], -32001);
+        assert_eq!(values[1]["result"]["ok"], true);
     }
 }

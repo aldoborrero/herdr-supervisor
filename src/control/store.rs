@@ -377,10 +377,7 @@ impl Store {
 
     pub fn snapshot(&self, credential: &str, run_id: &str) -> Result<Value> {
         let principal = authenticate(&self.connection, credential)?;
-        ensure!(
-            principal.role == "owner" || principal.run.as_deref() == Some(run_id),
-            "run access denied"
-        );
+        supervise(&principal, run_id)?;
         let run: Run = document(&self.connection, "runs", run_id)?;
         let active_attempts: u64 = self.connection.query_row(
             "SELECT count(*) FROM attempts WHERE run=?1 AND active=1",
@@ -482,12 +479,37 @@ impl Store {
         topics: &[String],
         budget: usize,
     ) -> Result<Value> {
-        let p = authenticate(&self.connection, credential)?;
-        ensure!(
-            p.role == "owner" || p.run.as_deref() == Some(run),
-            "memory access denied"
-        );
-        memory_snapshot(&self.connection, run, topics, budget.min(32000))
+        let tx = self.connection.unchecked_transaction()?;
+        let p = authenticate(&tx, credential)?;
+        if ["worker", "reviewer"].contains(&p.role.as_str()) {
+            let a: Attempt = document(
+                &tx,
+                "attempts",
+                p.attempt
+                    .as_deref()
+                    .context("memory attempt scope missing")?,
+            )?;
+            worker(&p, &a, p.generation)?;
+            ensure!(a.run == run, "memory run access denied");
+            let task: Task = document(&tx, "tasks", &a.task)?;
+            ensure!(
+                p.run.as_deref() == Some(run)
+                    && task.run == a.run
+                    && task.contract_hash == a.contract_hash,
+                "memory assignment contract changed"
+            );
+            ensure!(
+                topics
+                    .iter()
+                    .all(|t| t == "preferences" || task.contract.memory_topics.contains(t)),
+                "memory topic outside assigned contract"
+            );
+        } else {
+            supervise(&p, run)?;
+        }
+        let result = memory_snapshot(&tx, run, topics, budget.min(32000))?;
+        tx.commit()?;
+        Ok(result)
     }
 }
 
