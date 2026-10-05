@@ -728,7 +728,7 @@ fn migration_preserves_v2_authority_credentials_and_operation_replays() {
         .query_row("SELECT count(*) FROM journal", [], |r| r.get(0))
         .unwrap();
     // Restore the actual v2 schema, retaining the authoritative rows and signed outbox.
-    f.store.connection.execute_batch("DROP TABLE verification_worktrees; DROP TABLE check_runs; DROP TABLE review_assignments; DROP TABLE repository_bindings; DROP INDEX active_integration; PRAGMA user_version=2;").unwrap();
+    f.store.connection.execute_batch("DROP TABLE coordinator_notices; DROP TABLE coordinator_routes; DROP TABLE verification_worktrees; DROP TABLE check_runs; DROP TABLE review_assignments; DROP TABLE repository_bindings; DROP INDEX active_integration; PRAGMA user_version=2;").unwrap();
     let state = f.store.dir.clone();
     f.store = Store::open(&state).unwrap();
     assert_eq!(f.store.snapshot(&f.supervisor, &f.run).unwrap(), before);
@@ -790,6 +790,7 @@ async fn continuous_controller_verifies_without_blocking_api_and_applies_owned_r
         config_path.clone(),
         x.config.clone(),
         true,
+        None,
     ));
     tokio::time::timeout(Duration::from_secs(8), async {
         while !started.exists() {
@@ -824,9 +825,15 @@ async fn continuous_controller_verifies_without_blocking_api_and_applies_owned_r
     assert!(!x.f.store.dir.join("control.sock").exists());
     let checked = verification::integration(&x.f.store.connection, &i.id).unwrap();
     x.queue_apply(&checked);
-    let applied = service::controller(x.f.store.dir.clone(), config_path, x.config.clone(), true)
-        .await
-        .unwrap();
+    let applied = service::controller(
+        x.f.store.dir.clone(),
+        config_path,
+        x.config.clone(),
+        true,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(applied["verification"]["state"], "applied");
     assert_eq!(
         git(&x.repo, &["rev-parse", &x.reference()]),

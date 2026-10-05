@@ -266,6 +266,15 @@ pub struct CriterionReview {
     deny_unknown_fields
 )]
 pub enum Mutation {
+    BindCoordinator {
+        run: String,
+        expected_revision: u64,
+        endpoint: super::coordinator::Endpoint,
+    },
+    AcknowledgeNotices {
+        run: String,
+        ids: Vec<String>,
+    },
     RequestVerification {
         attempt: String,
         expected_revision: u64,

@@ -103,6 +103,7 @@ pub async fn controller(
     broker_config: PathBuf,
     config: super::git_pipeline::Config,
     once: bool,
+    coordinator: Option<super::coordinator::Config>,
 ) -> Result<Value> {
     let _relay = super::api::lock(&state, "relay.lock")?;
     let mut store = super::store::Store::open(&state)?;
@@ -115,6 +116,27 @@ pub async fn controller(
     let api = tokio::spawn(super::api::serve(state.clone(), async {
         let _ = stopped.await;
     }));
+    let (notify_stop, notify_stopped) = tokio::sync::oneshot::channel();
+    let notify_state = state.clone();
+    let notifier = tokio::spawn(async move {
+        if let Some(config) = coordinator {
+            let mut stopped = notify_stopped;
+            loop {
+                let path = notify_state.clone();
+                let config = config.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    super::coordinator::deliver(&mut super::store::Store::open(&path)?, &config)
+                })
+                .await;
+                match result {
+                    Ok(Ok(_)) => (),
+                    Ok(Err(e)) => eprintln!("coordinator notices: {e}"),
+                    Err(e) => eprintln!("coordinator notifier task: {e}"),
+                };
+                tokio::select! {_=&mut stopped=>break,_=tokio::time::sleep(Duration::from_millis(500))=>()}
+            }
+        }
+    });
     let outcome=async{
         let mut last_rowid=0i64;
         loop {
@@ -166,6 +188,9 @@ pub async fn controller(
         }
     }.await;
     let _ = stop.send(());
-    api.await??;
+    let _ = notify_stop.send(());
+    let api_result = api.await;
+    notifier.await?;
+    api_result??;
     outcome
 }

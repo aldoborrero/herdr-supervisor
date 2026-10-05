@@ -122,11 +122,16 @@ impl Store {
             }
             2 => (),
             3 => (),
+            4 => (),
             _ => bail!("unsupported controller schema {version}; no migration applied"),
         }
         if version <= 2 {
             tx.execute_batch(include_str!("migration3.sql"))?;
             tx.pragma_update(None, "user_version", 3)?;
+        }
+        if version <= 3 {
+            tx.execute_batch(include_str!("migration4.sql"))?;
+            tx.pragma_update(None, "user_version", 4)?;
         }
         tx.commit()?;
         Ok(Self {
@@ -439,7 +444,7 @@ pub fn document<T: DeserializeOwned>(c: &Connection, table: &str, id: &str) -> R
     Ok(serde_json::from_str(&text)?)
 }
 
-fn own(p: &Principal) -> Result<()> {
+pub(super) fn own(p: &Principal) -> Result<()> {
     ensure!(p.role == "owner", "owner capability required");
     Ok(())
 }
@@ -564,8 +569,11 @@ fn add_dependency(c: &Connection, task: &Task, predecessor: &str) -> Result<()> 
     Ok(())
 }
 
-fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) -> Result<Value> {
+pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) -> Result<Value> {
     match command {
+        Mutation::BindCoordinator { .. } | Mutation::AcknowledgeNotices { .. } => {
+            super::coordinator::mutate(tx, p, command)
+        }
         Mutation::RequestVerification { .. }
         | Mutation::RequestReview { .. }
         | Mutation::SubmitReview { .. }
@@ -636,6 +644,8 @@ fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) -> Result<Val
             own(p)?;
             let mut r: Run = document(tx, "runs", run)?;
             revision(r.revision, *expected_revision)?;
+            tx.execute("UPDATE coordinator_routes SET active=0 WHERE run=?1", [run])?;
+            tx.execute("UPDATE coordinator_notices SET state='superseded' WHERE run=?1 AND state IN ('pending','retry')",[run])?;
             let generation: u64 = tx.query_row("SELECT COALESCE(MAX(generation),0)+1 FROM principals WHERE role='supervisor' AND run=?1", [run], |r|r.get(0))?;
             tx.execute(
                 "UPDATE principals SET active=0 WHERE role='supervisor' AND run=?1",

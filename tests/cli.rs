@@ -34,6 +34,159 @@ fn hp(home: &Path, args: &[&str]) -> std::process::Output {
 }
 
 #[test]
+fn connect_native_coordinator_publishes_private_capability_and_context_without_printing_it() {
+    use serde_json::{Value, json};
+    use std::{
+        io::{BufRead, Write},
+        os::unix::fs::PermissionsExt,
+        time::{Duration, Instant},
+    };
+    struct Server(std::process::Child);
+    impl Drop for Server {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let home = tempfile::tempdir().unwrap();
+    let state = home.path().join("controller");
+    let state_arg = state.to_str().unwrap();
+    assert!(
+        hp(home.path(), &["control", "--state", state_arg, "init"])
+            .status
+            .success()
+    );
+    let admin = state.join("admin.token");
+    let input = home.path().join("create.json");
+    std::fs::write(&input,serde_json::to_vec(&json!({"method":"create_run","params":{"project":"demo","repo":"/fixture/repo","base_oid":"1111111111111111111111111111111111111111","objective":"test coordinator attachment","policy":{"max_active":2,"reserved_reviewers":1,"max_attempts":2,"duration_secs":3600,"require_review":true,"profiles":{"auto":{"runtime":"codex","argv":[],"limit":2}},"checks":{}}}})).unwrap()).unwrap();
+    let created = hp(
+        home.path(),
+        &[
+            "control",
+            "--state",
+            state_arg,
+            "apply",
+            "--credential",
+            admin.to_str().unwrap(),
+            "--operation",
+            "create",
+            "--request",
+            input.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        created.status.success(),
+        "{}",
+        String::from_utf8_lossy(&created.stderr)
+    );
+    let run: Value = serde_json::from_slice(&created.stdout).unwrap();
+    let run = run["id"].as_str().unwrap();
+    let mut api = Server(
+        Command::new(BIN)
+            .env_clear()
+            .env("HOME", home.path())
+            .args(["control", "--state", state_arg, "serve"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let until = Instant::now() + Duration::from_secs(5);
+    while !state.join("control.sock").exists() {
+        assert!(api.0.try_wait().unwrap().is_none());
+        assert!(Instant::now() < until);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mailer = home.path().join("mailer");
+    std::fs::create_dir(&mailer).unwrap();
+    let receiver = mailer.join("receiver.token");
+    std::fs::write(&receiver, "receiver-fixture-0000000000000000000000000000").unwrap();
+    std::fs::set_permissions(&receiver, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let listener = std::os::unix::net::UnixListener::bind(mailer.join("daemon.sock")).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let doctor = std::thread::spawn(move || {
+        for _ in 0..2 {
+            let until = Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((s, _)) => break s,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < until);
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(e) => panic!("{e}"),
+                }
+            };
+            let mut request = String::new();
+            std::io::BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut request)
+                .unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(&request).unwrap()["op"],
+                "doctor"
+            );
+            writeln!(stream,"{}",json!({"data":{"agent":"coordinator","session":"11111111-1111-4111-8111-111111111111","epoch":1,"runtime":"codex","location":"22222222-2222-4222-8222-222222222222"}})).unwrap();
+        }
+    });
+    let arguments = [
+        "control",
+        "--state",
+        state_arg,
+        "connect-supervisor",
+        "--credential",
+        admin.to_str().unwrap(),
+        "--runtime-credential",
+        receiver.to_str().unwrap(),
+        "--mailer-state",
+        mailer.to_str().unwrap(),
+        "--operation",
+        "bind-native",
+        "--expected-revision",
+        "1",
+        run,
+    ];
+    let first = hp(home.path(), &arguments);
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let second = hp(home.path(), &arguments);
+    assert!(second.status.success());
+    assert_eq!(first.stdout, second.stdout);
+    doctor.join().unwrap();
+    let bound: Value = serde_json::from_slice(&first.stdout).unwrap();
+    let credential = bound["credential_file"].as_str().unwrap();
+    let token = std::fs::read_to_string(credential).unwrap();
+    assert!(!String::from_utf8_lossy(&first.stdout).contains(&token));
+    assert_eq!(
+        std::fs::metadata(credential).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let context = hp(
+        home.path(),
+        &[
+            "control",
+            "--state",
+            state_arg,
+            "context",
+            "--credential",
+            credential,
+            run,
+        ],
+    );
+    assert!(context.status.success());
+    let context: Value = serde_json::from_slice(&context.stdout).unwrap();
+    assert_eq!(context["run"]["id"], run);
+    assert!(
+        context["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("independent reviewer")
+    );
+    assert!(!context.to_string().contains(&token));
+}
+
+#[test]
 fn context_prints_a_usable_prefix_in_a_scrubbed_environment() {
     let home = tempfile::tempdir().unwrap();
     let root = home.path().join("my root");

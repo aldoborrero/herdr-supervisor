@@ -18,6 +18,10 @@ const MAX_FRAME: usize = 300000;
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ApiRequest {
+    CoordinatorContext {
+        token: String,
+        run: String,
+    },
     Apply {
         token: String,
         operation_id: String,
@@ -37,6 +41,9 @@ pub enum ApiRequest {
 
 pub fn handle(store: &mut Store, request: ApiRequest) -> Result<Value> {
     match request {
+        ApiRequest::CoordinatorContext { token, run } => {
+            super::coordinator::context(store, &token, &run)
+        }
         ApiRequest::Apply {
             token,
             operation_id,
@@ -280,6 +287,7 @@ fn mcp_request(dir: &Path, token: &str, request: &Value) -> Result<Value> {
         }
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({"tools":[
+            {"name":"supervisor_context","description":"Read current run authority, notices, curated memory and coordinator instructions. Notices are hints, not approval.","inputSchema":{"type":"object","properties":{"run":{"type":"string"}},"required":["run"],"additionalProperties":false}},
             {"name":"supervisor_apply","description":"Submit a scoped decision with a stable operation ID and explicit aggregate revision. Never interprets delivery as approval.","inputSchema":{"type":"object","properties":{"operation_id":{"type":"string"},"command":{"type":"object"}},"required":["operation_id","command"],"additionalProperties":false}},
             {"name":"supervisor_snapshot","description":"Read authoritative tasks and attempts for the authorized run.","inputSchema":{"type":"object","properties":{"run":{"type":"string"}},"required":["run"],"additionalProperties":false}},
             {"name":"supervisor_memory","description":"Read approved, versioned memory relevant to these topics.","inputSchema":{"type":"object","properties":{"run":{"type":"string"},"topics":{"type":"array","items":{"type":"string"}}},"required":["run","topics"],"additionalProperties":false}}
@@ -293,6 +301,10 @@ fn mcp_request(dir: &Path, token: &str, request: &Value) -> Result<Value> {
                     .into())
             };
             let api = match request["params"]["name"].as_str().context("tool name")? {
+                "supervisor_context" => ApiRequest::CoordinatorContext {
+                    token: token.into(),
+                    run: get("run")?,
+                },
                 "supervisor_apply" => ApiRequest::Apply {
                     token: token.into(),
                     operation_id: get("operation_id")?,

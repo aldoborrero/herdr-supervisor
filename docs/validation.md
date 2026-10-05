@@ -4,7 +4,7 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
-The local implementation suite currently passes **372 unit tests and 5 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
+The local implementation suite currently passes **380 unit tests and 6 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
 
 | Requirement | Evidence | Limit |
 | --- | --- | --- |
@@ -22,6 +22,9 @@ The local implementation suite currently passes **372 unit tests and 5 CLI tests
 | Receipt replay after cancellation | Worker-boundary test: exact accepted envelope can be acknowledged; a new envelope with the retired token is refused | Node signature/epoch must still be valid |
 | Monotonic receipts | Worker-boundary test sends a late publisher ACK after `controller_applied` | Model processing remains separate |
 | Lease release with inherited file descriptions | `lease_release_is_not_delayed_by_an_inherited_file_description` | Explicit unlock prevents fork/exec inheritance from delaying release |
+| Coordinator context and scoped acknowledgement | `coordinator_context_is_scoped_and_exposes_memory_evidence_without_secrets`, `context_drains_unacknowledged_notices_across_multiple_pages`; CLI test connects twice with one operation and reads private context | Attaches an existing local native session; automatic launch and large-run pagination pending |
+| Durable coordinator wakeups | `journal_cursor_and_notices_roll_back_together_and_restart_deduplicates`, `lost_mailer_response_or_sql_receipt_reuses_exact_target_and_frozen_body`, `rebinding_retires_old_capability_and_never_redirects_old_notice`, `wrong_recipient_receipt_is_unresolved_and_idle_notifier_needs_no_mailer`, `uncertain_send_cannot_be_retried_from_a_different_logical_author` | Mock mailer persistence/response loss; no model consumption claim |
+| Notifier service wiring | `controller_service_delivers_coordinator_bootstrap_with_real_broker` | One-cycle service, real NATS and mocked mailer |
 | Curated memory | `memory_is_curated_versioned_scoped_and_budgeted` | Run scope; live change delivery and project memory pending |
 | CLI bootstrap usability | `managed_control_help_and_bootstrap_are_usable_without_herdr` | Does not deploy services |
 | Combined candidate, independent review and owned Git CAS | `combined_candidate_review_and_checks_gate_owned_branch_for_sha1_and_sha256` uses real Git repositories, a divergent accepted base and an untouched dirty user checkout | Model review content simulated; code contracts only |
@@ -61,7 +64,8 @@ Mailer protocol-2 support is an independent local commit **`7a12d5a`** on `feat/
 - Cancelled-run repository binding reconciliation and conservative verification checkout cleanup.
 - Recovery after loss of the native wrapper; detached-descendant audit and conservative resource cleanup.
 - Idempotent/reconcilable mailer registration after a lost registration response.
-- Managed Projects UI/actions and prevention of legacy scheduler bypass.
+- Automatic coordinator launch, managed Projects UI/actions and prevention of legacy scheduler bypass.
+- Aggregate API/wire bounds and large-run context pagination.
 - NATS backoff/expiry handling, node lifecycle operations and deployment ACL examples.
 - Live memory change consumption and optional Markdown projection.
 - Opt-in NixOS/Home Manager modules and their evaluation tests.

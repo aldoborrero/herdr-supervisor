@@ -14,6 +14,7 @@ State paths are explicit. No startup command edits global agent configuration, i
 | Controller `owner.key` | Owner signing authority; never copied to nodes |
 | Controller `admin.token` | Local owner capability; never given to workers |
 | Controller `control.sock` | Private controller API |
+| Controller `coordinators/<run>/<generation>.token` | Run-scoped coordinator capability; retired when replaced |
 | Node `node.key` | Delegated node signing key |
 | Node `node.sqlite` | Commands, jobs, resource checkpoints and outgoing event receipts |
 | Node `worker.sock` | Scoped worker API |
@@ -52,6 +53,44 @@ Initialize the controller, then submit this shape with `control --state DIR appl
 The API returns a run ID and revision. `bind_supervisor` with that run and `expected_revision` issues a run-scoped credential; persist it privately. Rebinding retires the previous supervisor credential. Mutating decisions use explicit aggregate revisions; retry the *same* operation ID and content after an uncertain response. Reusing an ID with different content fails.
 
 The create-run operation records a logical repository identity. Node preparation and controller verification resolve it through their respective owner-supplied mappings. Controller verification binds the canonical Git common directory and refuses concurrent authority through a second alias. The owned integration branch must not preexist on first binding.
+
+## Connect a native coordinator
+
+The coordinator currently runs on the controller host and uses its private API. Execution nodes can be remote over NATS. This command attaches an **already registered** Codex, Claude or Pi session in the local mailer; automatic coordinator creation and launch from Projects are still pending.
+
+Enable the durable notifier by adding `--coordinator-config coordinator.json` to `run-controller`. Its configuration contains absolute paths:
+
+```json
+{
+  "mailer_state": "/private/mailer",
+  "sender_credential": "/private/supervisor-notifier.token",
+  "supervisor_binary": "/absolute/path/to/herdr-supervisor"
+}
+```
+
+The sender credential is a registered mailer agent/session token, **not** the mailer admin token. Use a dedicated sender. Mailer must support protocol-2 idempotent sends and exact recipient preconditions.
+
+With the controller API running, bind the receiving native session:
+
+```bash
+herdr-supervisor control --state CONTROLLER_DIR connect-supervisor \
+  --credential CONTROLLER_DIR/admin.token \
+  --runtime-credential /private/coordinator-mailer.token \
+  --mailer-state /private/mailer \
+  --operation connect-coordinator-1 --expected-revision RUN_REVISION RUN_ID
+```
+
+The receiving credential is also a registered mailer session token. The command reads its exact agent, mailer session/epoch, runtime and native UUID through mailer's `doctor`, then atomically creates a new supervisor generation and bootstrap notice. It prints the private controller credential **path**, never the token. Retry with the same operation ID and unchanged registration after a lost response. A changed registration requires an explicit new binding, not reuse of the old operation.
+
+The coordinator receives a context command pointing to that run's capability file. `control --state CONTROLLER_DIR context --credential CAPABILITY_FILE RUN_ID` and the `supervisor_context` MCP tool return objective/policy, tasks, attempts, dependency edges, node capacity, review/integration state, approved memory, pending memory proposals and notices. Instructions describe how to schedule through the scoped API. No global MCP configuration is installed.
+
+Notice intent and journal cursor commit together in SQLite. Before delivery, the notifier freezes content, destination, sender owner/agent and operation ID; retries preserve them after a lost mailer response or SQL receipt. Results, review/check outcomes, stopped attempts and memory decisions generate notices. They carry references rather than executing agent-authored text. Changing the logical sender blocks retry until the original sender is restored, because mailer scopes operation IDs by owner/author. Sender session/token rotation under the same owner/agent preserves that scope. Preserve the same authoritative mailer database; replacing it with an empty or stale copy loses its deduplication receipts. Only notices eligible for delivery contact mailer; an idle notifier needs no daemon connection.
+
+`mailer_stored` means mailer accepted persistence for the exact recipient. It does not establish native delivery or model processing. The coordinator explicitly submits `acknowledge_notices` with `run` and `ids` after inspecting context; an owner acknowledgement identifies the owner separately. Context prioritizes the oldest unacknowledged notices (100 per response) and includes their total count. Acknowledging a page makes the next page visible; it does not approve a task or result.
+
+Replacing the coordinator revokes the old capability and retires its pending notices. Retired notices keep their original destination; an already accepted or in-flight send cannot be undone. In particular, `superseded` does not prove the old recipient never received it. New generations receive a fresh bootstrap and current SQLite context.
+
+The context still inherits the snapshot API's aggregate size limit; large-run pagination remains required. Pending memory proposals are limited to ten per context. This integration has isolated IPC/broker tests with mocked mailer replies, not proof of a live coordinator model consuming its bootstrap.
 
 ## Enroll a node and provision NATS
 

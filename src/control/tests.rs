@@ -940,10 +940,11 @@ async fn private_api_and_mcp_share_authorization_and_incomplete_clients_do_not_b
             .is_err()
         );
         let lines = format!(
-            "{}\n{}\n{}\n",
+            "{}\n{}\n{}\n{}\n",
             json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}),
             json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
-            json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"supervisor_snapshot","arguments":{"run":run}}})
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"supervisor_snapshot","arguments":{"run":run}}}),
+            json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"supervisor_context","arguments":{"run":run}}})
         );
         let mut output = Vec::new();
         api::mcp(&state, &token, lines.as_bytes(), &mut output).unwrap();
@@ -952,8 +953,19 @@ async fn private_api_and_mcp_share_authorization_and_incomplete_clients_do_not_b
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect();
-        assert_eq!(results.len(), 2);
+        assert_eq!(results.len(), 3);
         assert_eq!(results[1]["result"]["isError"], false);
+        assert_eq!(results[2]["result"]["isError"], false);
+        let context: Value =
+            serde_json::from_str(results[2]["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(context["nodes"][0]["id"], "local");
+        assert!(
+            context["instructions"]
+                .as_str()
+                .unwrap()
+                .contains("request_verification")
+        );
         assert!(!String::from_utf8(output).unwrap().contains(&token));
     });
     checked.await.unwrap();
@@ -1769,6 +1781,8 @@ async fn worker_socket_and_mcp_expose_only_scoped_assignment() {
     assert!(!path.join("worker.sock").exists());
 }
 
+#[path = "coordinator_tests.rs"]
+mod coordinator_tests;
 #[path = "lifecycle_tests.rs"]
 mod lifecycle_tests;
 #[path = "verification_tests.rs"]

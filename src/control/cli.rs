@@ -25,6 +25,9 @@ enum ControlCommand {
         broker: PathBuf,
         #[arg(long)]
         repositories: PathBuf,
+        /// Local mailer sender and native coordinator notification configuration
+        #[arg(long)]
+        coordinator_config: Option<PathBuf>,
         #[arg(long)]
         once: bool,
     },
@@ -109,6 +112,26 @@ enum ControlCommand {
     },
     /// Create owner key, private database and admin credential (never print the token)
     Init,
+    /// Bind an already registered native coordinator and publish its scoped credential file
+    ConnectSupervisor {
+        #[arg(long)]
+        credential: PathBuf,
+        #[arg(long)]
+        runtime_credential: PathBuf,
+        #[arg(long)]
+        mailer_state: PathBuf,
+        #[arg(long)]
+        operation: String,
+        #[arg(long)]
+        expected_revision: u64,
+        run: String,
+    },
+    /// Read authoritative coordinator context, instructions and native notice receipts
+    Context {
+        #[arg(long)]
+        credential: PathBuf,
+        run: String,
+    },
     /// Create a node key locally. Enroll its public DID at the controller separately.
     NodeKey,
     /// Apply one versioned JSON mutation with a stable operation ID
@@ -223,13 +246,63 @@ pub fn run(args: ControlArgs) -> Result<()> {
         ControlCommand::RunController {
             broker,
             repositories,
+            coordinator_config,
             once,
         } => runtime()?.block_on(super::service::controller(
             args.state,
             broker,
             super::git_pipeline::read_config(&repositories)?,
             once,
+            coordinator_config
+                .as_deref()
+                .map(super::coordinator::read_config)
+                .transpose()?,
         ))?,
+        ControlCommand::Context {
+            credential: path,
+            run,
+        } => super::api::call(
+            &args.state,
+            &super::api::ApiRequest::CoordinatorContext {
+                token: credential(&path)?,
+                run,
+            },
+        )?,
+        ControlCommand::ConnectSupervisor {
+            credential: path,
+            runtime_credential,
+            mailer_state,
+            operation,
+            expected_revision,
+            run,
+        } => {
+            let doctor = super::api::call_json(
+                &mailer_state.join("daemon.sock"),
+                &json!({"op":"doctor","token":credential(&runtime_credential)?}),
+            )?;
+            let endpoint: super::coordinator::Endpoint = serde_json::from_value(
+                json!({"agent":doctor["agent"],"mailer_session":doctor["session"],"mailer_epoch":doctor["epoch"],"runtime":doctor["runtime"],"native_session":doctor["location"]}),
+            )?;
+            endpoint.validate()?;
+            let response = super::api::call(
+                &args.state,
+                &super::api::ApiRequest::Apply {
+                    token: credential(&path)?,
+                    operation_id: operation,
+                    command: Box::new(Mutation::BindCoordinator {
+                        run: run.clone(),
+                        expected_revision,
+                        endpoint,
+                    }),
+                },
+            )?;
+            let generation = response["generation"]
+                .as_u64()
+                .ok_or_else(|| anyhow::anyhow!("coordinator generation missing"))?;
+            let mut store = Store::open(&args.state)?;
+            super::coordinator::collect(&mut store)?;
+            json!({"run":run,"generation":generation,"revision":response["revision"],"credential_file":super::coordinator::credential_path(&args.state,&run,generation),"native_delivery":"pending"})
+        }
         ControlCommand::Verify {
             credential: path,
             repositories,

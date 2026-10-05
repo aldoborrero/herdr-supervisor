@@ -1,6 +1,7 @@
 //! Managed execution authority. Projects' files are views, never a second scheduler.
 pub mod api;
 pub mod cli;
+pub mod coordinator;
 pub mod executor;
 pub mod git_pipeline;
 pub mod identity;

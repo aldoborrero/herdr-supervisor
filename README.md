@@ -49,6 +49,8 @@ See [operations](docs/operations.md) for the request shape, node enrollment and 
 
 A worker receives its assignment only after the controller accepts the exact resource binding. Its private API/CLI/MCP permits reading its contract and selected memory, reporting readiness/results, proposing memory and inspecting its own event receipts. A reviewer receives the exact candidate and reports criterion-by-criterion findings through the same scoped transport. Neither role can dispatch agents, approve memory or alter run policy.
 
+An existing native coordinator session on the controller host can be attached with `control connect-supervisor`. It receives durable notices through mailer and reads current state through `control context` or `supervisor_context`. Replacing it revokes its previous capability; pending notices never change recipients. See [coordinator setup](docs/operations.md#connect-a-native-coordinator). Automatic coordinator launch and the managed Projects UI remain pending.
+
 The launch tests execute harmless stub processes and use fake Herdr/mailer responses alongside real Git and Unix sockets. They do **not** prove authenticated model processing. See [validation](docs/validation.md) for evidence and current gaps.
 
 ## Architecture
