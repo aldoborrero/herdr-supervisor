@@ -436,6 +436,79 @@ fn managed_create_publishes_one_bound_view_through_real_controller_ipc_without_l
     assert_eq!(journal, 1);
     let secret = std::fs::read_to_string(state.join("admin.token")).unwrap();
     assert!(!String::from_utf8_lossy(&recovered.stdout).contains(secret.trim()));
+    // Read a legacy large record through both CLI entry points, using real IPC.
+    let mut legacy = edited.clone();
+    legacy["legacy_evidence"] = json!("🦀".repeat(210000));
+    db.execute(
+        "UPDATE tasks SET doc=?2 WHERE id=?1",
+        rusqlite::params![edited["id"].as_str().unwrap(), legacy.to_string()],
+    )
+    .unwrap();
+    let page = hp(
+        home.path(),
+        &[
+            "--root",
+            root_arg,
+            "managed",
+            "page",
+            "managed-demo",
+            "--collection",
+            "tasks",
+        ],
+    );
+    assert!(page.status.success());
+    let page: Value = serde_json::from_slice(&page.stdout).unwrap();
+    let mut next = page["items"][0]["record"]["cursor"]
+        .as_str()
+        .map(str::to_owned);
+    assert!(next.is_some());
+    let mut text = String::new();
+    let mut index = 0;
+    let credential = state.join("admin.token");
+    while let Some(cursor) = next {
+        let part = if index % 2 == 0 {
+            hp(
+                home.path(),
+                &[
+                    "--root",
+                    root_arg,
+                    "managed",
+                    "record",
+                    "managed-demo",
+                    "--cursor",
+                    &cursor,
+                ],
+            )
+        } else {
+            hp(
+                home.path(),
+                &[
+                    "control",
+                    "--state",
+                    state_arg,
+                    "record",
+                    "--credential",
+                    credential.to_str().unwrap(),
+                    "--cursor",
+                    &cursor,
+                    receipt["run"].as_str().unwrap(),
+                ],
+            )
+        };
+        assert!(
+            part.status.success(),
+            "{}",
+            String::from_utf8_lossy(&part.stderr)
+        );
+        let part: Value = serde_json::from_slice(&part.stdout).unwrap();
+        assert_eq!(part["offset"], text.len());
+        text.push_str(part["text"].as_str().unwrap());
+        next = part["next_cursor"].as_str().map(str::to_owned);
+        index += 1;
+        assert!(index < 100);
+    }
+    legacy["dependencies"] = json!([]);
+    assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), legacy);
 }
 
 #[test]

@@ -34,3 +34,4 @@ pub mod worker;
 mod tests;
 
 pub mod receipt;
+pub mod record;

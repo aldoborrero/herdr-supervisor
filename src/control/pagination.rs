@@ -75,10 +75,10 @@ impl Collection {
             Self::CoordinatorLaunches => "coordinator_launches",
         }
     }
-    fn policy(self) -> bool {
+    pub(super) fn policy(self) -> bool {
         matches!(self, Self::Profiles | Self::PolicyChecks)
     }
-    fn source(self) -> String {
+    pub(super) fn source(self) -> String {
         match self {
             Self::Tasks => "SELECT t.rowid AS key,json_set(t.doc,'$.dependencies',json((SELECT json_group_array(d.predecessor) FROM dependencies d WHERE d.task=t.id))) AS doc FROM tasks t WHERE t.run=?1".into(),
             Self::Attempts => "SELECT a.rowid AS key,json_set(a.doc,'$.profile_snapshot',json(p.profile)) AS doc FROM attempts a LEFT JOIN attempt_profiles p ON p.attempt=a.id WHERE a.run=?1".into(),
@@ -149,7 +149,11 @@ impl Cursor {
     }
 }
 
-fn authorize(c: &Connection, token: &str, run: &str) -> Result<(Principal, String, u64)> {
+pub(super) fn authorize(
+    c: &Connection,
+    token: &str,
+    run: &str,
+) -> Result<(Principal, String, u64)> {
     let p = store::authenticate(c, token)?;
     store::supervise(&p, run)?;
     let revision = c.query_row("SELECT revision FROM runs WHERE id=?1", [run], |r| r.get(0))?;
@@ -268,12 +272,13 @@ fn read_page(
             format!("{:020}", row.get::<_, u64>(0)?)
         };
         let size: u64 = row.get(1)?;
-        ensure!(
-            size <= ITEM_BYTES as u64,
-            "record {key} exceeds the {ITEM_BYTES}-byte page item limit; no partial document returned"
-        );
-        let doc: String = row.get(2)?;
-        let item = json!({"key":key,"value":serde_json::from_str::<Value>(&doc)?});
+        let item = if size > ITEM_BYTES as u64 {
+            let reference = super::record::reference(tx, &owner, &p.id, run, collection, &key)?;
+            json!({"key":key,"value":null,"record":reference})
+        } else {
+            let doc: String = row.get(2)?;
+            json!({"key":key,"value":serde_json::from_str::<Value>(&doc)?})
+        };
         let size = serde_json::to_vec(&item)?.len() + 1;
         if used + size > PAGE_BYTES {
             more = true;
@@ -353,14 +358,24 @@ pub fn project_page(
     let tx = store.connection.unchecked_transaction()?;
     let mut context = read_overview(&tx, token, run)?;
     let mut page = read_page(&tx, token, run, collection, cursor, 50)?;
+    let references: Vec<Value> = page["items"]
+        .as_array()
+        .context("page items")?
+        .iter()
+        .filter(|item| !item["record"].is_null())
+        .cloned()
+        .collect();
+    let shown = page["items"].as_array().context("page items")?.len();
     let values: Vec<Value> = page["items"]
         .as_array_mut()
         .context("page items")?
         .drain(..)
+        .filter(|item| item["record"].is_null())
         .map(|mut item| item["value"].take())
         .collect();
     page.as_object_mut().unwrap().remove("items");
-    page["shown"] = json!(values.len());
+    page["shown"] = json!(shown);
+    context["record_references"] = json!(references);
     context["kind"] = json!("project_page");
     match collection {
         Tasks => {

@@ -18,6 +18,16 @@ read each item's `value`. Profiles and allowed checks are in `profiles` and
 `pending_notices` and `pending_memory`, and use `memory_proposals` for provenance.
 Memory pages include withdrawal revisions; never restore withdrawn text.
 
+An oversized item has `value:null` and a `record` reference instead. It is not
+an empty record. Call `supervisor_record` with the run and `record.cursor`, or
+`control record --credential FILE --cursor CURSOR RUN`. Concatenate returned
+`text` in exact `offset`/`end` byte order, following `next_cursor` until null.
+Verify the final UTF-8 byte count and SHA-256 against the reference before
+parsing the complete JSON. A fragment alone is not a record. Every chunk
+rechecks authority and the complete current projection; if it changes, discard
+the partial assembly and obtain a fresh reference from the collection page.
+Never infer permission to act from a reference or a partially read contract.
+
 Each page is a current SQLite read snapshot. Row updates may appear between
 pages, and rows added after the scan began require a fresh context/scan. Profile
 and check pages reject a changed run revision. Cursors confer no authority and

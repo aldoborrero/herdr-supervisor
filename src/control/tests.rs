@@ -1969,3 +1969,6 @@ mod editor_pages_tests;
 
 #[path = "operator_reads_tests.rs"]
 mod operator_reads_tests;
+
+#[path = "record_tests.rs"]
+mod record_tests;

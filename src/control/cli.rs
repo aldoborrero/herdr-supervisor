@@ -19,6 +19,14 @@ pub struct ControlArgs {
 
 #[derive(Subcommand)]
 enum ControlCommand {
+    /// Read the next UTF-8 JSON fragment of a referenced large record
+    Record {
+        #[arg(long)]
+        credential: PathBuf,
+        #[arg(long)]
+        cursor: String,
+        run: String,
+    },
     /// Read one bounded collection page from the authorized run
     Page {
         #[arg(long)]
@@ -310,6 +318,18 @@ fn credential(path: &Path) -> Result<String> {
 
 pub fn run(args: ControlArgs) -> Result<()> {
     let result = match args.command {
+        ControlCommand::Record {
+            credential: path,
+            cursor,
+            run,
+        } => super::api::call(
+            &args.state,
+            &super::api::ApiRequest::Record {
+                token: credential(&path)?,
+                run,
+                cursor,
+            },
+        )?,
         ControlCommand::Page {
             credential: path,
             collection,

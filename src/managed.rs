@@ -158,6 +158,17 @@ impl Binding {
         )
     }
 
+    pub fn record(&self, cursor: String) -> Result<Value> {
+        api::call(
+            &self.controller,
+            &api::ApiRequest::Record {
+                token: runtime::credential(&self.credential)?,
+                run: self.run.clone(),
+                cursor,
+            },
+        )
+    }
+
     pub fn open_context(&self, profile: Option<String>) -> Result<Value> {
         api::call(
             &self.controller,
@@ -304,6 +315,10 @@ pub fn overview(project: &Project) -> Result<String> {
     }
     if let Some(tasks) = page["items"].as_array() {
         for item in tasks {
+            if !item["record"].is_null() {
+                lines.push(format!("{}  large record · {} bytes · read managed page {} --collection tasks for its record cursor", item["key"].as_str().unwrap_or_default(),item["record"]["bytes"],project.slug));
+                continue;
+            }
             let t = &item["value"];
             lines.push(format!(
                 "{}  {}  {}",
@@ -532,6 +547,12 @@ pub struct ManagedArgs {
 }
 #[derive(Subcommand)]
 enum ManagedAction {
+    /// Read one fragment from a large-record reference returned by a page
+    Record {
+        slug: String,
+        #[arg(long)]
+        cursor: String,
+    },
     /// Create a run and publish its already-managed project view; retries preserve identity
     Create {
         #[arg(
@@ -623,6 +644,10 @@ pub fn run(ctx: &Ctx, args: ManagedArgs) -> Result<()> {
             };
             attach(&ctx.root, &slug, binding)?;
             println!("attached `{slug}` to controller authority");
+        }
+        ManagedAction::Record { slug, cursor } => {
+            let project = Project::load_view(&ctx.root, &slug)?;
+            println!("{}", binding(&project)?.record(cursor)?);
         }
         ManagedAction::Status { slug, full } => {
             let project = Project::load_view(&ctx.root, &slug)?;
@@ -1158,6 +1183,18 @@ fn panel_rows(
                 );
             }
         }
+    }
+    for reference in c["record_references"].as_array().into_iter().flatten() {
+        let title = format!(
+            "Large record {} · {} bytes · Enter for retrieval details",
+            reference["key"].as_str().unwrap_or_default(),
+            reference["record"]["bytes"]
+        );
+        add(
+            title,
+            json!({"record":reference["record"],"key":reference["key"],"instructions":"Read managed record SLUG --cursor CURSOR, concatenate text fields in byte-offset order until next_cursor is null, and verify bytes and sha256 before treating it as a complete record.","slug":slug}),
+            vec![],
+        );
     }
     if rows.len() == 1 {
         rows.push(Row {

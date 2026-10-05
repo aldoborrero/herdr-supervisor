@@ -4,11 +4,15 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
+The large-record checkpoint passes strict all-target Clippy (35.45 s, `.direnv/record-reads-full.log`) and `nix fmt` with no changes (`.direnv/record-reads-fmt.log`). Its full Nix build/check remains pending; the still-running package gate for `64751dd` predates these record reads.
+
 The bounded operator/receipt checkpoint also passes strict all-target Clippy (39.89 s, `.direnv/operator-reads-full.log`) and `nix fmt` (no changes, `.direnv/operator-reads-fmt.log`). Its full Nix build/check remains pending.
 
 **Last completed full Nix gate:** commit `352dcece5a03e21c079b9a397bdf89a2073df9dd` passes package build and `nix flake check` on x86_64-linux, with 520 unit and 10 CLI tests offline. It includes paginated coordinator context and scoped legacy reads. Picker and panel changes require their follow-up package gate. This does not establish other platforms or completion of the remaining feature scope.
 
-The local implementation suite currently passes **534 unit tests and 10 CLI tests** (local suite with four test threads), including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
+The local implementation suite currently passes **537 unit tests and 10 CLI tests** (local suite with four test threads), including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
+
+Large-record reads: `.direnv/record-reads-full.log` records **537 unit tests (45.08 s)** and **10 CLI tests (25.84 s)**. `record_tests` reconstructs the full public JSON through alternating real IPC/MCP reads, verifies exact offsets/hash/Unicode/escapes, rejects changed content and malformed UTF-8 positions, rechecks scope/retirement and covers named policy keys and private launch credential exclusion. The existing actual CLI workflow reconstructs a large record through both `managed record` and `control record`. The oversized pagination regression now proves explicit references advance to subsequent records; Projects renders references without mutation actions. The popup exposes retrieval details, not an embedded full large-record editor. SQLite projection construction and per-chunk whole-record hashing remain costs. The package gate for these changes remains pending.
 
 The subsequent package gate for `cf3ba46553272f74ad566a148a740b5be1aed938` failed: 525/526 unit tests passed; `paginated_panel_keys_send_exact_cursors_and_memory_history_has_no_approval_action` failed its rendered `approved` assertion. The renderer read ambient terminal dimensions; this regression now supplies a fixed 120×30 viewport, retaining the cursor/status/action assertions. The corrected test passes locally. That failed build did not reach CLI tests or flake check and is not a completed gate. Log: `.direnv/project-pages-nix-build.log`.
 

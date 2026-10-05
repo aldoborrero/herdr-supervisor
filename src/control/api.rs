@@ -41,6 +41,11 @@ fn response_bytes(value: &Value) -> Result<Vec<u8>> {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ApiRequest {
+    Record {
+        token: String,
+        run: String,
+        cursor: String,
+    },
     ProjectApplyReceipt {
         token: String,
         run: String,
@@ -105,6 +110,9 @@ pub enum ApiRequest {
 
 pub fn handle(store: &mut Store, request: ApiRequest) -> Result<Value> {
     match request {
+        ApiRequest::Record { token, run, cursor } => {
+            super::record::read(store, &token, &run, &cursor)
+        }
         ApiRequest::ProjectApplyReceipt {
             token,
             run,
@@ -443,6 +451,7 @@ fn mcp_request(dir: &Path, token: &str, request: &Value) -> Result<Value> {
         "tools/list" => Ok(json!({"tools":[
             {"name":"supervisor_context","description":"Read a bounded run overview and collection cursors. Read supervisor_page for tasks, profiles, checks, memory and notices before deciding.","inputSchema":{"type":"object","properties":{"run":{"type":"string"}},"required":["run"],"additionalProperties":false}},
             {"name":"supervisor_page","description":"Read complete records from one authorized collection. Follow next_cursor until null. Pages are current read snapshots, not one frozen scan; refresh context for new rows and recheck revisions before decisions.","inputSchema":{"type":"object","properties":{"run":{"type":"string"},"collection":{"type":"string","enum":super::pagination::Collection::ALL.iter().map(|c|c.name()).collect::<Vec<_>>()},"cursor":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":100,"default":50}},"required":["run","collection"],"additionalProperties":false}},
+            {"name":"supervisor_record","description":"Read one UTF-8 JSON fragment from a page's record reference. Concatenate text fields in offset order through next_cursor=null and verify bytes/sha256 before interpreting. A changed record requires a fresh page. Cursors do not grant authority.","inputSchema":{"type":"object","properties":{"run":{"type":"string"},"cursor":{"type":"string"}},"required":["run","cursor"],"additionalProperties":false}},
             {"name":"supervisor_apply","description":"Submit a scoped decision with a stable operation ID and explicit aggregate revision. Never interprets delivery as approval.","inputSchema":{"type":"object","properties":{"operation_id":{"type":"string"},"command":{"type":"object"}},"required":["operation_id","command"],"additionalProperties":false}},
             {"name":"supervisor_snapshot","description":"Read authoritative tasks and attempts for the authorized run.","inputSchema":{"type":"object","properties":{"run":{"type":"string"}},"required":["run"],"additionalProperties":false}},
             {"name":"supervisor_memory","description":"Read approved, versioned memory relevant to these topics.","inputSchema":{"type":"object","properties":{"run":{"type":"string"},"topics":{"type":"array","items":{"type":"string"}}},"required":["run","topics"],"additionalProperties":false}}
@@ -473,6 +482,11 @@ fn mcp_request(dir: &Path, token: &str, request: &Value) -> Result<Value> {
                         .map(|v| serde_json::from_value(v.clone()))
                         .transpose()?
                         .unwrap_or(50),
+                },
+                "supervisor_record" => ApiRequest::Record {
+                    token: token.into(),
+                    run: get("run")?,
+                    cursor: get("cursor")?,
                 },
                 "supervisor_apply" => ApiRequest::Apply {
                     token: token.into(),

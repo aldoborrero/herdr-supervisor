@@ -428,7 +428,7 @@ fn pagination_collections_preserve_provenance_withdrawal_and_hide_capabilities()
 }
 
 #[test]
-fn pagination_oversized_legacy_record_fails_without_partial_json() {
+fn pagination_oversized_legacy_record_returns_explicit_reference_and_advances() {
     let mut f = Fixture::new();
     let t = f.task();
     f.store
@@ -438,12 +438,24 @@ fn pagination_oversized_legacy_record_fails_without_partial_json() {
             rusqlite::params![t, json!({"oversized":"x".repeat(PAGE_BYTES)}).to_string()],
         )
         .unwrap();
-    let error =
-        pagination::page(&f.store, &f.owner, &f.run, Collection::Tasks, None, 100).unwrap_err();
-    assert!(error.to_string().contains("no partial document"));
+    f.task();
+    let page = pagination::page(&f.store, &f.owner, &f.run, Collection::Tasks, None, 1).unwrap();
+    assert!(page["items"][0]["value"].is_null());
+    assert_eq!(page["items"][0]["record"]["kind"], "record_reference");
+    let next = pagination::page(
+        &f.store,
+        &f.owner,
+        &f.run,
+        Collection::Tasks,
+        page["next_cursor"].as_str(),
+        1,
+    )
+    .unwrap();
+    assert!(next["items"][0]["value"]["contract"].is_object());
+    assert!(next["next_cursor"].is_null());
     assert_eq!(
         pagination::overview(&f.store, &f.owner, &f.run).unwrap()["collections"]["tasks"]["count"],
-        1
+        2
     );
 }
 
