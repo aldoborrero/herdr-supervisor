@@ -215,10 +215,29 @@ The new creation tests exercise actual controller handlers/SQLite and filesystem
 | Form validation, literal argv, runtime selection, scrolling and error retention | Three `managed_setup_form` tests and two `managed_setup_popup` tests, including Ctrl-R replay with saved name |
 | CLI creation/replay/resume/status and legacy fence | `managed_create_publishes_one_bound_view_through_real_controller_ipc_without_launching_agents` |
 
-Service provisioning, later task/profile editing and cross-host focus remain outside this creation checkpoint. Setup receipts describe local evidence, not a current service health assessment. Interrupted staging cleanup is deliberately still explicit. The final local suite passes 462 unit tests (7.98 s), 9 CLI tests (22.01 s) and strict all-target Clippy (11.85 s), including name-only Ctrl-R recovery and literal JSON argv. Log: `.direnv/managed-setup-final.log`. Nix package validation of this new source is pending.
+Service provisioning, later task/profile editing and cross-host focus remain outside this creation checkpoint. Setup receipts describe local evidence, not a current service health assessment. Interrupted staging cleanup is deliberately still explicit. The final local suite passes 462 unit tests (7.98 s), 9 CLI tests (22.01 s) and strict all-target Clippy (11.85 s), including name-only Ctrl-R recovery and literal JSON argv. Log: `.direnv/managed-setup-final.log`. Commit `3753538` subsequently passed its full package gate, recorded below.
 
 ### Plugin menu creation uses the managed form
 
 A real pseudoterminal regression exposed a remaining legacy path: `pane new`, used by the plugin menu, still prompted for a name and immediately created/opened a legacy project. `plugin_new_pane_opens_managed_form_and_cancel_creates_no_project` failed against `3753538` with the old `Name:` prompt. The action now enters the same managed form as popup N, and the manifest labels it **Supervisor: new managed project**. The regression verifies controller/credential/commit/check fields and Ctrl-R help, exits through the real keyboard loop and confirms no project directory was created. This is actual terminal/CLI execution with isolated HOME; it does not use a Herdr server or a model. Logs: `.direnv/managed-pane-before.log` and `.direnv/managed-pane-final.log`. The first test-harness revision was corrected to wait for the complete rendered form rather than a partial PTY read.
 
-The menu correction passes the full local suite: 462 unit tests (10.17 s), 10 CLI tests (24.60 s), strict all-target Clippy (18.71 s), and `nix fmt`. The Nix build/check process for `3753538` is still running and predates this menu correction; its eventual result must not be claimed for the follow-up source.
+The menu correction passes the full local suite: 462 unit tests (10.17 s), 10 CLI tests (24.60 s), strict all-target Clippy (18.71 s), and `nix fmt`. The Nix build/check for `3753538` subsequently passed and predates this menu correction; its result is not transferred to the follow-up source.
+
+### Full package gate for managed project creation
+
+Commit `375353812633ff0314e6c924f784d22dd961a934` passes full Nix build and flake check on x86_64-linux. Build compilation took 7 min 14 s, and the check phase took 4 min 51 s, including 462 unit tests (80.53 s) and 9 CLI tests (41.93 s). Formatter and service-module checks pass; incompatible systems were omitted. Output: `/nix/store/fq0bwah8v32wfki9vql5ic9cp510b2hk-herdr-supervisor-0.1.0`. Installed `managed --help` confirms create/resume-setup/setup-status. Logs: `.direnv/managed-setup-nix-build.log` and `.direnv/managed-setup-nix-check.log`. This evidence predates the plugin-menu correction and task form.
+
+## Task creation from the managed popup
+
+| Behavior | Evidence |
+| --- | --- |
+| Allowed checks, exact criteria/instructions and same-run dependencies | `managed_task_form_validates_policy_dependencies_and_preserves_literal_contract` |
+| Lost response retries exactly the captured operation and revision | `managed_task_form_freezes_uncertain_request_and_never_rebases_a_retry` |
+| Foreign context and inactive runs fail; code/artifact selection | `managed_task_form_rejects_foreign_scope_and_paused_runs_and_supports_artifacts` |
+| Contract above the OS single-argument limit goes over stdin | `managed_task_form_large_contract_travels_on_stdin_with_bounded_argv`; existing real-IPC creation CLI test now submits/replays 65,536 backslashes as instructions and checks one resulting task |
+| Failed submissions stay frozen; background refresh cannot retarget; stale view cannot open | `managed_task_form_popup_refuses_stale_rows_and_freezes_failed_submission` |
+| Actual authority accepts exact replay once and rejects concurrent stale creation | `managed_task_form_applies_one_exact_contract_with_dependencies_and_rejects_stale_creation`, with actual private API/SQLite, persisted dependency and zero attempts |
+
+These tests establish task entry and exact submission, not dispatch, task/profile editing or live model processing. Full package validation of the new source remains required.
+
+The task-form source passes the full local suite: 468 unit tests (7.69 s), 10 CLI tests (21.33 s) and strict all-target Clippy (10.57 s). Log: `.direnv/managed-task-form-full.log`. This includes the earlier real-pseudoterminal plugin-menu regression.

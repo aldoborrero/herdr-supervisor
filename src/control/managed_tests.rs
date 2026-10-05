@@ -426,3 +426,72 @@ async fn managed_open_reserves_once_and_displays_pending_launch_without_legacy_e
     stop.send(()).unwrap();
     api.await.unwrap().unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn managed_task_form_applies_one_exact_contract_with_dependencies_and_rejects_stale_creation()
+{
+    let mut f = Fixture::new();
+    let predecessor = f.task();
+    let world = World::new();
+    drop(project::create(&world.root, "demo", "", vec![]).unwrap());
+    let (stop, api) = server(&f).await;
+    managed::attach(&world.root, "demo", binding(&f)).unwrap();
+    let p = Project::load_view(&world.root, "demo").unwrap();
+    let context = managed::context(&p).unwrap();
+    let mut form = crate::managed_task_form::Form::new("demo", &context).unwrap();
+    crate::managed_task_form::tests::fill(&mut form);
+    form.fields[6].value = serde_json::to_string(&vec![&predecessor]).unwrap();
+    let args = form.prepare().unwrap();
+    let operation = args.args[4].clone();
+    let command: Mutation = serde_json::from_str(&args.request).unwrap();
+    let first = binding(&f).apply(&operation, command.clone()).unwrap();
+    let replay = binding(&f).apply(&operation, command).unwrap();
+    assert_eq!(first, replay);
+    assert_eq!(
+        first["contract"]["instructions"],
+        "Preserve literal $HOME and `text`"
+    );
+    let task_id = first["id"].as_str().unwrap();
+    assert_eq!(
+        f.store
+            .connection
+            .query_row("SELECT COUNT(*) FROM tasks", [], |r| r.get::<_, u64>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        f.store
+            .connection
+            .query_row(
+                "SELECT predecessor FROM dependencies WHERE task=?1",
+                [task_id],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        predecessor
+    );
+    assert_eq!(
+        f.store
+            .connection
+            .query_row("SELECT COUNT(*) FROM attempts", [], |r| r.get::<_, u64>(0))
+            .unwrap(),
+        0
+    );
+    let mut stale = crate::managed_task_form::Form::new("demo", &context).unwrap();
+    crate::managed_task_form::tests::fill(&mut stale);
+    stale.fields[0].value = "Concurrent task".into();
+    stale.fields[6].value = "[]".into();
+    let args = stale.prepare().unwrap();
+    let command = serde_json::from_str(&args.request).unwrap();
+    let error = binding(&f).apply(&args.args[4], command).unwrap_err();
+    assert!(error.to_string().contains("stale revision"), "{error:#}");
+    assert_eq!(
+        f.store
+            .connection
+            .query_row("SELECT COUNT(*) FROM tasks", [], |r| r.get::<_, u64>(0))
+            .unwrap(),
+        2
+    );
+    let _ = stop.send(());
+    api.await.unwrap().unwrap();
+}

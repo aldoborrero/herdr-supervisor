@@ -713,6 +713,13 @@ fn panel_rows(
             }
         }
         Section::Tasks => {
+            if c["run"]["state"] == "active" {
+                add(
+                    "Create a task…".into(),
+                    json!({"_task_form":{"run":c["run"],"tasks":c["tasks"]}}),
+                    vec![],
+                );
+            }
             for t in c["tasks"].as_array().into_iter().flatten() {
                 let actions = if ["interrupted", "changes_requested"]
                     .iter()

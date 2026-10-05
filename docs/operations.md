@@ -154,11 +154,13 @@ Attachment requires no legacy threads, recorded coordinator or task entries; it 
 | Popup section | Controller data and actions |
 | --- | --- |
 | Threads | Attempts, role, node and state; `s` requests stop with the displayed epoch |
-| Tasks | Task contracts, integration/check/review evidence; `r` requests repair of interrupted/rejected tasks |
+| Tasks | Create a task with Enter/`n` on its creation row; contracts, integration/check/review evidence; `r` requests repair of interrupted/rejected tasks |
 | Inbox | Native coordinator notices and their receipts; `a` acknowledges an inspected notice |
 | Settings | Objective, policy, nodes, native coordinator and launch receipts; `p` pauses/resumes, `x` cancels |
 | Memory | Approved topics with versions and pending proposals with evidence; `a` approves, `w` withdraws |
 | Routines | Displays the controller scheduling policy; legacy routines are not executed |
+
+The Tasks creation row opens a form for an active run. It captures that run's revision, policy and dependency index; refresh cannot replace them while the form is open. Criteria/checks/topics/dependencies use JSON lists, result type selects code or artifact, and the controller remains responsible for authorization and transactional validation. The form freezes the serialized request and operation ID before submission, sends JSON over stdin, and retains both after a lost or failed response. Enter retries it; Escape returns to the list without undoing any accepted operation. Stale views cannot open this form. See [task entry](getting-started.md#add-a-task-from-the-popup).
 
 Enter shows the selected record. Destructive decisions and memory changes display the captured record for confirmation. Requests keep the displayed revision/epoch and a stable operation ID; stale decisions fail rather than silently applying to newer state. The `project_apply` API checks run membership and applies/replays the operation in one transaction, including already-decided memory proposals. It cannot use an owner view credential to act on another run or enroll nodes.
 

@@ -139,6 +139,56 @@ fn managed_create_publishes_one_bound_view_through_real_controller_ipc_without_l
     );
     assert!(!legacy.status.success());
     assert!(String::from_utf8_lossy(&legacy.stderr).contains("managed by the controller"));
+    // The task form sends larger contracts over stdin, not one OS argument.
+    let instructions = "\\".repeat(65536);
+    let request = serde_json::to_vec(&json!({"method":"create_task", "params":{
+        "run":receipt["run"], "expected_revision":snapshot["run"]["revision"],
+        "contract":{"title":"Large literal contract", "instructions":instructions,
+            "criteria":["Preserve text"],"kind":"code","checks":[],"memory_topics":[]},
+        "dependencies":[]}}))
+    .unwrap();
+    assert!(request.len() > 131072);
+    let submit = || {
+        use std::io::Write;
+        let mut child = Command::new(BIN)
+            .env_clear()
+            .env("HOME", home.path())
+            .args([
+                "--root",
+                root_arg,
+                "managed",
+                "apply",
+                "managed-demo",
+                "--operation",
+                "large-task-form",
+                "--request",
+                "-",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(&request).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+    };
+    let task = submit();
+    assert_eq!(task["contract"]["instructions"], instructions);
+    assert_eq!(submit(), task);
+    let latest = hp(
+        home.path(),
+        &["--root", root_arg, "managed", "status", "managed-demo"],
+    );
+    assert!(latest.status.success());
+    let latest: Value = serde_json::from_slice(&latest.stdout).unwrap();
+    assert_eq!(latest["tasks"].as_array().unwrap().len(), 1);
+    assert_eq!(latest["active_attempts"], 0);
 }
 
 #[test]

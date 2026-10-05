@@ -972,6 +972,7 @@ pub fn summary(root: &Path) -> String {
 enum Mode {
     List,
     Setup(Box<crate::managed_setup_form::Form>),
+    TaskForm(Box<crate::managed_task_form::Form>),
     /// A scrollable text; `files` are selectable lines that open with ↵.
     Detail {
         title: String,
@@ -1592,6 +1593,26 @@ impl<'a> Popup<'a> {
                     editing,
                 },
             },
+            Mode::TaskForm(mut form) => {
+                use crate::managed_task_form::Outcome;
+                match form.key(key) {
+                    Ok(Outcome::Cancel) => Mode::List,
+                    Ok(Outcome::Stay) => Mode::TaskForm(form),
+                    Ok(Outcome::Submit(submission)) => {
+                        if self.run(&submission.args, Some(&submission.request)) {
+                            self.scope = Some(form.slug.clone());
+                            self.message = "Task created. Dispatch is a separate decision.".into();
+                            Mode::List
+                        } else {
+                            Mode::TaskForm(form)
+                        }
+                    }
+                    Err(error) => {
+                        self.message = error.to_string();
+                        Mode::TaskForm(form)
+                    }
+                }
+            }
             Mode::Setup(mut form) => {
                 use crate::managed_setup_form::Outcome;
                 match form.key(key) {
@@ -1906,6 +1927,17 @@ impl<'a> Popup<'a> {
                 return;
             }
             self.run(&["open".into(), slug], None);
+            return;
+        }
+        if !doc["_task_form"].is_null() && matches!(key.code, KeyCode::Enter | KeyCode::Char('n')) {
+            if doc["_view_read_only"] == true {
+                self.message = "State is stale; wait for the controller to reconnect".into();
+                return;
+            }
+            match crate::managed_task_form::Form::new(&slug, &doc["_task_form"]) {
+                Ok(form) => self.mode = Mode::TaskForm(Box::new(form)),
+                Err(error) => self.message = error.to_string(),
+            }
             return;
         }
         let lines = serde_json::to_string_pretty(&doc)
@@ -2471,6 +2503,60 @@ impl<'a> Popup<'a> {
         let body_top = 2;
         let body_height = height.saturating_sub(4);
         match &self.mode {
+            Mode::TaskForm(form) => {
+                queue!(
+                    out,
+                    cursor::MoveTo(0, body_top as u16),
+                    SetAttribute(Attribute::Bold),
+                    Print(fit(
+                        &format!(
+                            " New task · {}{}",
+                            form.slug,
+                            if form.frozen() {
+                                " · submission frozen"
+                            } else {
+                                ""
+                            }
+                        ),
+                        width
+                    )),
+                    SetAttribute(Attribute::Reset)
+                )?;
+                if body_height >= 4 {
+                    for (line, index) in form.visible(body_height - 3).enumerate() {
+                        let field = &form.fields[index];
+                        queue!(out, cursor::MoveTo(0, (body_top + 1 + line) as u16))?;
+                        if index == form.selected {
+                            queue!(out, SetAttribute(Attribute::Reverse))?;
+                        }
+                        queue!(
+                            out,
+                            Print(fit(
+                                &format!(
+                                    " {:<18} {}{}",
+                                    field.label,
+                                    crate::managed::display(&field.value),
+                                    if index == form.selected { "▏" } else { "" }
+                                ),
+                                width
+                            )),
+                            SetAttribute(Attribute::Reset)
+                        )?;
+                    }
+                }
+                if body_height >= 2 {
+                    queue!(
+                        out,
+                        cursor::MoveTo(0, (body_top + body_height - 1) as u16),
+                        SetAttribute(Attribute::Dim),
+                        Print(fit(
+                            &crate::managed::display(&form.fields[form.selected].hint),
+                            width
+                        )),
+                        SetAttribute(Attribute::Reset)
+                    )?;
+                }
+            }
             Mode::Setup(form) => {
                 queue!(
                     out,
@@ -2824,6 +2910,7 @@ impl<'a> Popup<'a> {
             Mode::List => format!(
                 "{}  N new supervised project  P project  / find  tab section  esc close",
                 match self.current().map(|r| &r.kind) {
+                    Some(RowKind::Managed { doc, .. }) if !doc["_task_form"].is_null() && doc["_view_read_only"] != true => "↵/n new task  c coordinator".into(),
                     Some(RowKind::Managed { actions, .. }) => format!(
                         "↵ details  c coordinator  {}",
                         actions
@@ -2841,6 +2928,8 @@ impl<'a> Popup<'a> {
             Mode::Projects(_) => {
                 "↑↓ choose  ↵ switch  N new supervised project  / filter  esc close".into()
             }
+            Mode::TaskForm(form) if form.frozen() => "↑↓/tab inspect  ↵ retry exact submission  esc return to inspect state".into(),
+            Mode::TaskForm(_) => "↑↓/tab field  ←→ result type  ↵ create task  esc cancel".into(),
             Mode::Setup(_) => {
                 "↑↓/tab field  ←→ runtime  ↵ create  ctrl-r resume name  esc cancel · starts no model".into()
             }
@@ -3096,6 +3185,59 @@ fn run_popup(mut popup: Popup<'_>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn managed_task_form_popup_refuses_stale_rows_and_freezes_failed_submission() {
+        use crate::managed_task_form::tests::{context, fill};
+        let world = crate::scenarios::World::new();
+        let ctx = world.ctx();
+        let mut popup = Popup::new(&ctx, None, String::new());
+        popup.section = 1;
+        popup.rows = crate::managed::panel_view(
+            "demo",
+            Section::Tasks,
+            crate::managed_refresh::View::Stale(context(), "offline".into()),
+        );
+        popup.selected = 1;
+        popup.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(popup.mode, Mode::List));
+        assert_eq!(world.runner.count("managed apply"), 0);
+        popup.rows = crate::managed::panel_view(
+            "demo",
+            Section::Tasks,
+            crate::managed_refresh::View::Current(context()),
+        );
+        popup.key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        assert!(matches!(popup.mode, Mode::TaskForm(_)));
+        if let Mode::TaskForm(form) = &mut popup.mode {
+            fill(form);
+        }
+        world.runner.on(
+            "managed apply",
+            crate::runner::fake::fail(1, "response lost"),
+        );
+        popup.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(&popup.mode, Mode::TaskForm(form) if form.frozen()));
+        assert!(!popup.refresh_view());
+        popup.key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert_eq!(world.runner.count("managed apply"), 1);
+        popup.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let calls = world.runner.calls.borrow();
+        let submissions = calls
+            .iter()
+            .filter(|c| c.display().contains("managed apply"))
+            .collect::<Vec<_>>();
+        assert_eq!(submissions.len(), 2);
+        assert_eq!(submissions[0].args, submissions[1].args);
+        assert_eq!(submissions[0].stdin, submissions[1].stdin);
+        assert!(
+            submissions[0]
+                .stdin
+                .as_ref()
+                .is_some_and(|s| s.contains("Preserve literal"))
+        );
+        assert_eq!(world.runner.count("thread start"), 0);
+    }
 
     #[test]
     fn managed_setup_popup_validates_keeps_failed_inputs_and_submits_the_cli_spec() {

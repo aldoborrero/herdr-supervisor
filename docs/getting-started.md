@@ -76,6 +76,14 @@ In the form, enter the saved project name and press **Ctrl-R** to resume with th
 
 Creation builds an already-bound view privately, then publishes it atomically without replacing an existing directory or symlink. A conflicting destination, changed credential or changed specification stops recovery. Existing operator edits survive a replay. A previously published folder that was subsequently removed is not silently recreated. Hidden `.managed-setup/<slug>/` intents and interrupted staging folders are retained for diagnosis; automatic cleanup is not implemented. Do not delete this state to retry an uncertain request.
 
+## Add a task from the popup
+
+Open the **Tasks** section and select **Create a task…** (Enter or `n`). This row appears for an active run with available controller context. Fill in the title, instructions, acceptance criteria and result type (`code` or `artifact`). Criteria are a JSON list of strings. Checks default to all checks in the captured run policy; memory topics and predecessor task IDs are also JSON lists. Only checks authorized by that policy and dependencies from that run are accepted.
+
+Enter creates the task through `managed apply`. It does not dispatch an agent. The request retains the run revision captured when the form opened, so a concurrent change may require returning to the refreshed task list and opening a new form. Controller errors keep the submitted form visible. Once submitted, its request is frozen: Enter retries exactly the same operation and Escape returns to inspect current state. Do not interpret Escape as cancelling a request that the controller may already have accepted. After an uncertain response, inspect the task list before intentionally creating another task.
+
+The form writes its JSON request to CLI stdin, so large instructions do not become one oversized process argument. Dedicated forms for editing existing task contracts and run profiles remain pending.
+
 ## Start the coordinator when ready
 
 If you supplied a launcher configuration and enabled the controller notifier, use:
