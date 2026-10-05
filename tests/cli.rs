@@ -6,6 +6,142 @@ use std::process::Command;
 const BIN: &str = env!("CARGO_BIN_EXE_herdr-supervisor");
 
 #[test]
+fn managed_create_publishes_one_bound_view_through_real_controller_ipc_without_launching_agents() {
+    use serde_json::{Value, json};
+    use std::{
+        process::Stdio,
+        time::{Duration, Instant},
+    };
+    struct Api(std::process::Child);
+    impl Drop for Api {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let home = tempfile::tempdir().unwrap();
+    let state = home.path().join("controller");
+    let root = home.path().join("project views");
+    let state_arg = state.to_str().unwrap();
+    let root_arg = root.to_str().unwrap();
+    assert!(
+        hp(home.path(), &["control", "--state", state_arg, "init"])
+            .status
+            .success()
+    );
+    let mut api = Api(Command::new(BIN)
+        .env_clear()
+        .env("HOME", home.path())
+        .args(["control", "--state", state_arg, "serve"])
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap());
+    let until = Instant::now() + Duration::from_secs(5);
+    while !state.join("control.sock").exists() {
+        assert!(api.0.try_wait().unwrap().is_none());
+        assert!(Instant::now() < until);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let spec = json!({"name":"Managed demo","controller":state,"credential":state.join("admin.token"),
+        "repo":"/logical/repository","base_oid":"1111111111111111111111111111111111111111",
+        "objective":"Keep literal $HOME and `text`",
+        "policy":{"max_active":2,"reserved_reviewers":1,"max_attempts":3,"duration_secs":3600,
+            "require_review":true,"profiles":{"auto":{"runtime":"codex","argv":[],"limit":2}},"checks":{}}});
+    let file = home.path().join("setup.json");
+    std::fs::write(&file, serde_json::to_vec(&spec).unwrap()).unwrap();
+    let first = hp(
+        home.path(),
+        &[
+            "--root",
+            root_arg,
+            "managed",
+            "create",
+            "--spec",
+            file.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let replay = hp(
+        home.path(),
+        &[
+            "--root",
+            root_arg,
+            "managed",
+            "create",
+            "--spec-json",
+            &spec.to_string(),
+        ],
+    );
+    assert!(
+        replay.status.success(),
+        "{}",
+        String::from_utf8_lossy(&replay.stderr)
+    );
+    assert_eq!(first.stdout, replay.stdout);
+    let resumed = hp(
+        home.path(),
+        &[
+            "--root",
+            root_arg,
+            "managed",
+            "resume-setup",
+            "managed-demo",
+        ],
+    );
+    assert!(
+        resumed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    assert_eq!(resumed.stdout, first.stdout);
+    let local = hp(
+        home.path(),
+        &[
+            "--root",
+            root_arg,
+            "managed",
+            "setup-status",
+            "managed-demo",
+        ],
+    );
+    assert!(local.status.success());
+    let local: Value = serde_json::from_slice(&local.stdout).unwrap();
+    assert_eq!(local["recorded_state"], "published");
+    assert_eq!(local["current_controller_state_verified"], false);
+    let receipt: Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(receipt["models_started"], false);
+    let snapshot = hp(
+        home.path(),
+        &["--root", root_arg, "managed", "status", "managed-demo"],
+    );
+    assert!(snapshot.status.success());
+    let snapshot: Value = serde_json::from_slice(&snapshot.stdout).unwrap();
+    assert_eq!(snapshot["run"]["id"], receipt["run"]);
+    assert_eq!(snapshot["run"]["objective"], spec["objective"]);
+    assert_eq!(snapshot["active_attempts"], 0);
+    assert_eq!(snapshot["coordinator_launches"], json!([]));
+    let token = std::fs::read_to_string(state.join("admin.token")).unwrap();
+    assert!(!String::from_utf8_lossy(&first.stdout).contains(&token));
+    let legacy = hp(
+        home.path(),
+        &[
+            "--root",
+            root_arg,
+            "thread",
+            "stop",
+            "managed-demo",
+            "t-0001",
+        ],
+    );
+    assert!(!legacy.status.success());
+    assert!(String::from_utf8_lossy(&legacy.stderr).contains("managed by the controller"));
+}
+
+#[test]
 fn continuous_services_deliver_review_integrate_and_stop_across_node_restart() {
     continuous_workflow(false);
 }

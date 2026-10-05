@@ -139,7 +139,7 @@ Mailer protocol-2 support is an independent local commit **`7a12d5a`** on `feat/
 - Recovery/abandonment of uncertain cancelled-run effects and conservative verification checkout cleanup.
 - Recovery after loss of the native wrapper; detached-descendant audit and conservative resource cleanup.
 - Idempotent/reconcilable mailer registration after a lost registration response.
-- Full onboarding, task/profile forms and cross-host resource focus.
+- Service onboarding, task/profile editing forms and cross-host resource focus. Managed project creation now has a form and resumable CLI.
 - Aggregate API/wire bounds and large-run context pagination.
 - Recovery/requeue of terminal outgoing records and grant/node lifecycle operations.
 - Optional project/cross-run memory and Markdown projection.
@@ -184,12 +184,35 @@ The new artifact pipeline has focused evidence separate from the earlier content
 | Node migration | `artifact_pipeline_node_schema_upgrade_preserves_jobs_and_pending_signed_events` | Schema 6 to 7 preserves existing jobs and frozen pending event bytes |
 | Continuous artifact lifecycle | CLI `continuous_services_verify_artifacts_before_native_review_and_complete_without_git_integration` | Actual services and CLI upload, Git worktrees, native wrappers, IPC and NATS; fixture asserts files/hash/path at mailer bootstrap, criterion review and process exit before run completion; model/Herdr/mailer boundaries simulated |
 
-The checkpoint passes `cargo test --locked --offline` (449 unit tests in 7.60 s and 8 CLI tests in 23.66 s), strict all-target Clippy (10.35 s after removing two redundant references), and `nix fmt`. The same artifact-pipeline commit `bec9f94` subsequently passed full package build and flake check; the coordinator-notice follow-up below requires a new package gate. No host, live session, shared broker or publication has been changed.
+The checkpoint passes `cargo test --locked --offline` (449 unit tests in 7.60 s and 8 CLI tests in 23.66 s), strict all-target Clippy (10.35 s after removing two redundant references), and `nix fmt`. The same artifact-pipeline commit `bec9f94` subsequently passed full package build and flake check; the coordinator-notice follow-up also passed its package gate as recorded below. No host, live session, shared broker or publication has been changed.
 
 ### Artifact review wakes the coordinator
 
-A follow-up review found that the coordinator journal filter selected `submit_review` but omitted the new `submit_artifact_review` event. The cross-node artifact test now binds a native coordinator route and requires one pending notice for the exact reviewer after controller application. It failed against `bec9f94` (zero notices) and passes with the filter correction. All eight coordinator regressions and strict all-target Clippy also pass. Logs: `.direnv/artifact-notice-regression.log` and `.direnv/artifact-notice-fix.log`. This is durable notice creation; the existing notifier tests separately cover native delivery, lost responses and exact recipient fencing. Package validation must include this follow-up before treating the current head as fully Nix-validated.
+A follow-up review found that the coordinator journal filter selected `submit_review` but omitted the new `submit_artifact_review` event. The cross-node artifact test now binds a native coordinator route and requires one pending notice for the exact reviewer after controller application. It failed against `bec9f94` (zero notices) and passes with the filter correction. All eight coordinator regressions and strict all-target Clippy also pass. Logs: `.direnv/artifact-notice-regression.log` and `.direnv/artifact-notice-fix.log`. This is durable notice creation; the existing notifier tests separately cover native delivery, lost responses and exact recipient fencing. The follow-up package gate subsequently passed at `a32074f`, as recorded below.
 
 ### Full package gate for the artifact pipeline
 
 Commit `bec9f949376391bfbf64bd52dd1561d8ab72d49a` passes full `nix build` and `nix flake check` on x86_64-linux using the same explicit full-revision URL, `--cores 1 --max-jobs 1` and offline package tests. Build compilation took 5 min 42 s and the check phase 6 min 45 s, including all 449 unit tests (81.18 s) and 8 CLI tests (43.33 s). Formatter and module checks pass. The installed `control --help` smoke also passes. Output: `/nix/store/fcrrs7n2k5qslidfddnfz9h4n94c15an-herdr-supervisor-0.1.0`. Logs: `.direnv/artifact-pipeline-nix-build.log` and `.direnv/artifact-pipeline-nix-check.log`. This package predates the coordinator-notice fix described above; no validation claim is transferred to unbuilt changes.
+
+### Full package gate for coordinator artifact notices
+
+Commit `a32074ff1cc4e16edc99920e3df17376d54d10f8` passes full Nix build and flake check on x86_64-linux. Build compilation took 6 min 16 s; the check phase took 8 min 11 s, including 449 unit tests (86.71 s) and 8 CLI tests (42.71 s). Formatter and service-module checks pass; incompatible systems were omitted. Output: `/nix/store/1cj91g4sqqz8vnyl18p6z9x4mcbch9hz-herdr-supervisor-0.1.0`. Logs: `.direnv/artifact-notice-nix-build.log` and `.direnv/artifact-notice-nix-check.log`. This validates the notice fix and all prior artifact pipeline changes, not the subsequent project-creation work.
+
+## Managed project creation and recovery
+
+The new creation tests exercise actual controller handlers/SQLite and filesystem publication; the CLI regression starts the actual private controller API. No model is started.
+
+| Behavior | Evidence |
+| --- | --- |
+| View appears only after its binding, one run/operation on replay | `managed_setup_is_visible_only_after_binding_and_replays_one_run_without_launching_models` |
+| Lost controller response retains exact request identity | `managed_setup_lost_controller_response_reuses_frozen_operation_after_restart` |
+| Lost publication receipt preserves operator edits | `managed_setup_lost_publication_receipt_recovers_without_overwriting_the_published_view` |
+| Changed inputs/credentials cannot silently change the operation | `managed_setup_keeps_scope_and_credentials_frozen_after_a_lost_response` |
+| Foreign directories and a racing empty destination survive | `managed_setup_refuses_foreign_destinations_and_atomic_publish_cannot_replace_even_empty_directories` |
+| Wrong scope and removal after publication fail conservatively | `managed_setup_rejects_wrong_receipts_and_never_recreates_a_deleted_published_project` |
+| Lease contention and invalid policy cannot issue a request | `managed_setup_private_intent_fences_contention_and_invalid_specs_make_no_project` |
+| Declarative symlink allowed, mutable intent symlink refused | `managed_setup_allows_linked_declarative_config_but_refuses_linked_mutable_intent` |
+| Form validation, literal argv, runtime selection, scrolling and error retention | Three `managed_setup_form` tests and two `managed_setup_popup` tests, including Ctrl-R replay with saved name |
+| CLI creation/replay/resume/status and legacy fence | `managed_create_publishes_one_bound_view_through_real_controller_ipc_without_launching_agents` |
+
+Service provisioning, later task/profile editing and cross-host focus remain outside this creation checkpoint. Setup receipts describe local evidence, not a current service health assessment. Interrupted staging cleanup is deliberately still explicit. The final local suite passes 462 unit tests (7.98 s), 9 CLI tests (22.01 s) and strict all-target Clippy (11.85 s), including name-only Ctrl-R recovery and literal JSON argv. Log: `.direnv/managed-setup-final.log`. Nix package validation of this new source is pending.

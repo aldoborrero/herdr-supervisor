@@ -6,7 +6,7 @@ This guide covers `control` and the managed Projects view. The [inherited Projec
 
 Run `control run-controller --broker BROKER_JSON --repositories REPOSITORIES_JSON` against one private controller state directory. It combines the API, relay and Git verifier. `control serve` and `control relay-controller` expose the first two components independently; they do not execute checks or integration intents. Each execution node has a different private directory, its own signing key, and a `control run-node` process combining its relay, worker API and executor. The node's SQLite inbox/outbox survives process restarts. The separate mailer daemon must already be running locally on that node.
 
-State paths are explicit. No startup command edits global agent configuration, installs Herdr plugins or restarts shared sessions. Opt-in [NixOS and Home Manager service modules](services.md) wrap these commands. A complete onboarding command remains pending.
+State paths are explicit. No startup command edits global agent configuration, installs Herdr plugins or restarts shared sessions. Opt-in [NixOS and Home Manager service modules](services.md) wrap these commands. Project creation is available through `managed create` and the popup form; service provisioning remains explicit. See [getting started](getting-started.md).
 
 | File or directory | Owner and purpose |
 | --- | --- |
@@ -125,6 +125,14 @@ SQLite reserves one generation before external effects. An owner mutation that r
 `managed status` and the popup's Settings section expose launch state, errors and process exit receipts. Reopening a pending launch reports its state. Lost workspace or pane-run replies trigger inspection without repeating creation or launch. A lost mailer registration response stays uncertain and needs reconciliation; it never silently rotates a possibly live receiver. A missing wrapper exit receipt also stays unresolved. No stored PID is signalled during recovery.
 
 Run cancellation, deadline expiry or generation retirement stop a process still owned by its wrapper. To replace an owned coordinator without cancelling the run, the owner can submit `bind_supervisor` for the current run revision; this retires the old generation. Wait until its launch state is `exited`, then open again. `--new` cannot override an active or unresolved coordinator. Existing manually attached sessions are not process-owned by this launcher. Resource deletion and automatic orphan recovery remain pending.
+
+## Create a managed project and view
+
+`managed create --spec FILE` (or `--spec-json JSON`) records an immutable creation intent, submits an owner-authorized `create_run`, and publishes an already-bound Projects view. The popup's **N** form submits the same specification. See [getting started](getting-started.md) for fields and examples. Neither path starts a coordinator or workers.
+
+The private `<PROJECTS_DIR>/.managed-setup/<slug>/intent.json` preserves the normalized inputs, stable operation ID, credential fingerprint and local receipts. Publication uses atomic no-replace rename on Linux/macOS; the old scheduler never sees the staged project. Destination conflicts preserve existing content. Interrupted staging directories remain private and retained.
+
+Use `managed resume-setup SLUG` or form **Ctrl-R** with the saved name after a lost response. A changed credential or specification is rejected before replay; rotating authority during an unresolved setup requires explicit operator reconciliation. `managed setup-status SLUG` shows the local receipt only, with `current_controller_state_verified: false`. It does not query the controller or prove that the published view still exists. `managed status SLUG` queries the bound run after publication.
 
 ## Attach the Projects view
 

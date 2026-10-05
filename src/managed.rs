@@ -165,6 +165,11 @@ pub fn attach(root: &Path, slug: &str, binding: Binding) -> Result<()> {
             "attach requires an empty legacy task list"
         );
     }
+    write_binding(&project, &binding)
+}
+
+/// Caller owns the authority lease and has validated the controller run.
+pub(crate) fn write_binding(project: &Project, binding: &Binding) -> Result<()> {
     // Marker first: a crash cannot leave a project writable by the old scheduler.
     project::write_json(&project.state_dir().join(MARKER), &binding)?;
     project::write_atomic(&project.dir().join("AGENTS.md"), format!(
@@ -432,6 +437,21 @@ pub struct ManagedArgs {
 }
 #[derive(Subcommand)]
 enum ManagedAction {
+    /// Create a run and publish its already-managed project view; retries preserve identity
+    Create {
+        #[arg(
+            long,
+            required_unless_present = "spec_json",
+            conflicts_with = "spec_json"
+        )]
+        spec: Option<PathBuf>,
+        #[arg(long)]
+        spec_json: Option<String>,
+    },
+    /// Resume the exact saved setup after an interrupted UI or uncertain response
+    ResumeSetup { slug: String },
+    /// Inspect local setup receipts; does not claim current controller state
+    SetupStatus { slug: String },
     /// Attach a fresh project to an existing controller run; does not launch models
     Attach {
         slug: String,
@@ -461,6 +481,20 @@ enum ManagedAction {
 
 pub fn run(ctx: &Ctx, args: ManagedArgs) -> Result<()> {
     match args.action {
+        ManagedAction::ResumeSetup { slug } => {
+            println!("{}", crate::managed_setup::resume(&ctx.root, &slug)?)
+        }
+        ManagedAction::SetupStatus { slug } => {
+            println!("{}", crate::managed_setup::status(&ctx.root, &slug)?)
+        }
+        ManagedAction::Create { spec, spec_json } => {
+            let spec = if let Some(json) = spec_json {
+                crate::managed_setup::parse(&json)?
+            } else {
+                crate::managed_setup::read_spec(&spec.context("setup specification missing")?)?
+            };
+            println!("{}", crate::managed_setup::create(&ctx.root, spec)?);
+        }
         ManagedAction::Attach {
             slug,
             controller,

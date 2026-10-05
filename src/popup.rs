@@ -971,6 +971,7 @@ pub fn summary(root: &Path) -> String {
 
 enum Mode {
     List,
+    Setup(Box<crate::managed_setup_form::Form>),
     /// A scrollable text; `files` are selectable lines that open with ↵.
     Detail {
         title: String,
@@ -1591,6 +1592,60 @@ impl<'a> Popup<'a> {
                     editing,
                 },
             },
+            Mode::Setup(mut form) => {
+                use crate::managed_setup_form::Outcome;
+                match form.key(key) {
+                    Ok(Outcome::Cancel) => Mode::List,
+                    Ok(Outcome::Stay) => Mode::Setup(form),
+                    Ok(Outcome::Resume(slug)) => {
+                        if self.run(
+                            &["managed".into(), "resume-setup".into(), slug.clone()],
+                            None,
+                        ) {
+                            self.scope = Some(slug);
+                            self.selected = 0;
+                            self.message = "Saved project setup resumed.".into();
+                            Mode::List
+                        } else {
+                            Mode::Setup(form)
+                        }
+                    }
+                    Ok(Outcome::Create(spec)) => {
+                        let args = serde_json::to_string(&spec).map(|json| {
+                            vec![
+                                "managed".into(),
+                                "create".into(),
+                                "--spec-json".into(),
+                                json,
+                            ]
+                        });
+                        match args {
+                            Ok(args) if self.run(&args, None) => {
+                                self.scope = project::slug_from_name(&spec.name).ok();
+                                self.selected = 0;
+                                self.message = if spec.launch_config.is_some() {
+                                    "Supervised project created. Press c to open its configured coordinator."
+                                } else {
+                                    "Supervised project created. Attach a coordinator or configure its launcher."
+                                }.into();
+                                Mode::List
+                            }
+                            Ok(_) => Mode::Setup(form),
+                            Err(error) => {
+                                self.message = error.to_string();
+                                Mode::Setup(form)
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        self.message = error.to_string();
+                        Mode::Setup(form)
+                    }
+                }
+            }
+            Mode::Projects(picker) if key.code == KeyCode::Char('N') && picker.filter.is_none() => {
+                Mode::Setup(Box::new(crate::managed_setup_form::Form::new()))
+            }
             Mode::Projects(mut picker) => match picker.key(key) {
                 PickerOutcome::Stay => Mode::Projects(picker),
                 PickerOutcome::Close => Mode::List,
@@ -1782,6 +1837,9 @@ impl<'a> Popup<'a> {
         self.message.clear();
         let section = SECTIONS[self.section];
         match key.code {
+            KeyCode::Char('N') => {
+                self.mode = Mode::Setup(Box::new(crate::managed_setup_form::Form::new()))
+            }
             KeyCode::Esc | KeyCode::Char('q') => self.quit = true,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.quit = true,
             KeyCode::Tab | KeyCode::Right => {
@@ -2413,6 +2471,47 @@ impl<'a> Popup<'a> {
         let body_top = 2;
         let body_height = height.saturating_sub(4);
         match &self.mode {
+            Mode::Setup(form) => {
+                queue!(
+                    out,
+                    cursor::MoveTo(0, body_top as u16),
+                    SetAttribute(Attribute::Bold),
+                    Print(fit(" New supervised project", width)),
+                    SetAttribute(Attribute::Reset)
+                )?;
+                if body_height >= 4 {
+                    for (line, index) in form.visible(body_height - 3).enumerate() {
+                        let field = &form.fields[index];
+                        queue!(out, cursor::MoveTo(0, (body_top + 1 + line) as u16))?;
+                        if index == form.selected {
+                            queue!(out, SetAttribute(Attribute::Reverse))?;
+                        }
+                        let value = crate::managed::display(&field.value);
+                        queue!(
+                            out,
+                            Print(fit(
+                                &format!(
+                                    " {:<18} {}{}",
+                                    field.label,
+                                    value,
+                                    if index == form.selected { "▏" } else { "" }
+                                ),
+                                width
+                            )),
+                            SetAttribute(Attribute::Reset)
+                        )?;
+                    }
+                }
+                if body_height >= 2 {
+                    queue!(
+                        out,
+                        cursor::MoveTo(0, (body_top + body_height - 1) as u16),
+                        SetAttribute(Attribute::Dim),
+                        Print(fit(form.fields[form.selected].hint, width)),
+                        SetAttribute(Attribute::Reset)
+                    )?;
+                }
+            }
             Mode::Detail {
                 title,
                 lines,
@@ -2723,7 +2822,7 @@ impl<'a> Popup<'a> {
         )?;
         let hint = match &self.mode {
             Mode::List => format!(
-                "{}  P project  / find  tab section  esc close",
+                "{}  N new supervised project  P project  / find  tab section  esc close",
                 match self.current().map(|r| &r.kind) {
                     Some(RowKind::Managed { actions, .. }) => format!(
                         "↵ details  c coordinator  {}",
@@ -2739,7 +2838,12 @@ impl<'a> Popup<'a> {
             Mode::Projects(Picker {
                 filter: Some(_), ..
             }) => "type to filter  ↑↓ choose  ↵ switch  esc clear/close".into(),
-            Mode::Projects(_) => "↑↓ choose  ↵ switch  / filter  esc close".into(),
+            Mode::Projects(_) => {
+                "↑↓ choose  ↵ switch  N new supervised project  / filter  esc close".into()
+            }
+            Mode::Setup(_) => {
+                "↑↓/tab field  ←→ runtime  ↵ create  ctrl-r resume name  esc cancel · starts no model".into()
+            }
             Mode::Detail { files, .. } if !files.is_empty() => {
                 "↑↓ file  ↵ open  y copy path  esc back".into()
             }
@@ -2981,6 +3085,84 @@ pub fn run(ctx: &Ctx, scope: Option<String>, workspace: String) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn managed_setup_popup_validates_keeps_failed_inputs_and_submits_the_cli_spec() {
+        let world = crate::scenarios::World::new();
+        let ctx = world.ctx();
+        let mut popup = Popup::new(&ctx, None, String::new());
+        popup.key(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::NONE));
+        assert!(matches!(popup.mode, Mode::Setup(_)));
+        popup.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(popup.mode, Mode::Setup(_)));
+        assert_eq!(world.runner.count("managed create"), 0);
+        if let Mode::Setup(form) = &mut popup.mode {
+            for (index, value) in [
+                (0, "New project"),
+                (1, "Keep literal $HOME and `text`"),
+                (2, "/controller"),
+                (4, "/repository"),
+                (5, "1111111111111111111111111111111111111111"),
+            ] {
+                form.fields[index].value = value.into();
+            }
+        }
+        world.runner.on(
+            "managed create",
+            crate::runner::fake::fail(1, "controller offline"),
+        );
+        popup.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(
+            matches!(&popup.mode, Mode::Setup(form) if form.fields[1].value=="Keep literal $HOME and `text`")
+        );
+        assert_eq!(world.runner.count("managed create"), 1);
+        assert_eq!(world.runner.count("thread start"), 0);
+        {
+            let calls = world.runner.calls.borrow();
+            let command = calls
+                .iter()
+                .find(|c| c.display().contains("managed create"))
+                .unwrap();
+            let at = command
+                .args
+                .iter()
+                .position(|arg| arg == "--spec-json")
+                .unwrap();
+            let spec: crate::managed_setup::Spec =
+                serde_json::from_str(&command.args[at + 1]).unwrap();
+            assert_eq!(spec.objective, "Keep literal $HOME and `text`");
+        }
+        popup.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(matches!(popup.mode, Mode::List));
+        world
+            .runner
+            .on("managed resume-setup", crate::runner::fake::ok("resumed"));
+        popup.key(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::NONE));
+        if let Mode::Setup(form) = &mut popup.mode {
+            form.fields[0].value = "New project".into();
+        }
+        popup.key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        assert_eq!(world.runner.count("managed resume-setup new-project"), 1);
+        assert_eq!(popup.scope.as_deref(), Some("new-project"));
+        assert!(matches!(popup.mode, Mode::List));
+    }
+
+    #[test]
+    fn managed_setup_popup_opens_from_picker_but_filter_text_remains_text() {
+        let world = crate::scenarios::World::new();
+        let ctx = world.ctx();
+        let mut popup = Popup::new(&ctx, None, String::new());
+        popup.key(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE));
+        popup.key(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::NONE));
+        assert!(matches!(popup.mode, Mode::Setup(_)));
+        popup.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        popup.key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        popup.key(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::NONE));
+        assert!(
+            matches!(&popup.mode, Mode::Projects(picker) if picker.filter.as_deref()==Some("N"))
+        );
+        assert_eq!(world.runner.count("managed create"), 0);
+    }
 
     #[test]
     fn managed_popup_stays_responsive_to_keys_and_freezes_confirmation_while_socket_is_gated() {

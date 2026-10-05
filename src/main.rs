@@ -16,6 +16,8 @@ mod inbox;
 mod lifecycle;
 mod managed;
 mod managed_refresh;
+mod managed_setup;
+mod managed_setup_form;
 mod names;
 mod notify;
 mod overview;

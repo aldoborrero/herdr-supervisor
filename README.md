@@ -57,7 +57,7 @@ Authors can upload binary artifacts with resumable chunk operations and inspect 
 
 An existing native coordinator session on the controller host can be attached with `control connect-supervisor`. It receives durable notices through mailer and reads current state through `control context` or `supervisor_context`. Replacing it revokes its previous capability; pending notices never change recipients. See [coordinator setup](docs/operations.md#connect-a-native-coordinator).
 
-Use `managed attach` to connect a fresh Projects folder to that run. Its popup then shows authoritative tasks, attempts, notices and memory; actions carry explicit revisions, and legacy scheduling is blocked for that project. See [Projects setup and keys](docs/operations.md#attach-the-projects-view). With an owner-approved `--launch-config` and the controller notifier enabled, `open` reserves and starts a coordinator using a run-authorized profile. Subsequent opens report pending launches or focus the exact registered session. An unresolved launch is never silently replaced.
+Create a run and its already-bound Projects view with `managed create --spec FILE`, or press **N** in the popup and fill in the creation form. Interrupted creation can resume from its saved operation with `managed resume-setup SLUG` (Ctrl-R in the form). See the [getting-started guide](docs/getting-started.md). `managed attach` also connects an existing empty Projects folder to a separately created run. Its popup then shows authoritative tasks, attempts, notices and memory; actions carry explicit revisions, and legacy scheduling is blocked for that project. See [Projects setup and keys](docs/operations.md#attach-the-projects-view). With an owner-approved `--launch-config` and the controller notifier enabled, `open` reserves and starts a coordinator using a run-authorized profile. Subsequent opens report pending launches or focus the exact registered session. An unresolved launch is never silently replaced.
 
 The popup refreshes controller state in the background so you can keep navigating while a controller is slow or unavailable. After a failed refresh, it labels the last known state and disables its actions until reconnection. Open confirmations keep their original target and revision.
 
@@ -114,6 +114,7 @@ When running Cargo outside the devshell, set `NATS_SERVER` to a `nats-server` ex
 
 Adapted from Herdr Projects at `4e4548c3c43888e6be1c96906215998f07dc63f0`, preserving its MIT license and attribution in [NOTICE](NOTICE). The original [README](docs/upstream/README.md) and [operations guide](docs/upstream/operations.md) describe the inherited implementation, not guarantees of the managed controller.
 
+- [Getting started](docs/getting-started.md): create and recover a managed project
 - [Operations](docs/operations.md): state, credentials, API and node setup
 - [Validation](docs/validation.md): tested behavior and remaining work
 - [Design](docs/supervisor-design.md): architectural contract
