@@ -529,7 +529,36 @@ This local maintenance command returns JSON retention reasons. It checks the sav
 
 Exit success means an inspection report was produced, not that removal is allowed. `removal_authorized` and `resources_deleted` remain false. A clean checkout, one foreground shell and even a native-process exit receipt do not prove that background jobs or detached descendants stopped. Their status and the not-yet-implemented retention policy remain `unknown`; an empty native foreground list is not a positive idle-shell observation. No cleanup intent is recorded, resource adopted, process signalled, ref changed or worktree removed. Missing state is not initialized. Changed epoch/configuration or malformed durable state fails the command; other unmet observations appear as retention reasons. Observations are not atomic with Git/Herdr activity, so this output cannot be reused as a removal permit.
 
-Actual conservative removal still requires process containment/exit evidence, a retention decision, a persisted effect intent and reconciliation of native removal after a lost reply. Herdr's [worktree removal contract](https://github.com/herdrdev/herdr/blob/master/docs/next/website/src/content/docs/cli-reference.mdx) retains the branch and exposes an explicit force option; this plugin's future cleanup must preserve refs and avoid force. This inspection is a prerequisite, not completion of the cleanup deliverable.
+### Explicit local worker-checkout retirement
+
+`cleanup-retire` is a local operator maintenance command. Before using it, stop and inspect all users of this checkout, including background jobs and detached descendants; keep the checkout exclusive while retiring it. The command cannot establish that condition from a native exit receipt or an idle terminal. Its required process confirmation records your attestation, not a kernel proof. This command is deliberately absent from the worker/coordinator API and MCP facade. The existing trusted same-UID state boundary still applies.
+
+Prepare a JSON decision with the exact values from your inspection:
+
+```json
+{
+  "operation": "<new UUID>",
+  "attempt": "<attempt UUID>",
+  "expected_epoch": 1,
+  "expected_head": "<full observed commit SHA>",
+  "processes_confirmed_stopped": true,
+  "retain_commits_remove_checkout": true,
+  "reason": "Task finished; all checkout users stopped and commits retained"
+}
+```
+
+```bash
+herdr-supervisor control --state /private/node-state cleanup-retire \
+  --executor /private/executor.json --request /private/retirement.json
+```
+
+Upgrade the node service first (node schema 10). The command opens existing state only. It requires a controller-applied stop and either a recorded native exit or positive absence of any launch intent, checks the exact saved pane/terminal/workspace and repository identity, and refuses dirty, untracked, ignored, hidden-index or submodule contents. Both confirmations, a nonempty reason, current attempt epoch and exact HEAD are mandatory. They cannot override failed machine checks.
+
+The execution lease excludes plugin launch/cancellation effects. A durable SQLite decision precedes Git/Herdr mutations. `refs/herdr-supervisor/retained/<attempt>` preserves the expected commit with compare-and-swap creation; an existing conflicting reference is never overwritten. The original branch is also retained. Herdr's [worktree removal contract](https://github.com/herdrdev/herdr/blob/master/docs/next/website/src/content/docs/cli-reference.mdx) removes the checkout and preserves its branch. This plugin never passes `--force` and never recursively deletes checkout files itself.
+
+`state: removed` requires filesystem absence, absence from Git's worktree inventory, absence of the saved native resources, preserved refs and unchanged local authority. An ambiguous native response or partial removal returns `state: removing`, `outcome: unresolved`; **exit success does not mean removal succeeded**. Repeating the identical decision only observes an already-issued removal and never sends it again. A crash before native issuance can also leave that unresolved state: inspect and finish the specific resource manually, then repeat the same request to record the result. Changed operation contents are refused; completed replay returns its historical receipt and touches no resources. Keep the decision file for recovery.
+
+This path retires an explicitly selected worker/reviewer checkout. Automatic descendant containment, unattended cleanup and controller verification/coordinator resource retirement remain pending. Neither a successful task nor this operator attestation is presented as automatic proof that detached descendants exited.
 
 ### Passive recovery after wrapper loss
 

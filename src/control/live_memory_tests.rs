@@ -291,7 +291,7 @@ fn memory_versions_fence_updates_older_than_dispatch_and_migrate_v3_without_chan
         .unwrap();
     node.connection
         .execute_batch(
-            "ALTER TABLE events DROP COLUMN tries; ALTER TABLE events DROP COLUMN available_at; ALTER TABLE events DROP COLUMN last_error; DROP TABLE memory_notices; DROP TABLE worker_memory; DROP TABLE artifact_staging; DROP TABLE reception_failures; DROP TABLE event_recoveries; DROP TABLE registration_recoveries; PRAGMA user_version=3;",
+            "DROP TABLE checkout_retirements; ALTER TABLE events DROP COLUMN tries; ALTER TABLE events DROP COLUMN available_at; ALTER TABLE events DROP COLUMN last_error; DROP TABLE memory_notices; DROP TABLE worker_memory; DROP TABLE artifact_staging; DROP TABLE reception_failures; DROP TABLE event_recoveries; DROP TABLE registration_recoveries; PRAGMA user_version=3;",
         )
         .unwrap();
     drop(node);

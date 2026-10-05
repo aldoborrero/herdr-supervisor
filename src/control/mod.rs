@@ -28,6 +28,7 @@ mod process_recovery;
 mod reception;
 mod recovery;
 mod registration_recovery;
+mod retirement;
 mod run_profiles;
 pub mod runtime;
 pub mod service;

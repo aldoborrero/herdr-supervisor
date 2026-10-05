@@ -4,7 +4,30 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
+### Explicit local worker-checkout retirement
+
+`cleanup-retire` records a local operator's exact attempt/epoch/HEAD decision and required process/retention attestations in node SQLite schema 10. It preserves the original branch plus a compare-and-swap retention ref before invoking Herdr without force. Successful reconciliation requires absence from the filesystem, Git worktree inventory and exact native resources, preserved refs and unchanged authority. An uncertain result reports `resources_deleted: null` and never repeats native removal. This is an explicit local maintenance action, not autonomous proof of descendant exit.
+
+The first focused run passes ten matching unit tests, including the six initial retirement regressions, and strict Clippy (`.direnv/retirement-focused.log`). The first full run passes 600/604 unit tests and exposes four registration-recovery failures: its schema guard still expected node schema 9. That guard now accepts the new current schema 10; migration fixtures reconstruct their actual historical schemas before upgrade. `.direnv/retirement-full.log` retains the failure. The final source passes all 606 unit tests (58.65 s), 17 CLI tests (26.79 s) and strict all-target Clippy (29.26 s), including continuous code/artifact workflows, in `.direnv/retirement-final.log`. `nix fmt` passes, formatting only the Python fixture (`.direnv/retirement-fmt.log`); the package gate is pending.
+
+| Evidence | Boundary established |
+| --- | --- |
+| `retirement_removes_only_confirmed_clean_checkout_and_retains_commits_and_replay` | Real temporary Git checkout removed through the Herdr fixture, result commits preserved in two refs, exact operation replay and conflicting decisions refused |
+| `retirement_requires_operator_decision_positive_stop_and_exact_clean_ownership` | Missing stop, confirmations, changed epoch/HEAD/terminal, dirty and ignored files and busy executor prevent an intent or deletion |
+| `retirement_lost_native_or_sql_reply_reconciles_once_without_repeating_removal` | Lost native response and failed final SQLite receipt recover without a second native effect |
+| `retirement_uncertain_or_partial_removal_never_repeats_native_effect` | No-effect and checkout-only partial outcomes stay unresolved; separate fixture maintenance permits observation-only completion |
+| `retirement_intent_failure_and_changed_retention_ref_preserve_checkout` | Failed SQLite intent prevents any removal; conflicting retention ref is neither overwritten nor ignored |
+| `retirement_schema_upgrade_keeps_jobs_and_durable_removal_survives_restart` | Node schema-9 migration preserves job/plan bytes and the completed receipt survives restart |
+| `retirement_operator_attestation_cannot_override_unresolved_or_foreign_native_exit` | Human confirmation cannot replace a required native exit or accept a foreign/mis-scoped receipt |
+| `retirement_uncertain_reconciliation_fences_changed_authority_config_and_recreated_path` | A recreated path is retained, changed node epoch/repository mapping refuses reconciliation and uncertain deletion stays explicitly unknown |
+| `retirement_cli_requires_explicit_bounded_decision_and_preserves_missing_state` | Actual scrubbed CLI requires confirmation, bounds the JSON request and never initializes missing node state |
+| Extended continuous code workflow | Real wrapper stop, signed NATS controller-stop receipt, actual CLI retirement/replay of author and reviewer checkouts, and preserved Git result refs; Herdr/mailer/model boundaries remain fixtures |
+
+No user checkout or live native session is removed by these tests. The operator's process attestation requires exclusive use of the checkout during retirement; it is not a kernel containment guarantee or an isolation boundary from other processes with the same UID. Verification/coordinator resources and unattended cleanup remain open.
+
 ### Independent verifier completion receipts
+
+The verified source is committed locally as `f1d19112665c6e56df7741751f451ec5390e5177`. `nix fmt` also passed without changes (`.direnv/check-receipts-final-fmt.log`). Its pinned package build/check is running; do not infer success from an active tool handle.
 
 The regression `check_receipt_recovers_finished_verifier_after_lost_sql_without_reexecuting` fails on `01d20d8`: the controller returns `checks_failed` after a completed check loses its SQLite receipt. `.direnv/check-receipts-before.log` records that failure, with a real Git checkout and an external execution counter. The implementation now atomically publishes an owner-signed completion file before the final SQL/audit transaction and recovers it without rerunning the check. Controller services reconcile these receipts before cancelled-run release; the local owner CLI performs the same bounded recovery. No schema migration is required; legacy starts without the receipt scheme remain unresolved.
 
@@ -160,7 +183,7 @@ This audit reads the fourteen deliverables in `IMPLEMENTATION.md` together with 
 | 7. Herdr/native workers | Exact persisted resource binding, runtime wrappers, native mailer operation/recipient preconditions and worker-ready capability; event/reconnection tests over private Unix sockets and continuous node services | Authenticated new-session Codex/Claude/Pi acceptance chain and live native Herdr/capability acceptance; Unix protocol fixtures alone do not prove these |
 | 8. Mailer client extension | Separate mailer commit `7a12d5a`, prior independent build/check evidence and supervisor replay tests | Preserve the versioned client/server contract in final integration |
 | 9. API/CLI/MCP and lifecycle | Controller/worker boundaries, pause/resume/cancel, repair and registration/passive-exit recovery; bounded pages/receipts/record reads | Remaining uncertain-effect recovery and full acceptance audit; no forced abandonment is implemented |
-| 10. Verification/integration/cleanup | Immutable results, combined candidates, independent check/review gates, exact Git CAS, cancelled repository release and explicit checkout-retention inspection | Conservative owned-resource removal; inspection/recovery retains panes/worktrees and does not prove detached descendants exited |
+| 10. Verification/integration/cleanup | Immutable results, combined candidates, independent check/review gates and recoverable signed verifier receipts; exact Git CAS; cancelled repository release; explicit worker-checkout retirement with local operator attestation, retained refs and uncertain-result reconciliation | Verification/coordinator resource retirement and unattended process containment; an operator attestation does not prove detached descendants exited automatically |
 | 11. Curated memory | Proposal provenance, revision/withdrawal, bounded topic snapshots and transactional live-memory NATS updates; memory-specific regression suite | Final package gate and live runtime consumption evidence; delivery is not a read acknowledgement |
 | 12. Shared UI authority | Managed binding/facade scope, legacy-command fencing, asynchronous pages and captured revisions; task/profile/memory forms; exact worker navigation through owner-configured routes; resumable local service bundle exercised through both continuous workflows | Native service readiness/onboarding and full native/remote interaction evidence remain open |
 | 13. Nix/package/docs | Blueprint `prefix=nix`, locks, package resources/wrapper, devshell/formatter, opt-in modules and module-evaluation tests | Latest package/check gate and packaged smoke; no host activation is authorized |
@@ -317,11 +340,12 @@ Mailer protocol-2 support is an independent local commit **`7a12d5a`** on `feat/
 - Recovery/abandonment of uncertain cancelled-run effects and conservative verification checkout cleanup.
 - Recovery of still-live orphans, legacy capture gaps, changed boots/namespaces and non-Linux wrapper loss; detached-descendant audit and conservative resource cleanup.
 - Reconciliation for legacy/lost-wrapper registration evidence. Explicit recovery covers prelaunch Claude/Pi and still-owned Codex before binding.
-- Service onboarding and cross-host resource focus. Managed project creation now has a form and resumable CLI.
-- Projects/legacy snapshot pagination, oversized individual-record retrieval and remaining aggregate API bounds. Signed-record budgets and coordinator CLI/MCP collection pages are implemented.
+- Native/remote acceptance of the implemented service bundle, dependency diagnosis and cross-host focus routes. Managed creation, local onboarding and focus have fixture coverage.
+- Final acceptance of bounded Projects pages and oversized-record retrieval. Those features are implemented; legacy full snapshots and internal aggregate response allocation retain their documented limits.
 - Expired execution/memory command handling, invalid original repair and in-place node-key rotation. Expired node events and cancellation delivery have explicit recovery; current-enrollment grants and owner drain/revocation are implemented.
-- Optional project/cross-run memory and Markdown projection.
 - Stronger model-facing validation beyond the isolated continuous-service workflow and protocol fixtures.
+
+Project/cross-run memory and Markdown exports are optional extensions, not remaining requirements for this goal.
 
 No push, public release, host changes or deployment has occurred. Existing user sessions and shared runtime servers were not modified.
 

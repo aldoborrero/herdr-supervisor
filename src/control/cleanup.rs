@@ -18,18 +18,18 @@ use crate::{
     runner::{RealRunner, Runner},
 };
 
-#[derive(PartialEq)]
-struct Scope {
-    authority: (String, String, String, u64),
-    job: (u64, String, String, String),
-    process: Option<(u64, String, String)>,
-    stop: Option<(String, String, Option<String>)>,
+#[derive(PartialEq, serde::Serialize)]
+pub(super) struct Scope {
+    pub authority: (String, String, String, u64),
+    pub job: (u64, String, String, String),
+    pub process: Option<(u64, String, String)>,
+    pub stop: Option<(String, String, Option<String>)>,
 }
 
-fn scope(c: &mut Connection, id: &str, epoch: u64) -> Result<Scope> {
+pub(super) fn scope(c: &mut Connection, id: &str, epoch: u64) -> Result<Scope> {
     let tx = c.transaction_with_behavior(TransactionBehavior::Deferred)?;
     ensure!(
-        tx.pragma_query_value(None, "user_version", |r| r.get::<_, u64>(0))? == 9,
+        tx.pragma_query_value(None, "user_version", |r| r.get::<_, u64>(0))? == 10,
         "unsupported cleanup inspection schema; run the current node service migration first"
     );
     let result = Scope {

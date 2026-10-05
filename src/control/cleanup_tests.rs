@@ -13,6 +13,9 @@ use std::{
     time::Duration,
 };
 
+#[path = "retirement_tests.rs"]
+mod retirement_tests;
+
 fn git(path: &Path, args: &[&str]) -> String {
     let out = RealRunner
         .run(
@@ -39,6 +42,9 @@ struct Native {
     foreground: Cell<bool>,
     calls: Cell<u32>,
     change_database: Option<PathBuf>,
+    removal: Cell<u8>,
+    remove_calls: Cell<u32>,
+    resources_absent: Cell<bool>,
 }
 impl Runner for Native {
     fn run(&self, cmd: &Cmd) -> anyhow::Result<Output> {
@@ -64,15 +70,34 @@ impl Runner for Native {
                 timed_out: true,
                 ..Default::default()
             });
+        } else if has("remove") {
+            assert!(!has("--force"));
+            self.remove_calls.set(self.remove_calls.get() + 1);
+            assert!(self.removal.get() > 0, "unexpected retirement");
+            if self.removal.get() != 3 {
+                git(
+                    &self.path,
+                    &["worktree", "remove", self.path.to_str().unwrap()],
+                );
+                if self.removal.get() != 4 {
+                    self.resources_absent.set(true);
+                }
+            }
+            return Ok(Output {
+                code: Some(0),
+                timed_out: self.removal.get() != 1,
+                stdout: "{}".into(),
+                ..Default::default()
+            });
         } else if has("process-info") {
             if let Some(db) = &self.change_database {
                 rusqlite::Connection::open(db)?.execute("UPDATE jobs SET epoch=epoch+1", [])?;
             }
             json!({"process_info":{"shell_pid":1,"foreground_process_group_id":1,"foreground_processes":if self.foreground.get() { json!([{"pid":1}]) }else{ json!([]) }}})
         } else if has("workspace") && has("list") {
-            json!({"workspaces":[{"workspace_id":"w1","worktree":{"checkout_path":self.path,"is_linked_worktree":true}}]})
+            json!({"workspaces":if self.resources_absent.get() {json!([])} else {json!([{"workspace_id":"w1","worktree":{"checkout_path":self.path,"is_linked_worktree":true}}])}})
         } else if has("pane") && has("list") {
-            json!({"panes":[{"workspace_id":"w1","tab_id":"t1","pane_id":"p1","terminal_id":format!("term{}",self.terminal.get()),"cwd":self.path}]})
+            json!({"panes":if self.resources_absent.get() {json!([])} else {json!([{"workspace_id":"w1","tab_id":"t1","pane_id":"p1","terminal_id":format!("term{}",self.terminal.get()),"cwd":self.path}])}})
         } else if has("agent") && has("list") {
             json!({"agents":[]})
         } else {
@@ -136,6 +161,9 @@ impl Setup {
             foreground: Cell::new(true),
             calls: Cell::new(0),
             change_database: None,
+            removal: Cell::new(0),
+            remove_calls: Cell::new(0),
+            resources_absent: Cell::new(false),
         };
         let plan = executor::prepare(&mut node, &config, &attempt.id, &native).unwrap();
         Self {

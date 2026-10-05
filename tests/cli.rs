@@ -6,6 +6,45 @@ use std::process::Command;
 const BIN: &str = env!("CARGO_BIN_EXE_herdr-supervisor");
 
 #[test]
+fn retirement_cli_requires_explicit_bounded_decision_and_preserves_missing_state() {
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path();
+    let state = root.join("node");
+    let config = root.join("executor.json");
+    let decision = root.join("retirement.json");
+    std::fs::write(&config, serde_json::json!({"repositories":{},"worktree_root":root.join("worktrees"),"herdr_binary":"/unused/herdr","herdr_socket":root.join("herdr.sock")}).to_string()).unwrap();
+    let run = || {
+        hp(
+            root,
+            &[
+                "control",
+                "--state",
+                state.to_str().unwrap(),
+                "cleanup-retire",
+                "--executor",
+                config.to_str().unwrap(),
+                "--request",
+                decision.to_str().unwrap(),
+            ],
+        )
+    };
+    let mut request = serde_json::json!({"operation":uuid::Uuid::new_v4().to_string(),"attempt":uuid::Uuid::new_v4().to_string(),"expected_epoch":1,"expected_head":"a".repeat(40),"processes_confirmed_stopped":false,"retain_commits_remove_checkout":true,"reason":"isolated test"});
+    std::fs::write(&decision, request.to_string()).unwrap();
+    let denied = run();
+    assert!(!denied.status.success());
+    assert!(String::from_utf8_lossy(&denied.stderr).contains("confirmations required"));
+    request["processes_confirmed_stopped"] = true.into();
+    std::fs::write(&decision, request.to_string()).unwrap();
+    assert!(!run().status.success());
+    std::fs::write(&decision, " ".repeat(16385)).unwrap();
+    let denied = run();
+    assert!(!denied.status.success());
+    assert!(String::from_utf8_lossy(&denied.stderr).contains("16 KiB"));
+    assert!(!state.exists());
+    assert!(!root.join("worktrees").exists());
+}
+
+#[test]
 fn check_receipt_reconciliation_cli_requires_owner_and_never_initializes_missing_state() {
     use serde_json::Value;
     use std::os::unix::fs::PermissionsExt;

@@ -215,6 +215,8 @@ class Fixture:
         self.memory_deliveries = {}
         self.creates = []
         self.launches = []
+        self.wrappers = {}
+        self.removals = []
         self.bootstrap_gate = threading.Event()
         self.env = {
             "PATH": os.environ["PATH"],
@@ -359,6 +361,17 @@ class Fixture:
             self.models[attempt] = {"session": uid(), "cwd": request["cwd"]}
             return self.models[attempt]
         args = request["argv"]
+        if args[:2] == ["worktree", "remove"]:
+            assert len(args) == 4 and args[2] == "--workspace", args
+            attempt = next(
+                a for a, s in self.spaces.items() if s["workspace_id"] == args[3]
+            )
+            assert self.wrappers[attempt].poll() is not None
+            assert attempt not in self.removals, "duplicate removal"
+            self.git(self.repo, "worktree", "remove", self.spaces[attempt]["cwd"])
+            del self.spaces[attempt]
+            self.removals.append(attempt)
+            return {"result": {}}
         if args[:2] == ["worktree", "create"]:
 
             def option(name):
@@ -412,6 +425,7 @@ class Fixture:
                             "agent_session": {"value": m["session"]},
                         }
                         for a, m in self.models.items()
+                        if a in self.spaces and self.wrappers[a].poll() is None
                     ]
                 }
             }
@@ -430,7 +444,9 @@ class Fixture:
             attempt = Path(space["cwd"]).name
             assert attempt not in self.launches, "duplicate wrapper launch"
             self.launches.append(attempt)
-            self.spawn(f"wrapper-{attempt}", shlex.split(args[3]), cwd=space["cwd"])
+            self.wrappers[attempt] = self.spawn(
+                f"wrapper-{attempt}", shlex.split(args[3]), cwd=space["cwd"]
+            )
             return {"result": {}}
         raise AssertionError(f"unexpected Herdr call: {args}")
 
@@ -987,6 +1003,29 @@ class Fixture:
         assert pruned == {"removed": 0, "before": 1, "pending_preserved": True}
         assert self.creates == self.launches == [author, reviewer]
         assert len(self.registrations) == len(self.deliveries) == 2
+        # Controller application must make the return trip before local retirement.
+        executor = self.root / "services/executor.json"
+        cleanup_epochs = {}
+        for attempt in (author, reviewer):
+            epoch = self.attempt(attempt)["epoch"]
+            cleanup_epochs[attempt] = epoch
+
+            def stop_received(attempt=attempt, epoch=epoch):
+                report = self.cli(
+                    self.node,
+                    "cleanup-inspect",
+                    "--executor",
+                    executor,
+                    "--expected-epoch",
+                    epoch,
+                    attempt,
+                )
+                return any(
+                    c["check"] == "controller_stop_applied" and c["status"] == "passed"
+                    for c in report["checks"]
+                )
+
+            wait_for("node has controller stop receipt", stop_received)
         self.stop(self.node_process)
         self.stop(self.controller_process)
         wait_for(
@@ -996,6 +1035,30 @@ class Fixture:
         assert not self.native_events.errors, self.native_events.errors
         assert not (self.node / "worker.sock").exists()
         assert not (self.controller / "control.sock").exists()
+        if not self.artifact_mode:
+            for attempt in (author, reviewer):
+                assert self.wrappers[attempt].wait(timeout=5) == 0
+                path = Path(self.spaces[attempt]["cwd"])
+                head = self.git(path, "rev-parse", "HEAD")
+                decision = self.file(
+                    f"retire-{attempt}.json",
+                    {
+                        "operation": uid(),
+                        "attempt": attempt,
+                        "expected_epoch": cleanup_epochs[attempt],
+                        "expected_head": head,
+                        "processes_confirmed_stopped": True,
+                        "retain_commits_remove_checkout": True,
+                        "reason": "Fixture wrapper and owned loop stopped; preserve commits",
+                    },
+                )
+                args = ("cleanup-retire", "--executor", executor, "--request", decision)
+                receipt = self.cli(self.node, *args)
+                assert receipt["state"] == "removed", receipt
+                assert self.cli(self.node, *args) == receipt
+                assert not path.exists()
+                assert self.git(self.repo, "rev-parse", receipt["retained_ref"]) == head
+            assert self.removals == [author, reviewer]
         print(
             f"PASS: continuous services, offline dispatch, node restart, native binding, result, checks, review, {'artifact acceptance' if self.artifact_mode else 'Git CAS'}, stop, completion"
         )
