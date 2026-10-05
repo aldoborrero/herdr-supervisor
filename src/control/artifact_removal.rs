@@ -131,7 +131,13 @@ pub(super) fn remove_with(
     mut after_unlink: impl FnMut(&str) -> Result<()>,
 ) -> Result<()> {
     let parent = path.parent().context("artifact input parent missing")?;
-    artifact_inputs::root(parent)?;
+    let parent_meta = std::fs::symlink_metadata(parent)?;
+    ensure!(
+        parent_meta.is_dir()
+            && parent_meta.mode() & 0o022 == 0
+            && std::fs::canonicalize(parent)? == parent,
+        "artifact parent must be a real directory writable only by its owner"
+    );
     match std::fs::symlink_metadata(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             std::fs::File::open(parent)?.sync_all()?;

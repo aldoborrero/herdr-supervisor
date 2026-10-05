@@ -28,25 +28,30 @@ pub(super) struct Scope {
 
 pub(super) fn scope(c: &mut Connection, id: &str, epoch: u64) -> Result<Scope> {
     let tx = c.transaction_with_behavior(TransactionBehavior::Deferred)?;
-    ensure!(
-        tx.pragma_query_value(None, "user_version", |r| r.get::<_, u64>(0))? == 10,
-        "unsupported cleanup inspection schema; run the current node service migration first"
-    );
-    let result = Scope {
-        authority: tx.query_row("SELECT owner,node,key,epoch FROM authority WHERE singleton=1", [],
-            |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?,
-        job: tx.query_row("SELECT epoch,state,doc,checkpoint FROM jobs WHERE id=?1", [id],
-            |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?,
-        process: tx.query_row("SELECT epoch,state,doc FROM runtime_processes WHERE attempt=?1", [id],
-            |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?,
-        stop: tx.query_row("SELECT state,wire,response FROM events WHERE json_extract(CASE WHEN json_valid(wire) THEN wire ELSE '{}' END,'$.record.payload.operation_id')=?1 AND state='controller_applied' ORDER BY rowid DESC LIMIT 1",
-            [format!("stopped-{id}-{epoch}")], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?,
-    };
+    let result = scope_in(&tx, id, epoch)?;
     tx.commit()?;
     Ok(result)
 }
 
-fn applied_stop(s: &Scope, id: &str, epoch: u64) -> Result<bool> {
+pub(super) fn scope_in(c: &Connection, id: &str, epoch: u64) -> Result<Scope> {
+    ensure!(
+        c.pragma_query_value(None, "user_version", |r| r.get::<_, u64>(0))? == 11,
+        "unsupported cleanup inspection schema; run the current node service migration first"
+    );
+    let result = Scope {
+        authority: c.query_row("SELECT owner,node,key,epoch FROM authority WHERE singleton=1", [],
+            |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?,
+        job: c.query_row("SELECT epoch,state,doc,checkpoint FROM jobs WHERE id=?1", [id],
+            |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?,
+        process: c.query_row("SELECT epoch,state,doc FROM runtime_processes WHERE attempt=?1", [id],
+            |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?,
+        stop: c.query_row("SELECT state,wire,response FROM events WHERE json_extract(CASE WHEN json_valid(wire) THEN wire ELSE '{}' END,'$.record.payload.operation_id')=?1 AND state='controller_applied' ORDER BY rowid DESC LIMIT 1",
+            [format!("stopped-{id}-{epoch}")], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?,
+    };
+    Ok(result)
+}
+
+pub(super) fn applied_stop(s: &Scope, id: &str, epoch: u64) -> Result<bool> {
     let Some((state, wire, Some(response))) = &s.stop else {
         return Ok(false);
     };
@@ -95,6 +100,15 @@ pub(super) fn inspect_with(
     );
     let mut checks = Vec::new();
     check(&mut checks, "node_stopped", original.job.1 == "stopped");
+    check(
+        &mut checks,
+        "artifact_staging_retired",
+        !c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM artifact_staging WHERE attempt=?1 AND state<>'retired')",
+            [id],
+            |row| row.get::<_, bool>(0),
+        )?,
+    );
     check(
         &mut checks,
         "controller_stop_applied",
@@ -214,7 +228,7 @@ pub(super) fn inspect_with(
     )
 }
 
-fn git_identity(runner: &dyn Runner, plan: &CheckoutPlan) -> Result<String> {
+pub(super) fn git_identity(runner: &dyn Runner, plan: &CheckoutPlan) -> Result<String> {
     ensure!(
         std::fs::canonicalize(&plan.worktree)? == plan.worktree
             && std::fs::symlink_metadata(plan.worktree.join(".git"))?.is_file(),

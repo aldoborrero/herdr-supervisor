@@ -4,6 +4,7 @@ mod artifact_inputs;
 mod artifact_removal;
 mod artifact_retirement;
 mod artifact_review;
+mod artifact_review_retirement;
 pub mod artifacts;
 pub mod broker_policy;
 mod cancellation_recovery;

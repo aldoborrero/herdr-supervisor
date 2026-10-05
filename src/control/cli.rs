@@ -19,6 +19,13 @@ pub struct ControlArgs {
 
 #[derive(Subcommand)]
 enum ControlCommand {
+    /// Local operator retirement of stopped reviewer copies, retaining chunk receipts
+    CleanupArtifactReview {
+        #[arg(long)]
+        executor: PathBuf,
+        #[arg(long)]
+        request: PathBuf,
+    },
     /// Owner maintenance: remove terminal verifier artifact copies, retaining SQLite originals
     CleanupArtifactInputs {
         #[arg(long)]
@@ -790,6 +797,19 @@ pub fn run(args: ControlArgs) -> Result<()> {
             credential: path,
             node,
         } => Store::open(&args.state)?.node_status(&credential(&path)?, &node)?,
+        ControlCommand::CleanupArtifactReview { executor, request } => {
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            std::fs::File::open(request)?
+                .take(16385)
+                .read_to_end(&mut bytes)?;
+            ensure!(bytes.len() <= 16384, "retirement request exceeds 16 KiB");
+            super::artifact_review_retirement::retire(
+                &args.state,
+                &super::executor::read_config(&executor)?,
+                &serde_json::from_slice(&bytes)?,
+            )?
+        }
         ControlCommand::CleanupArtifactInputs {
             credential: path,
             request,

@@ -285,7 +285,7 @@ pub(super) fn status(state: &std::path::Path, event: &str) -> Result<Value> {
     let mut c = super::reception::local_db(state, true, false)?;
     let tx = c.transaction_with_behavior(TransactionBehavior::Deferred)?;
     ensure!(
-        tx.pragma_query_value(None, "user_version", |r| r.get::<_, u64>(0))? == 10,
+        tx.pragma_query_value(None, "user_version", |r| r.get::<_, u64>(0))? == 11,
         "node service migration required"
     );
     let (state,tries,available,error):(String,u64,i64,String)=tx.query_row("SELECT state,tries,available_at,last_error FROM events WHERE json_extract(CASE WHEN json_valid(wire) THEN wire ELSE '{}' END,'$.record.id')=?1",[event],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;

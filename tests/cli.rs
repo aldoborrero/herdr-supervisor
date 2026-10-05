@@ -6,6 +6,42 @@ use std::process::Command;
 const BIN: &str = env!("CARGO_BIN_EXE_herdr-supervisor");
 
 #[test]
+fn reviewer_copy_retirement_cli_requires_bounded_confirmed_request_without_initializing_state() {
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path();
+    let state = root.join("missing-node");
+    let config = root.join("executor.json");
+    let decision = root.join("retire.json");
+    std::fs::write(&config,serde_json::json!({"repositories":{},"worktree_root":root.join("worktrees"),"herdr_binary":"/unused/herdr","herdr_socket":root.join("herdr.sock")}).to_string()).unwrap();
+    let mut request = serde_json::json!({"operation":uuid::Uuid::new_v4().to_string(),"attempt":uuid::Uuid::new_v4().to_string(),"expected_epoch":1,"expected_manifest_hash":"a".repeat(64),"processes_confirmed_stopped":false,"retain_receipts_remove_inputs":true,"reason":"isolated fixture"});
+    let run = || {
+        hp(
+            root,
+            &[
+                "control",
+                "--state",
+                state.to_str().unwrap(),
+                "cleanup-artifact-review",
+                "--executor",
+                config.to_str().unwrap(),
+                "--request",
+                decision.to_str().unwrap(),
+            ],
+        )
+    };
+    std::fs::write(&decision, request.to_string()).unwrap();
+    assert!(String::from_utf8_lossy(&run().stderr).contains("confirmations"));
+    assert!(!state.exists());
+    request["processes_confirmed_stopped"] = serde_json::json!(true);
+    std::fs::write(&decision, request.to_string()).unwrap();
+    assert!(!run().status.success());
+    assert!(!state.exists());
+    std::fs::write(&decision, " ".repeat(16385)).unwrap();
+    assert!(String::from_utf8_lossy(&run().stderr).contains("16 KiB"));
+    assert!(!state.exists());
+}
+
+#[test]
 fn artifact_retirement_cli_requires_owner_and_bounded_decision_without_creating_state() {
     use std::os::unix::fs::PermissionsExt;
     let home = tempfile::tempdir().unwrap();

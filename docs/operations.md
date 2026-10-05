@@ -602,6 +602,33 @@ Upgrade controller consumers together to schema 12. The owner capability is chec
 
 As with worker retirement, `state: removing` reports an uncertain outcome and `resources_deleted: null`; repeating the same decision observes an already-issued effect without issuing it again. A recreated path is preserved. Successful completion records the checkout as `retired` and appends an audit event; replay returns the historical result after reauthenticating the owner. This known terminal resource state does not make a cancelled repository appear to have an unfinished checkout creation. Sealed artifact inputs and uploaded contents need separate retention paths. Coordinator workspaces have the separate close-only command below; their files are retained.
 
+### Retire stopped reviewer artifact copies
+
+After the controller has applied the reviewer's stop receipt and its native process has exited (or its wrapper was never launched), use the node-local operator command to remove the assigned artifact copies. Supply the current stopped attempt epoch and the manifest hash from its review assignment. Keep the checkout exclusive and explicitly confirm that all input users, including background processes, have stopped.
+
+```json
+{
+  "operation": "NEW_OPERATION_UUID",
+  "attempt": "REVIEWER_ATTEMPT_UUID",
+  "expected_epoch": 2,
+  "expected_manifest_hash": "EXACT_SHA256_MANIFEST_HASH",
+  "processes_confirmed_stopped": true,
+  "retain_receipts_remove_inputs": true,
+  "reason": "Reviewer and all input users stopped; preserve received chunks"
+}
+```
+
+```sh
+herdr-supervisor control --state NODE_STATE cleanup-artifact-review \
+  --executor executor.json --request reviewer-retirement.json
+```
+
+Node schema 11 preserves prior staging rows and adds an exact-decision ledger. The command verifies the original Git/Herdr resource binding and reconstructs every input from retained `controller_applied` chunk receipts, checking assignment, chunk metadata and full content hashes. A broker ACK is insufficient. It uses the same marked-directory removal rules as verifier-copy retirement below, with the node execution lease and scope revalidation in SQLite transactions. Replays return a historical receipt; request collisions, changed epochs and pending/foreign/corrupt receipts are refused.
+
+Only the assigned `.herdr-supervisor-artifacts-ATTEMPT` directory is removed. Other worktree files, commits, received chunks and job history remain. Staging becomes `retired` atomically with its final receipt and cannot be recreated by replaying preparation. The surrounding checkout can then use ordinary `cleanup-retire`, which still requires clean Git and its own explicit decision. `cleanup-inspect` reports `artifact_staging_retired`; checkout retirement is blocked while staging is creating, ready or waiting for a lost completion receipt to be reconciled. This prevents deleting the checkout before its input retirement can finish.
+
+This local maintenance command has the existing trusted same-UID/private-state boundary and is absent from the worker/coordinator API and MCP facade. It does not claim a fresh confirmation from a remote controller or delete authoritative uploaded originals. Completed original content remains retained; archival/pruning is a separate optional policy.
+
 ### Retire terminal artifact-verification copies
 
 After an artifact run is `completed` or `cancelled`, the owner can remove its verifier's `verification/INTEGRATION/inputs` copies while keeping the original uploaded bytes in SQLite. All attempts and owned coordinators must have exited, checks must have known outcomes, and repository authority must be released. This requires exclusive use of the input directory and an explicit operator attestation that checks, background jobs and other users have stopped.
@@ -627,7 +654,7 @@ SQLite stores the decision and directory identity before a private operation mar
 
 If interrupted after a file is removed, repeat exactly the same decision. Remaining copies can be removed only from the same marked directory after source and scope revalidation. A missing directory permits reconciliation of a lost final receipt. A recreated or unmarked directory is retained, including an empty directory left by a crash between marker removal and `rmdir`; inspect it and remove it separately only after confirming it is the intended empty directory, then replay the original decision. Errors do not imply rollback of already removed copies; the durable phase remains `prepared` or `removing` until completion. A successful receipt is historical and reauthenticates the owner on replay.
 
-This command handles controller verifier copies. Reviewer-node staging, original-content archival/pruning and unattended process containment are separate retention work; this command neither removes nor claims to retire those resources.
+This command handles controller verifier copies. Reviewer-node copies use `cleanup-artifact-review` above. Original content remains retained; optional archival/pruning and unattended process containment are separate from these operator maintenance commands.
 
 ### Retire an owned coordinator workspace
 

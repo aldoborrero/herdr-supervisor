@@ -32,12 +32,82 @@ fn ready_record(
         .optional()?;
     row.map(|(epoch, hash, path, state)| {
         ensure!(
+            ["creating", "ready"].contains(&state.as_str()),
+            "artifact inputs are retired or have unknown state"
+        );
+        ensure!(
             epoch == order.attempt.epoch && hash == candidate.manifest_hash,
             "artifact staging belongs to another assignment"
         );
         Ok((path, state))
     })
     .transpose()
+}
+
+/// Read retained, application-accepted chunk receipts without fetching anything
+/// or consulting the disposable staged copy. Old receipt validity is historical;
+/// the transport authenticated these records before persisting their acceptance.
+pub(super) fn verify_cached(
+    c: &rusqlite::Connection,
+    order: &ExecuteOrder,
+    candidate: &Candidate,
+) -> Result<()> {
+    candidate.validate()?;
+    let review = order.review.as_ref().context("artifact review missing")?;
+    ensure!(
+        review.artifact.as_ref() == Some(candidate),
+        "artifact assignment changed"
+    );
+    for (name, file) in &candidate.manifest.files {
+        let mut bytes = Vec::new();
+        for index in 0..file.size.div_ceil(CHUNK_BYTES as u64).max(1) {
+            let operation = digest(&serde_json::to_vec(&(
+                "artifact-review",
+                &order.attempt.id,
+                order.attempt.epoch,
+                &review.integration,
+                &candidate.manifest_hash,
+                name,
+                index,
+            ))?);
+            let event_key = format!("{}:{operation}", digest(order.credential.as_bytes()));
+            let (state, response): (String, Option<String>) = c.query_row(
+                "SELECT state,response FROM events WHERE id=?1",
+                [event_key],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            ensure!(
+                state == "controller_applied",
+                "retained artifact receipt is not application-accepted"
+            );
+            let response: Value = serde_json::from_str(
+                response
+                    .as_deref()
+                    .context("missing retained artifact receipt")?,
+            )?;
+            ensure!(
+                response["id"] == order.attempt.id
+                    && response["integration"] == review.integration
+                    && response["manifest_hash"] == candidate.manifest_hash,
+                "retained artifact receipt assignment differs"
+            );
+            let chunk: Chunk = serde_json::from_value(response["chunk"].clone())?;
+            chunk.validate()?;
+            ensure!(
+                chunk.name == *name
+                    && chunk.sha256 == file.sha256
+                    && chunk.size == file.size
+                    && u64::from(chunk.index) == index,
+                "retained artifact chunk differs"
+            );
+            bytes.extend(chunk.data);
+        }
+        ensure!(
+            bytes.len() as u64 == file.size && digest(&bytes) == file.sha256,
+            "retained artifact content differs from manifest"
+        );
+    }
+    Ok(())
 }
 
 pub fn stage(

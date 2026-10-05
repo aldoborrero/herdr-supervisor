@@ -13,6 +13,8 @@ use std::{
     time::Duration,
 };
 
+#[path = "artifact_review_retirement_tests.rs"]
+mod artifact_review_retirement_tests;
 #[path = "retirement_tests.rs"]
 mod retirement_tests;
 

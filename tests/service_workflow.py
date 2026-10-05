@@ -1092,6 +1092,102 @@ class Fixture:
                 == applied["candidate_oid"]
             )
         else:
+            # Review copies belong to the assigned staging directory; an unrelated
+            # worktree file survives their retirement. Real source transfer above
+            # used restricted NATS and application-accepted chunk receipts.
+            assert self.wrappers[reviewer].wait(timeout=5) == 0
+            review_tree = Path(self.spaces[reviewer]["cwd"])
+            review_inputs = review_tree / f".herdr-supervisor-artifacts-{reviewer}"
+            unrelated = review_tree / "operator-notes.txt"
+            unrelated.write_text("Keep this separately owned file")
+            with sqlite3.connect(
+                f"file:{self.node / 'node.sqlite'}?mode=ro", uri=True
+            ) as connection:
+                cached_before = connection.execute(
+                    "SELECT id,response FROM events WHERE json_extract(wire,'$.record.payload.command.method')='fetch_artifact_chunk' AND json_extract(wire,'$.record.payload.command.params.attempt')=? ORDER BY id",
+                    (reviewer,),
+                ).fetchall()
+            assert cached_before
+            review_decision = self.file(
+                "retire-review-inputs.json",
+                {
+                    "operation": uid(),
+                    "attempt": reviewer,
+                    "expected_epoch": cleanup_epochs[reviewer],
+                    "expected_manifest_hash": applied["artifact"]["manifest_hash"],
+                    "processes_confirmed_stopped": True,
+                    "retain_receipts_remove_inputs": True,
+                    "reason": "Reviewer wrapper joined; retain received chunks and unrelated files",
+                },
+            )
+            review_args = (
+                "cleanup-artifact-review",
+                "--executor",
+                executor,
+                "--request",
+                review_decision,
+            )
+            retired = self.cli(self.node, *review_args)
+            assert (
+                retired["state"] == "removed"
+                and retired["receipts_retained"] is True
+                and retired["worktree_removed"] is False
+            )
+            assert self.cli(self.node, *review_args) == retired
+            assert (
+                not review_inputs.exists()
+                and unrelated.read_text() == "Keep this separately owned file"
+            )
+            with sqlite3.connect(
+                f"file:{self.node / 'node.sqlite'}?mode=ro", uri=True
+            ) as connection:
+                assert (
+                    connection.execute(
+                        "SELECT id,response FROM events WHERE json_extract(wire,'$.record.payload.command.method')='fetch_artifact_chunk' AND json_extract(wire,'$.record.payload.command.params.attempt')=? ORDER BY id",
+                        (reviewer,),
+                    ).fetchall()
+                    == cached_before
+                )
+                assert (
+                    connection.execute(
+                        "SELECT state FROM artifact_staging WHERE attempt=?",
+                        (reviewer,),
+                    ).fetchone()[0]
+                    == "retired"
+                )
+            # Only the file created immediately above is explicitly removed by
+            # the fixture. Ordinary checkout retirement still requires clean Git.
+            unrelated.unlink()
+            review_head = self.git(review_tree, "rev-parse", "HEAD")
+            checkout_decision = self.file(
+                "retire-review-checkout.json",
+                {
+                    "operation": uid(),
+                    "attempt": reviewer,
+                    "expected_epoch": cleanup_epochs[reviewer],
+                    "expected_head": review_head,
+                    "processes_confirmed_stopped": True,
+                    "retain_commits_remove_checkout": True,
+                    "reason": "Owned reviewer fixture is clean after explicit input retirement",
+                },
+            )
+            checkout_retired = self.cli(
+                self.node,
+                "cleanup-retire",
+                "--executor",
+                executor,
+                "--request",
+                checkout_decision,
+            )
+            assert checkout_retired["state"] == "removed" and not review_tree.exists()
+            assert (
+                self.git(self.repo, "rev-parse", checkout_retired["retained_ref"])
+                == review_head
+            )
+            assert self.cli(self.node, *review_args) == retired
+            print(
+                "PASS: reviewer input retirement retains cached receipts/unrelated file and permits clean checkout retirement"
+            )
             decision = self.file(
                 "retire-artifact-inputs.json",
                 {
