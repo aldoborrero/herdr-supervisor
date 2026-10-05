@@ -39,6 +39,179 @@ fn binding(f: &Fixture) -> managed::Binding {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn managed_worker_focus_uses_configured_routes_and_rechecks_exact_native_identity() {
+    let mut f = Fixture::new();
+    let task = f.task();
+    let (attempt, token) = f.dispatch(&task);
+    let r = f.ready(&attempt, &token);
+    let world = World::new();
+    drop(project::create(&world.root, "demo", "", vec![]).unwrap());
+    let (stop, api) = server(&f).await;
+    managed::attach(&world.root, "demo", binding(&f)).unwrap();
+    let p = Project::load_view(&world.root, "demo").unwrap();
+    let cfg = f.dir.path().join("focus-routes.json");
+    let agent = json!({"pane_id":r.pane,"tab_id":"tab","workspace_id":r.workspace,"terminal_id":r.terminal,"agent":r.runtime,"agent_session":{"value":r.session}});
+    let pane = json!({"pane_id":r.pane,"tab_id":"tab","workspace_id":r.workspace,"terminal_id":r.terminal,"cwd":r.worktree});
+    *world.agents.borrow_mut() = json!([agent]).to_string();
+    *world.panes.borrow_mut() = json!([pane]).to_string();
+    world
+        .runner
+        .on("agent focus", crate::runner::fake::ok("{}"));
+    assert!(crate::managed_focus::focus(&world.ctx(), &p, &attempt.id, attempt.epoch).is_err());
+    for machine in [None, Some("worker-host-id")] {
+        std::fs::write(
+            &cfg,
+            json!({"nodes":{"local":{"socket":"/explicit/herdr.sock","machine":machine}}})
+                .to_string(),
+        )
+        .unwrap();
+        crate::managed_focus::configure(&p, &cfg).unwrap();
+        crate::managed_focus::focus(&world.ctx(), &p, &attempt.id, attempt.epoch).unwrap();
+        let calls = world.runner.calls.borrow();
+        let last = calls
+            .iter()
+            .rfind(|c| c.display().contains("agent focus"))
+            .unwrap();
+        assert_eq!(last.args.last().unwrap(), &r.pane);
+        assert!(
+            last.env
+                .iter()
+                .any(|(key, value)| key == "HERDR_SOCKET_PATH" && value == "/explicit/herdr.sock")
+        );
+        assert_eq!(
+            last.args.first().map(String::as_str),
+            Some(if machine.is_some() {
+                "--machine"
+            } else {
+                "agent"
+            })
+        );
+    }
+    assert_eq!(world.runner.count("agent focus"), 2);
+    for field in ["pane_id", "workspace_id", "terminal_id", "agent"] {
+        let mut changed = agent.clone();
+        changed[field] = json!("wrong");
+        *world.agents.borrow_mut() = json!([changed]).to_string();
+        assert!(
+            crate::managed_focus::focus(&world.ctx(), &p, &attempt.id, attempt.epoch).is_err(),
+            "{field}"
+        );
+    }
+    let mut changed = agent.clone();
+    changed["agent_session"]["value"] = json!(id());
+    *world.agents.borrow_mut() = json!([changed]).to_string();
+    assert!(crate::managed_focus::focus(&world.ctx(), &p, &attempt.id, attempt.epoch).is_err());
+    *world.agents.borrow_mut() = json!([agent, agent]).to_string();
+    assert!(crate::managed_focus::focus(&world.ctx(), &p, &attempt.id, attempt.epoch).is_err());
+    *world.agents.borrow_mut() = json!([agent]).to_string();
+    for field in ["terminal_id", "workspace_id", "cwd"] {
+        let mut changed = pane.clone();
+        changed[field] = json!("wrong");
+        *world.panes.borrow_mut() = json!([changed]).to_string();
+        assert!(
+            crate::managed_focus::focus(&world.ctx(), &p, &attempt.id, attempt.epoch).is_err(),
+            "{field}"
+        );
+    }
+    *world.panes.borrow_mut() = json!([pane]).to_string();
+    assert!(crate::managed_focus::focus(&world.ctx(), &p, &attempt.id, attempt.epoch + 1).is_err());
+    let state = f.store.dir.clone();
+    let id = attempt.id.clone();
+    let response = json!({"result":{"agents":[agent]}}).to_string();
+    let runner = crate::runner::fake::FakeRunner::new();
+    runner.on_fn(
+        |c| c.display().contains("agent list"),
+        move |_| {
+            let store = Store::open(&state).unwrap();
+            store
+                .connection
+                .execute("UPDATE attempts SET active=0 WHERE id=?1", [&id])
+                .unwrap();
+            Ok(crate::runner::fake::ok(&response))
+        },
+    );
+    runner.on(
+        "pane list",
+        crate::runner::fake::ok(&json!({"result":{"panes":[pane]}}).to_string()),
+    );
+    let mut ctx = world.ctx();
+    ctx.runner = &runner;
+    assert!(crate::managed_focus::focus(&ctx, &p, &attempt.id, attempt.epoch).is_err());
+    assert_eq!(runner.count("agent list"), 1);
+    assert_eq!(runner.count("agent focus"), 0);
+    assert_eq!(world.runner.count("agent focus"), 2);
+    assert_eq!(world.runner.count("agent start"), 0);
+    stop.send(()).unwrap();
+    api.await.unwrap().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn managed_focus_routes_are_owner_configured_bounded_and_bound_to_the_run() {
+    let mut f = Fixture::new();
+    let task = f.task();
+    let (attempt, token) = f.dispatch(&task);
+    f.ready(&attempt, &token);
+    assert!(
+        crate::control::pagination::focus_attempt(&f.store, &token, &f.run, &attempt.id, 1)
+            .is_err()
+    );
+    assert!(
+        crate::control::pagination::focus_attempt(
+            &f.store,
+            &f.supervisor,
+            "foreign",
+            &attempt.id,
+            1
+        )
+        .is_err()
+    );
+    let world = World::new();
+    drop(project::create(&world.root, "demo", "", vec![]).unwrap());
+    let (stop, api) = server(&f).await;
+    managed::attach(&world.root, "demo", binding(&f)).unwrap();
+    let p = Project::load_view(&world.root, "demo").unwrap();
+    let cfg = f.dir.path().join("focus-routes.json");
+    for value in [
+        json!({"nodes":{"local":{"socket":"relative"}}}),
+        json!({"nodes":{"local":{"socket":"/socket","machine":"--bad value"}}}),
+        json!({"nodes":{"local":{"socket":"/socket","extra":true}}}),
+    ] {
+        std::fs::write(&cfg, value.to_string()).unwrap();
+        assert!(crate::managed_focus::configure(&p, &cfg).is_err());
+        assert!(!p.state_dir().join("focus.json").exists());
+    }
+    std::fs::write(&cfg, " ".repeat(65537)).unwrap();
+    assert!(crate::managed_focus::configure(&p, &cfg).is_err());
+    std::fs::write(
+        &cfg,
+        json!({"nodes":{"local":{"socket":"/socket"}}}).to_string(),
+    )
+    .unwrap();
+    let link = f.dir.path().join("routes-link");
+    std::os::unix::fs::symlink(&cfg, &link).unwrap();
+    assert!(crate::managed_focus::configure(&p, &link).is_err());
+    crate::managed_focus::configure(&p, &cfg).unwrap();
+    let saved = std::fs::read(p.state_dir().join("focus.json")).unwrap();
+    let credential = f.store.dir.join("supervisor-view.token");
+    secret_file(&credential, f.supervisor.as_bytes()).unwrap();
+    let mut other = binding(&f);
+    other.credential = credential;
+    project::write_json(&p.state_dir().join("managed.json"), &other).unwrap();
+    assert!(crate::managed_focus::configure(&p, &cfg).is_err());
+    assert_eq!(
+        std::fs::read(p.state_dir().join("focus.json")).unwrap(),
+        saved
+    );
+    let mut foreign: Value = serde_json::from_slice(&saved).unwrap();
+    foreign["run"] = json!("foreign");
+    project::write_json(&p.state_dir().join("focus.json"), &foreign).unwrap();
+    assert!(crate::managed_focus::focus(&world.ctx(), &p, &attempt.id, 1).is_err());
+    assert_eq!(world.runner.count("agent list"), 0);
+    stop.send(()).unwrap();
+    api.await.unwrap().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn managed_projects_render_controller_records_and_decisions_use_exact_revisions() {
     let mut f = Fixture::new();
     let task = f.task();

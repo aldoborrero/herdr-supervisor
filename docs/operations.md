@@ -189,7 +189,7 @@ Popup decisions and forms submit `managed apply SLUG --receipt ...`. This return
 
 | Popup section | Controller data and actions |
 | --- | --- |
-| Threads | Attempts, role, node and state; `s` requests stop with the displayed epoch |
+| Threads | Attempts, role, node and state; `s` requests stop and `f` focuses an active bound session using the displayed epoch |
 | Tasks | Create a task with Enter/`n` on its creation row; `e` edits a planned contract/dependencies; integration/check/review evidence; `r` requests repair of interrupted/rejected tasks |
 | Inbox | Native coordinator notices and their receipts; `a` acknowledges an inspected notice |
 | Settings | Objective, policy, nodes, coordinator and launch receipts; `p` pauses/resumes, `x` cancels; owner can create profiles, `e` edit and `d` remove |
@@ -204,9 +204,32 @@ The equivalent CLI is `managed apply SLUG --operation ID --request JSON_FILE` (`
 
 The popup and its project picker read controller state in the background, with at most four simultaneous reads shared by picker summaries and detail panels, and one pending read per project binding/projection. The picker uses the bounded coordinator overview and server-side task counts; it does not download task contracts, results or memory. All six sections load one collection page at a time, including task/profile editors captured from the current page. An initial view shows a loading state. Refresh failure retains the last successful snapshot as explicitly stale/read-only; action hints and coordinator launch are disabled there. A changed or malformed binding invalidates the cached authority, and replies for an older binding are discarded. Reconnection restores current data and actions. This cache lives only in the popup process and never writes controller decisions or legacy project files.
 
-Background refresh preserves the selected managed record, project-picker filter and selection, and open confirmations/details. A confirmation retains its captured revision/epoch, which the controller still validates. An explicit mutation uses the existing CLI/API path and may wait for its response; only background reads are asynchronous. `managed status`, `context` and `overview` remain synchronous CLI reads. Service onboarding, resource focus across hosts and aggregate snapshot bounds remain pending. The popup itself must run on the controller host; workers may execute remotely over NATS.
+Background refresh preserves the selected managed record, project-picker filter and selection, and open confirmations/details. A confirmation retains its captured revision/epoch, which the controller still validates. An explicit mutation uses the existing CLI/API path and may wait for its response; only background reads are asynchronous. `managed status`, `context` and `overview` remain synchronous CLI reads. Worker focus uses explicit node routes as described below; actual cross-host validation, service onboarding and internal aggregate snapshot bounds remain pending. The popup itself must run on the controller host; workers may execute remotely over NATS.
 
 ## Browse managed pages
+
+For worker navigation, configure a route for each execution node using the owner-bound Projects view:
+
+```json
+{
+  "nodes": {
+    "local": { "socket": "/run/user/1000/herdr/default.sock" },
+    "worker-a": {
+      "socket": "/run/user/1000/herdr/default.sock",
+      "machine": "saved-machine-id"
+    }
+  }
+}
+```
+
+```bash
+herdr-supervisor --root PROJECTS_DIR managed focus-config demo --file focus-routes.json
+herdr-supervisor --root PROJECTS_DIR managed focus demo ATTEMPT_ID --expected-epoch EPOCH
+```
+
+The socket is explicit Herdr client context; `machine` selects an already configured Herdr remote machine through the inherited adapter. Node IDs come from controller enrollment, not display labels or cwd matching. Saving requires owner authority and writes only this project's `.state/focus.json`, bound to its controller/run. It does not enroll machines, change NetBird or launch processes. An empty `nodes` map disables configured routes. The regular input file and saved configuration are limited to 64 KiB and 128 routes; symlinks, relative sockets and invalid machine/node identifiers are refused.
+
+Press **f** on an active, bound Threads row to invoke the same command. It queries the current active attempt/epoch, observes the exact native UUID/runtime/workspace/pane/terminal and matching worktree on that route, then rechecks the controller binding before `agent focus`. Missing routes, ambiguous sessions, changed identities, retired attempts or stale popup state fail without a focus call. The Herdr adapter does not provide an atomic UUID-compare-and-focus operation: this is verified navigation followed by a pane focus, not a lock on subsequent native session changes. It sends no model input and starts no agent. Actual remote-server interaction still needs its acceptance run; current automated tests simulate Herdr while using the real controller API.
 
 In every managed section, use `]` for the next page, `[` for the previous page, and **Home** to restart from the first page. Navigation is asynchronous and shares the four-reader limit with the project picker. The page heading shows the page number, records shown and the current total. A page contains at most 50 complete records or explicit large-record references and may contain fewer to fit its byte budget; records are never truncated. Each panel response is capped at 3 MiB and reads its header, records and approval revisions in one SQLite transaction.
 

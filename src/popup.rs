@@ -2011,6 +2011,30 @@ impl<'a> Popup<'a> {
             }
             return;
         }
+        if key.code == KeyCode::Char('f') && doc["_focus_attempt"] == true {
+            if doc["_view_read_only"] == true {
+                self.message = "State is stale; wait for the controller to reconnect".into();
+                return;
+            }
+            let Some(attempt) = doc["id"].as_str() else {
+                return;
+            };
+            let Some(epoch) = doc["epoch"].as_u64() else {
+                return;
+            };
+            self.run(
+                &[
+                    "managed".into(),
+                    "focus".into(),
+                    slug,
+                    attempt.into(),
+                    "--expected-epoch".into(),
+                    epoch.to_string(),
+                ],
+                None,
+            );
+            return;
+        }
         if key.code == KeyCode::Char('c') {
             if doc["_view_read_only"] == true {
                 self.message = "State is stale; wait for the controller to reconnect".into();
@@ -3968,7 +3992,7 @@ mod tests {
             matches!(&popup.mode,Mode::TaskForm(form) if form.fields[6].value==r#"["off-page-task"]"# && form.fields[4].value==r#"["test"]"#)
         );
         let mut rendered = Vec::new();
-        popup.draw(&mut rendered).unwrap();
+        popup.draw_at_size(&mut rendered, 120, 30).unwrap();
         assert!(
             String::from_utf8(rendered)
                 .unwrap()
@@ -4001,7 +4025,7 @@ mod tests {
             matches!(&popup.mode,Mode::ProfileForm(form) if form.editing() && form.fields[0].value=="second" && form.fields[2].value==r#"["--model","original"]"#)
         );
         let mut rendered = Vec::new();
-        popup.draw(&mut rendered).unwrap();
+        popup.draw_at_size(&mut rendered, 120, 30).unwrap();
         assert!(String::from_utf8(rendered).unwrap().contains("second"));
         assert_eq!(world.runner.count("managed apply"), 0);
     }
@@ -4093,6 +4117,61 @@ mod tests {
         assert_eq!(command["method"], "stop_attempt");
         assert_eq!(command["params"]["expected_epoch"], 7);
         assert!(!calls.iter().any(|c| c.display().contains("thread stop")));
+    }
+
+    #[test]
+    fn managed_worker_focus_key_captures_attempt_epoch_and_refuses_stale_rows() {
+        use serde_json::json;
+        let world = crate::scenarios::World::new();
+        world.project("demo", "a.sock");
+        world
+            .runner
+            .on("managed focus", crate::runner::fake::ok(""));
+        let ctx = world.ctx();
+        let mut popup = Popup::new(&ctx, None, String::new());
+        popup.section = 0;
+        let context = json!({"run":{"id":"run","state":"active"},"attempts":[{"id":"worker-one","epoch":7,"state":"running","role":"worker","node":"node-a","native_session":"native","resource":{}}]});
+        popup.rows = crate::managed::panel_view(
+            "demo",
+            Section::Threads,
+            crate::managed_refresh::View::Current(context.clone()),
+        );
+        popup.selected = popup
+            .rows
+            .iter()
+            .position(|r| matches!(&r.kind,RowKind::Managed{doc,..} if doc["_focus_attempt"]==true))
+            .unwrap();
+        assert!(popup.rows[popup.selected].text.contains("f focus"));
+        popup.key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
+        let calls = world.runner.calls.borrow();
+        let sent = calls
+            .iter()
+            .find(|c| c.display().contains("managed focus"))
+            .unwrap();
+        assert!(sent.args.windows(6).any(|a| a
+            == [
+                "managed",
+                "focus",
+                "demo",
+                "worker-one",
+                "--expected-epoch",
+                "7"
+            ]));
+        drop(calls);
+        popup.rows = crate::managed::panel_view(
+            "demo",
+            Section::Threads,
+            crate::managed_refresh::View::Stale(context, "offline".into()),
+        );
+        popup.selected = popup
+            .rows
+            .iter()
+            .position(|r| matches!(&r.kind,RowKind::Managed{doc,..} if doc["_focus_attempt"]==true))
+            .unwrap();
+        assert!(!popup.rows[popup.selected].text.contains("f focus"));
+        popup.key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
+        assert_eq!(world.runner.count("managed focus"), 1);
+        assert_eq!(world.runner.count("thread restart"), 0);
     }
 
     #[test]

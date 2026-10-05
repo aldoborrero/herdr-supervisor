@@ -41,6 +41,12 @@ fn response_bytes(value: &Value) -> Result<Vec<u8>> {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ApiRequest {
+    FocusAttempt {
+        token: String,
+        run: String,
+        attempt: String,
+        expected_epoch: u64,
+    },
     Record {
         token: String,
         run: String,
@@ -110,6 +116,12 @@ pub enum ApiRequest {
 
 pub fn handle(store: &mut Store, request: ApiRequest) -> Result<Value> {
     match request {
+        ApiRequest::FocusAttempt {
+            token,
+            run,
+            attempt,
+            expected_epoch,
+        } => super::pagination::focus_attempt(store, &token, &run, &attempt, expected_epoch),
         ApiRequest::Record { token, run, cursor } => {
             super::record::read(store, &token, &run, &cursor)
         }

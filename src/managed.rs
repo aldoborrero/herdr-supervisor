@@ -547,6 +547,19 @@ pub struct ManagedArgs {
 }
 #[derive(Subcommand)]
 enum ManagedAction {
+    /// Save owner-approved local/remote Herdr routes for worker navigation
+    FocusConfig {
+        slug: String,
+        #[arg(long)]
+        file: PathBuf,
+    },
+    /// Focus the exact active native session using this project's node routes
+    Focus {
+        slug: String,
+        attempt: String,
+        #[arg(long)]
+        expected_epoch: u64,
+    },
     /// Read one fragment from a large-record reference returned by a page
     Record {
         slug: String,
@@ -614,6 +627,19 @@ enum ManagedAction {
 
 pub fn run(ctx: &Ctx, args: ManagedArgs) -> Result<()> {
     match args.action {
+        ManagedAction::FocusConfig { slug, file } => {
+            let project = Project::load_view(&ctx.root, &slug)?;
+            crate::managed_focus::configure(&project, &file)?;
+            println!("focus routes saved for {slug}");
+        }
+        ManagedAction::Focus {
+            slug,
+            attempt,
+            expected_epoch,
+        } => {
+            let project = Project::load_view(&ctx.root, &slug)?;
+            crate::managed_focus::focus(ctx, &project, &attempt, expected_epoch)?;
+        }
         ManagedAction::ResumeSetup { slug } => {
             println!("{}", crate::managed_setup::resume(&ctx.root, &slug)?)
         }
@@ -899,6 +925,12 @@ fn panel_rows(
     match section {
         Section::Threads => {
             for a in c["attempts"].as_array().into_iter().flatten() {
+                let mut doc = a.clone();
+                doc["_focus_attempt"] = json!(
+                    a["state"] != "stopped"
+                        && a["resource"].is_object()
+                        && a["native_session"].is_string()
+                );
                 let actions = if a["state"] != "stopped" {
                     vec![action(
                         's',
@@ -917,7 +949,7 @@ fn panel_rows(
                         a["state"].as_str().unwrap_or_default(),
                         a["node"].as_str().unwrap_or_default()
                     ),
-                    a.clone(),
+                    doc,
                     actions,
                 );
             }
@@ -1233,6 +1265,11 @@ fn panel_rows(
             if let RowKind::Managed { doc, .. } = &mut row.kind {
                 doc["_page_collection"] = json!(collection);
             }
+        }
+    }
+    for row in &mut rows {
+        if matches!(&row.kind,RowKind::Managed {doc,..} if doc["_focus_attempt"]==true) {
+            row.text.push_str(" · f focus");
         }
     }
     Ok(rows)

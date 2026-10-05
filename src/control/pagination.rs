@@ -537,3 +537,29 @@ pub fn matches_sessions(
     tx.commit()?;
     Ok(json!({"run":run,"matched":matched}))
 }
+
+/// A current active binding for operator navigation, without task/history data.
+pub fn focus_attempt(
+    store: &Store,
+    token: &str,
+    run: &str,
+    attempt: &str,
+    epoch: u64,
+) -> Result<Value> {
+    super::model::identifier(attempt)?;
+    let tx = store.connection.unchecked_transaction()?;
+    authorize(&tx, token, run)?;
+    let (node,native,resource):(String,String,String)=tx.query_row("SELECT node,json_extract(doc,'$.native_session'),json_extract(doc,'$.resource') FROM attempts WHERE id=?1 AND run=?2 AND epoch=?3 AND active=1",params![attempt,run,epoch],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+    ensure!(
+        resource.len() <= 32768,
+        "focus resource exceeds navigation budget"
+    );
+    let resource: super::model::Resource = serde_json::from_str(&resource)?;
+    ensure!(
+        native == resource.session,
+        "native session does not match resource"
+    );
+    let result = json!({"attempt":attempt,"run":run,"epoch":epoch,"node":node,"resource":resource});
+    tx.commit()?;
+    Ok(result)
+}
