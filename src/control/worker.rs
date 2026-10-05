@@ -154,13 +154,16 @@ pub fn handle(store: &mut NodeStore, identity: &Identity, request: WorkerRequest
             event,
         } => {
             authorized(store, &token, &attempt, Some(epoch))?;
-            let row: Option<(String,Option<String>)> = store.connection.query_row(
-                "SELECT state,response FROM events WHERE json_extract(wire,'$.record.id')=?1 AND substr(id,1,64)=?2",
-                params![event,digest(token.as_bytes())], |r|Ok((r.get(0)?,r.get(1)?))
+            let row: Option<(String,Option<String>,u64,i64,String)> = store.connection.query_row(
+                "SELECT state,response,tries,available_at,last_error FROM events WHERE json_extract(CASE WHEN json_valid(wire) THEN wire ELSE '{}' END,'$.record.id')=?1 AND substr(id,1,64)=?2",
+                params![event,digest(token.as_bytes())], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))
             ).optional()?;
-            let (state, response) = row.context("unknown or unauthorized event")?;
+            let (state, response, tries, next_attempt_at, last_error) =
+                row.context("unknown or unauthorized event")?;
             let result: Option<Value> = response.map(|s| serde_json::from_str(&s)).transpose()?;
-            Ok(json!({"event":event,"state":state,"result":result}))
+            Ok(
+                json!({"event":event,"state":state,"result":result,"delivery":{"tries":tries,"next_attempt_at":next_attempt_at,"last_error":last_error}}),
+            )
         }
     }
 }

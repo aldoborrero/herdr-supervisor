@@ -4,6 +4,7 @@ pub mod broker_policy;
 pub mod cli;
 pub mod coordinator;
 pub mod coordinator_launch;
+mod delivery;
 pub mod executor;
 pub mod git_pipeline;
 pub mod identity;

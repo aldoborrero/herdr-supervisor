@@ -4,7 +4,7 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
-The local implementation suite currently passes **417 unit tests and 7 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
+The local implementation suite currently passes **422 unit tests and 7 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
 
 | Requirement | Evidence | Limit |
 | --- | --- | --- |
@@ -13,7 +13,12 @@ The local implementation suite currently passes **417 unit tests and 7 CLI tests
 | Signed origin and route authorization | Identity tampering/expiry tests, controller receive tests, real NATS ACL tests | Explicit node rotation/revocation commands remain pending |
 | Reply inbox confidentiality and broker management | `real_broker_generated_acl_isolates_reply_inboxes_and_runtime_management` requires actual NATS permission errors for foreign reply subscriptions, consumer reads, stream mutations, message reads and ACKs; confirms legitimate deliveries/ACKs/reconnects | Generated runtime policy must be applied to the deployed broker; administrators remain trusted |
 | Broker policy usability and reserved routes | `broker_routes_reject_reserved_names_and_wildcards_before_enrollment_or_grant`; continuous CLI workflow invokes `broker-policy` and installs its permissions on separate controller/node users | Example in `docs/nats-acl.md`; existing host/broker configuration is not changed |
-| Durable offline transport | Real JetStream restart/offline test; ACK follows SQLite acceptance | Retry/backoff, poison-record policy and expiry handling need further work |
+| Durable offline transport | Real JetStream restart/offline test; ACK follows SQLite acceptance | Inbound poison-record handling and recovery of terminal outgoing records remain pending |
+| Durable retry and lost SQL publication receipt | `broker_acceptance_with_lost_sql_receipt_retries_identical_bytes_after_restart` injects failure after real broker storage, reopens SQLite and checks unchanged wire/ID, broker dedup and controller application | Network timeout alone never establishes acceptance |
+| Expired, malformed and premature outgoing records | `expired_malformed_and_future_outgoing_records_do_not_block_commands_or_receipts` keeps expired/invalid rows, defers a future timestamp and preserves active process capacity | Outgoing terminal states do not establish task outcomes |
+| Fairness across denied routes | `denied_outgoing_route_does_not_starve_incoming_events_or_other_nodes` receives a worker proposal and delivers its receipt while another destination is denied by real NATS ACLs | Incoming consumer/service outages remain separate failures |
+| Bounded retry schedule and private inspection | `retry_schedule_survives_restart_is_bounded_and_operator_projection_omits_credentials`; continuous CLI workflow invokes `delivery-status` | At most 100 recent metadata rows, with full state counts; no terminal requeue command |
+| Retry migration and native binding lookup | `node_v4_retry_migration_preserves_wire_jobs_memory_and_idempotent_operations`; extended three-runtime bootstrap test retains a malformed event row | Node schema 5; no native model calls or grant renewal |
 | One resource after a lost creation response | `executor_reconciles_lost_creation_reply_and_fences_cancelled_work` | Real Git; Herdr response/inventory simulated |
 | Exact pane and session binding | `three_native_launchers_bind_exact_sessions_before_idempotent_bootstrap` | Three runtime routes, stub executables and fake Herdr observations |
 | One-shot launch and credential environment | Same three-runtime test executes the actual owned wrapper in a child process, refuses a second claim and supplies conflicting parent environment | No authenticated model or live Herdr server contacted |
@@ -87,6 +92,8 @@ The same source also passes `cargo test --locked --offline` and strict all-targe
 
 The asynchronous-view commit (`62baee8`) passes the 415 unit/7 CLI tests, strict all-target Clippy and `nix fmt` locally. Its full Nix build compiled the application but failed while compiling the check binaries with `rustc-LLVM ERROR: IO failure on output stream: No space left on device`. The chained flake check did not run. Full package validation for that newer source remains pending; `result` still points to the previously verified cancellation-recovery package.
 
+The inbox-ACL commit (`0cd387b`) also passed its 417 unit/7 CLI tests, strict Clippy and formatting locally. Retrying its Nix build with one compilation job reached the check phase but again exhausted the shared filesystem. The subsequent outgoing-retry source passes 422 unit/7 CLI tests and strict Clippy using the RAM-backed Cargo cache. Full Nix package/check validation remains pending for these newer changes; the successful older package is not evidence for them.
+
 The transport audit reproduced a confidentiality gap in the old broker fixtures: their `_INBOX.>` subscription permission let a restricted node observe another consumer's JetStream pull response, even though that node could not issue the other consumer's pull request. The reproduction used a temporary loopback NATS server and fictional assignment/credential data, then stopped its owned process. The implementation now assigns distinct reply prefixes and generates the corresponding subscription ACLs. Real-broker regressions require explicit permission errors and absence of leaked payloads, while the continuous workflow exercises generated runtime permissions end to end. Applying those permissions to a deployed broker is an operator step; no host or shared server has been changed.
 
 ## Commands
@@ -119,7 +126,7 @@ Mailer protocol-2 support is an independent local commit **`7a12d5a`** on `feat/
 - Idempotent/reconcilable mailer registration after a lost registration response.
 - Full onboarding, task/profile forms and cross-host resource focus.
 - Aggregate API/wire bounds and large-run context pagination.
-- NATS backoff/expiry handling and node lifecycle operations.
+- Inbound poison-record policy, recovery/requeue of terminal outgoing records, and grant/node lifecycle operations.
 - Optional project/cross-run memory and Markdown projection.
 - Stronger model-facing validation beyond the isolated continuous-service workflow and protocol fixtures.
 

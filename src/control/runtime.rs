@@ -456,7 +456,7 @@ pub fn advance(
             [attempt],
         )?;
     }
-    let applied:Option<String>=store.connection.query_row("SELECT response FROM events WHERE json_extract(wire,'$.record.id')=?1 AND state='controller_applied'",[plan.bind_event.as_ref().unwrap()],|r|r.get(0)).optional()?;
+    let applied:Option<String>=store.connection.query_row("SELECT response FROM events WHERE json_extract(CASE WHEN json_valid(wire) THEN wire ELSE '{}' END,'$.record.id')=?1 AND state='controller_applied'",[plan.bind_event.as_ref().unwrap()],|r|r.get(0)).optional()?;
     if applied.is_none() {
         return Ok(json!({"state":"awaiting_binding","model_ready":false}));
     }

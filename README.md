@@ -6,6 +6,8 @@ A Rust adaptation of [Herdr Projects](https://github.com/eliasstravik/herdr-proj
 
 Use `control broker-policy` to generate the controller and per-node NATS permissions, including isolated reply inboxes. See the [broker setup example](docs/nats-acl.md).
 
+Outgoing delivery retries survive restarts without changing message identity. `control delivery-status` exposes pending, expired and invalid delivery metadata; those states remain separate from task completion. See [delivery operations](docs/operations.md#outgoing-delivery-and-retries).
+
 **In development.** The controller, signed node protocol, curated memory, scoped worker API, native worker launch/stop path and code review/integration pipeline are implemented. Projects can now display a bound controller run and submit scoped lifecycle/memory actions. Projects can also request an owned Codex, Claude or Pi coordinator through a configured controller launcher. Artifact verification, broader onboarding, recovery and cleanup remain in progress. The full delivery contract is in [IMPLEMENTATION.md](IMPLEMENTATION.md).
 
 ## What is different

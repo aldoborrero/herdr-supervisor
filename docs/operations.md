@@ -175,6 +175,25 @@ Subjects are `hs.<sha256-owner-DID>.to.<node-id>` and `.to.controller`. Consumer
 
 A node's broker ACL must prevent publishing to other nodes' command subjects and reading their consumers or reply inboxes. Generate the exact runtime permissions with `control --state CONTROLLER_DIR broker-policy --node NODE_ID`; see the [deployment example and reply-prefix migration](nats-acl.md). The controller and each node use distinct `_HS_INBOX.<owner-hash>...` prefixes automatically. The generated policy includes only the runtime's publish routes, its own pull consumer and ACKs, and its own reply subscriptions. Broker administration is a separate credential. The continuous-service test uses the generated permissions for both the controller and node, while real-broker regressions verify rejected reads, writes and management requests.
 
+## Outgoing delivery and retries
+
+Each relay reads incoming records before attempting outgoing publication. A denied destination or an expired outgoing record therefore does not prevent reading new commands/results. Outgoing selection is ordered by due time and limited to 16 records per cycle. Network publication has a three-second budget for the batch and a maximum of two seconds per attempt; SQLite locking and incoming broker calls have their own timeouts.
+
+The relay persists the attempt count and next retry time before publishing. Failures retain a delay of 2, 4, 8, 16, 32 and then at most 60 seconds, including across restarts. A process that dies during publication leaves that reservation in place. The signed bytes, message ID, author and expiry remain frozen; losing the SQLite publication receipt causes an idempotent retry, not a new operation. Broker storage is still distinct from controller application or a native/model result.
+
+An expired outgoing record becomes `expired`; a malformed or cryptographically invalid stored node record becomes `invalid`. These states stop publication and retain the record for inspection. They do not complete a task, free process capacity or establish whether an earlier uncertain attempt reached the receiver. A frozen timestamp ahead of the local clock is deferred without rewriting it. Already accepted controller receipts remain authoritative, and malformed neighboring rows cannot block valid receipt lookup or native bootstrap.
+
+Inspect controller deliveries using an owner credential, or a node credential scoped to the selected node:
+
+```bash
+herdr-supervisor control --state CONTROLLER_DIR delivery-status \
+  --credential CREDENTIAL_FILE --node NODE_ID
+```
+
+The result contains counts for every delivery state and at most 100 recent metadata rows, including attempts, expiry, next attempt time and a diagnostic category. It omits command bodies, signed envelopes and credentials. This command is an inspection of controller state; it does not change the broker or retry a terminal record. Worker `receipt` and MCP `worker_receipt` include the same attempt/schedule/error fields for that worker's event. A zero `next_attempt_at` means no retry is scheduled after a terminal or successful delivery.
+
+Node schema 5 adds retry metadata while preserving existing event IDs/wires, jobs, memory replicas and operation replays. Controller retry metadata uses its existing outbox columns. Expiry does not renew a grant or extend a task deadline. Recovery of terminal outgoing records, inbound poison-record handling and explicit grant/node lifecycle operations remain pending; rejected incoming records still receive no acceptance ACK.
+
 ## Run an executor
 
 Executor configuration maps controller repository identities to authorized local checkouts:

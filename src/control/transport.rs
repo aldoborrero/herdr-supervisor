@@ -174,16 +174,9 @@ pub fn decode(bytes: &[u8]) -> Result<SignedRecord> {
 
 pub async fn controller_once(store: &mut Store, broker: &Broker) -> Result<usize> {
     let identity = Identity::load(&store.dir.join("owner.key"))?;
-    let credential = std::fs::read_to_string(store.dir.join("admin.token"))?;
     let mut count = 0;
-    for node in store.nodes()? {
-        for effect in store.pending(&credential, &node)? {
-            let wire = store.prepare_wire(&effect.id, &identity)?;
-            broker.publish(&node, &wire).await?;
-            store.published(&effect.id)?;
-            count += 1;
-        }
-    }
+    // Receive before publishing: a failed/expired outgoing record must not
+    // prevent new results, cancellation receipts or resource bindings.
     let consumer = broker.consumer("controller").await?;
     let mut messages = consumer
         .fetch()
@@ -204,16 +197,59 @@ pub async fn controller_once(store: &mut Store, broker: &Broker) -> Result<usize
             .map_err(|e| anyhow::anyhow!("broker ACK: {e}"))?;
         count += 1;
     }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    for (id, target) in super::delivery::controller_due(&store.connection)? {
+        if tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        if !super::delivery::begin(&store.connection, super::delivery::Queue::Controller, &id)? {
+            continue;
+        }
+        let wire = match store.prepare_wire(&id, &identity) {
+            Ok(wire) => wire,
+            Err(_) => {
+                super::delivery::failed(
+                    &store.connection,
+                    super::delivery::Queue::Controller,
+                    &id,
+                    "envelope preparation failed; retry scheduled",
+                )?;
+                continue;
+            }
+        };
+        if !valid_outgoing(
+            &store.connection,
+            super::delivery::Queue::Controller,
+            &id,
+            &wire,
+        )? {
+            continue;
+        }
+        if publish_bounded(broker, &target, &wire, deadline).await {
+            if store.published(&id).is_ok() {
+                count += 1;
+            } else {
+                super::delivery::failed(
+                    &store.connection,
+                    super::delivery::Queue::Controller,
+                    &id,
+                    "broker accepted; local receipt not recorded",
+                )?;
+            }
+        } else {
+            super::delivery::failed(
+                &store.connection,
+                super::delivery::Queue::Controller,
+                &id,
+                "broker acceptance unconfirmed; retry scheduled",
+            )?;
+        }
+    }
     Ok(count)
 }
 
 pub async fn node_once(store: &mut NodeStore, broker: &Broker) -> Result<usize> {
     let mut count = 0;
-    for (id, record) in store.pending()? {
-        broker.publish("controller", &record).await?;
-        store.published(&id)?;
-        count += 1;
-    }
     let consumer = broker.consumer(&store.node_id).await?;
     let mut messages = consumer
         .fetch()
@@ -234,7 +270,100 @@ pub async fn node_once(store: &mut NodeStore, broker: &Broker) -> Result<usize> 
             .map_err(|e| anyhow::anyhow!("broker ACK: {e}"))?;
         count += 1;
     }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    for (id, wire) in super::delivery::node_due(&store.connection)? {
+        if tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        let record: SignedRecord = match serde_json::from_str(&wire) {
+            Ok(record) => record,
+            Err(_) => {
+                super::delivery::terminal(
+                    &store.connection,
+                    super::delivery::Queue::Node,
+                    &id,
+                    false,
+                )?;
+                continue;
+            }
+        };
+        if !valid_outgoing(
+            &store.connection,
+            super::delivery::Queue::Node,
+            &id,
+            &record,
+        )? {
+            continue;
+        }
+        if !super::delivery::begin(&store.connection, super::delivery::Queue::Node, &id)? {
+            continue;
+        }
+        if publish_bounded(broker, "controller", &record, deadline).await {
+            if store.published(&id).is_ok() {
+                count += 1;
+            } else {
+                super::delivery::failed(
+                    &store.connection,
+                    super::delivery::Queue::Node,
+                    &id,
+                    "broker accepted; local receipt not recorded",
+                )?;
+            }
+        } else {
+            super::delivery::failed(
+                &store.connection,
+                super::delivery::Queue::Node,
+                &id,
+                "broker acceptance unconfirmed; retry scheduled",
+            )?;
+        }
+    }
     Ok(count)
+}
+
+fn valid_outgoing(
+    connection: &rusqlite::Connection,
+    queue: super::delivery::Queue,
+    id: &str,
+    record: &SignedRecord,
+) -> Result<bool> {
+    let now = super::store::now();
+    if record.record.expires_at <= now {
+        super::delivery::terminal(connection, queue, id, true)?;
+        return Ok(false);
+    }
+    if record.record.created_at > now + 30 {
+        // A local clock correction can make a valid frozen record premature.
+        // Defer without changing its signed timestamps or permanently rejecting it.
+        super::delivery::begin(connection, queue, id)?;
+        super::delivery::failed(
+            connection,
+            queue,
+            id,
+            "outgoing timestamp is ahead of local clock; retry scheduled",
+        )?;
+        return Ok(false);
+    }
+    if record.verify(now).is_err() {
+        super::delivery::terminal(connection, queue, id, false)?;
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+async fn publish_bounded(
+    broker: &Broker,
+    target: &str,
+    record: &SignedRecord,
+    deadline: tokio::time::Instant,
+) -> bool {
+    let timeout = deadline
+        .saturating_duration_since(tokio::time::Instant::now())
+        .min(Duration::from_secs(2));
+    matches!(
+        tokio::time::timeout(timeout, broker.publish(target, record)).await,
+        Ok(Ok(()))
+    )
 }
 
 pub fn read_config(path: &Path) -> Result<BrokerConfig> {

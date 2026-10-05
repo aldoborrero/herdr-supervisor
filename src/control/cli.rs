@@ -19,6 +19,13 @@ pub struct ControlArgs {
 
 #[derive(Subcommand)]
 enum ControlCommand {
+    /// Inspect bounded outgoing delivery metadata without exposing command bodies
+    DeliveryStatus {
+        #[arg(long)]
+        credential: PathBuf,
+        #[arg(long)]
+        node: String,
+    },
     /// Print runtime NATS permissions and reply prefixes; does not configure a broker
     BrokerPolicy {
         /// Node routes to include; defaults to the controller's enrolled active nodes
@@ -541,6 +548,10 @@ pub fn run(args: ControlArgs) -> Result<()> {
             grant.verify(jiff::Timestamp::now().as_second())?;
             serde_json::to_value(grant)?
         }
+        ControlCommand::DeliveryStatus {
+            credential: path,
+            node,
+        } => Store::open(&args.state)?.delivery_status(&credential(&path)?, &node)?,
         ControlCommand::BrokerPolicy { node } => {
             let store = Store::open(&args.state)?;
             let nodes = if node.is_empty() {

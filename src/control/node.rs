@@ -93,6 +93,7 @@ impl NodeStore {
             2 => (),
             3 => (),
             4 => (),
+            5 => (),
             _ => bail!("unsupported node schema"),
         }
         if version <= 2 {
@@ -108,6 +109,9 @@ impl NodeStore {
             for doc in orders {
                 super::live_memory::initialize(&tx, &serde_json::from_str(&doc)?)?;
             }
+        }
+        if version <= 4 {
+            tx.execute_batch(super::delivery::NODE_SCHEMA)?;
         }
         let existing: (String, String, String, u64) = tx.query_row(
             "SELECT owner,node,key,epoch FROM authority WHERE singleton=1",
@@ -181,7 +185,7 @@ impl NodeStore {
                 let operation = body["operation_id"]
                     .as_str()
                     .context("receipt operation ID")?;
-                let changed=tx.execute("UPDATE events SET state='controller_applied',response=?3 WHERE json_extract(wire,'$.record.id')=?1 AND json_extract(wire,'$.record.payload.operation_id')=?2",params![event,operation,serde_json::to_string(&body["result"])?])?;
+                let changed=tx.execute("UPDATE events SET state='controller_applied',response=?3,last_error='',available_at=0 WHERE json_extract(CASE WHEN json_valid(wire) THEN wire ELSE '{}' END,'$.record.id')=?1 AND json_extract(CASE WHEN json_valid(wire) THEN wire ELSE '{}' END,'$.record.payload.operation_id')=?2",params![event,operation,serde_json::to_string(&body["result"])?])?;
                 ensure!(changed == 1, "receipt references an unknown event");
             }
             "execute" => {
@@ -305,6 +309,7 @@ impl NodeStore {
         Ok(record.record.id)
     }
 
+    #[cfg(test)]
     pub fn pending(&self) -> Result<Vec<(String, SignedRecord)>> {
         let mut q = self
             .connection
@@ -319,7 +324,7 @@ impl NodeStore {
 
     pub fn published(&self, id: &str) -> Result<()> {
         self.connection.execute(
-            "UPDATE events SET state='broker_stored' WHERE id=?1 AND state='pending'",
+            "UPDATE events SET state='broker_stored',last_error='',available_at=0 WHERE id=?1 AND state='pending'",
             [id],
         )?;
         Ok(())

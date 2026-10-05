@@ -770,6 +770,20 @@ class Fixture:
             expected_revision=self.snapshot()["run"]["revision"],
         )
         assert self.snapshot()["run"]["state"] == "completed"
+        deliveries = self.cli(
+            self.controller,
+            "delivery-status",
+            "--credential",
+            self.controller / "admin.token",
+            "--node",
+            "local",
+        )
+        assert deliveries["state_counts"].get("broker_stored", 0) > 0
+        assert len(deliveries["recent"]) <= deliveries["limit"] == 100
+        assert self.owner_token not in json.dumps(deliveries)
+        assert all(
+            "payload" not in row and "wire" not in row for row in deliveries["recent"]
+        )
         assert self.creates == self.launches == [author, reviewer]
         assert len(self.registrations) == len(self.deliveries) == 2
         self.stop(self.node_process)

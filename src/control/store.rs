@@ -341,7 +341,7 @@ impl Store {
 
     pub fn published(&mut self, effect_id: &str) -> Result<()> {
         self.connection.execute(
-            "UPDATE outbox SET state='broker_stored' WHERE id=?1 AND state='pending'",
+            "UPDATE outbox SET state='broker_stored',last_error='',available_at=0 WHERE id=?1 AND state='pending'",
             [effect_id],
         )?;
         Ok(())
@@ -430,6 +430,15 @@ impl Store {
             })
         })
         .collect()
+    }
+
+    pub fn delivery_status(&self, credential: &str, target: &str) -> Result<Value> {
+        let p = authenticate(&self.connection, credential)?;
+        ensure!(
+            p.role == "owner" || p.node.as_deref() == Some(target),
+            "outbox access denied"
+        );
+        super::delivery::controller_status(&self.connection, target)
     }
 
     pub fn memory(

@@ -1664,6 +1664,9 @@ fn three_native_launchers_bind_exact_sessions_before_idempotent_bootstrap() {
         );
         assert!(!requests.lock().unwrap().iter().any(|r| r["op"] == "send"));
         let bind = node.pending().unwrap().remove(0).1;
+        // A retained invalid outgoing row must not poison receipt lookups or
+        // prevent native bootstrap for another, valid binding event.
+        node.connection.execute("INSERT INTO events(id,request_hash,wire,state) VALUES ('damaged-record','damaged','not-json','invalid')",[]).unwrap();
         f.store.receive(&bind).unwrap();
         let receipt = f
             .store
@@ -1814,3 +1817,6 @@ mod live_memory_tests;
 
 #[path = "broker_policy_tests.rs"]
 mod broker_policy_tests;
+
+#[path = "delivery_tests.rs"]
+mod delivery_tests;
