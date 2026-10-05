@@ -41,6 +41,13 @@ fn response_bytes(value: &Value) -> Result<Vec<u8>> {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ApiRequest {
+    ProjectPage {
+        token: String,
+        run: String,
+        collection: super::pagination::Collection,
+        #[serde(default)]
+        cursor: Option<String>,
+    },
     CoordinatorOverview {
         token: String,
         run: String,
@@ -82,6 +89,12 @@ pub enum ApiRequest {
 
 pub fn handle(store: &mut Store, request: ApiRequest) -> Result<Value> {
     match request {
+        ApiRequest::ProjectPage {
+            token,
+            run,
+            collection,
+            cursor,
+        } => super::pagination::project_page(store, &token, &run, collection, cursor.as_deref()),
         ApiRequest::CoordinatorOverview { token, run } => {
             super::pagination::overview(store, &token, &run)
         }

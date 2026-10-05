@@ -209,6 +209,28 @@ fn context_drains_unacknowledged_notices_across_multiple_pages() {
     assert_eq!(coordinator::collect(&mut f.store).unwrap(), 100);
     assert_eq!(coordinator::collect(&mut f.store).unwrap(), 5);
     assert_eq!(coordinator::collect(&mut f.store).unwrap(), 0);
+    let mut page_cursor = None;
+    let mut paged_ids = std::collections::BTreeSet::new();
+    loop {
+        let page = crate::control::pagination::project_page(
+            &f.store,
+            &f.supervisor,
+            &f.run,
+            crate::control::pagination::Collection::PendingNotices,
+            page_cursor.as_deref(),
+        )
+        .unwrap();
+        assert_eq!(page["unacknowledged_notices"], 106);
+        for notice in page["notices"].as_array().unwrap() {
+            assert!(paged_ids.insert(text(notice, "id")));
+            assert!(notice["acknowledged_by"].is_null());
+        }
+        page_cursor = page["_page"]["next_cursor"].as_str().map(str::to_owned);
+        if page_cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(paged_ids.len(), 106);
     let first = coordinator::context(&f.store, &f.supervisor, &f.run).unwrap();
     assert_eq!(first["unacknowledged_notices"], 106);
     let ids: Vec<String> = first["notices"]

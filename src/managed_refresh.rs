@@ -5,17 +5,25 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use crate::managed::Binding;
+use crate::{control::pagination::Collection, managed::Binding};
+use anyhow::{Context, Result, ensure};
 
 const MAX_READS: usize = 4;
 const REFRESH: Duration = Duration::from_secs(2);
+#[derive(Clone, Copy)]
+pub enum PageMove {
+    Next,
+    Previous,
+    First,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Projection {
     Detail,
     Overview,
+    Page(Collection),
 }
 type Key = (String, Projection);
-type Fetch = dyn Fn(&Binding, Projection) -> Result<Value, String> + Send + Sync;
+type Fetch = dyn Fn(&Binding, Projection, Option<&str>) -> Result<Value, String> + Send + Sync;
 
 #[derive(Clone, Debug)]
 pub enum View {
@@ -32,10 +40,14 @@ struct Entry {
     error: Option<String>,
     completed: Option<Instant>,
     pending: bool,
+    cursor: Option<String>,
+    back: VecDeque<Option<String>>,
+    number: u64,
 }
 
 struct Read {
     key: Key,
+    cursor: Option<String>,
     generation: String,
     binding: Binding,
 }
@@ -56,10 +68,11 @@ pub struct Cache {
 
 impl Default for Cache {
     fn default() -> Self {
-        Self::with_fetch(Arc::new(|binding, projection| {
+        Self::with_fetch(Arc::new(|binding, projection, cursor| {
             match projection {
                 Projection::Detail => binding.context(),
                 Projection::Overview => binding.overview(),
+                Projection::Page(collection) => binding.page(collection, cursor),
             }
             .map_err(|error| error.to_string())
         }))
@@ -86,6 +99,75 @@ impl Cache {
 
     pub fn overview(&mut self, slug: &str, binding: anyhow::Result<Binding>) -> View {
         self.project(slug, binding, Projection::Overview)
+    }
+
+    pub fn page(
+        &mut self,
+        slug: &str,
+        binding: anyhow::Result<Binding>,
+        collection: Collection,
+    ) -> View {
+        self.project(slug, binding, Projection::Page(collection))
+    }
+
+    pub fn turn_page(
+        &mut self,
+        slug: &str,
+        binding: &Binding,
+        collection: Collection,
+        direction: PageMove,
+    ) -> Result<()> {
+        let key = (slug.to_string(), Projection::Page(collection));
+        let entry = self.entries.get_mut(&key).context("Page not loaded")?;
+        ensure!(
+            &entry.binding == binding,
+            "Project binding changed; refresh the view"
+        );
+        match direction {
+            PageMove::Next => {
+                ensure!(
+                    entry.error.is_none(),
+                    "Page is unavailable; Home starts a fresh scan"
+                );
+                let next = entry
+                    .value
+                    .as_ref()
+                    .and_then(|v| v["_page"]["next_cursor"].as_str())
+                    .context("No next page")?
+                    .to_string();
+                ensure!(
+                    entry.cursor.as_ref() != Some(&next),
+                    "Page cursor did not advance"
+                );
+                entry.back.push_back(entry.cursor.clone());
+                if entry.back.len() > 64 {
+                    entry.back.pop_front();
+                }
+                entry.cursor = Some(next);
+                entry.number += 1;
+            }
+            PageMove::Previous => {
+                entry.cursor = entry
+                    .back
+                    .pop_back()
+                    .context("No previous page in history; Home starts a fresh scan")?;
+                entry.number -= 1;
+            }
+            PageMove::First => {
+                entry.cursor = None;
+                entry.back.clear();
+                entry.number = 1;
+            }
+        }
+        // Late refreshes still occupy their shared slot, but cannot replace the
+        // new position or revive actions for the page the user just left.
+        self.queue.retain(|read| read.key != key);
+        entry.generation = uuid::Uuid::new_v4().to_string();
+        entry.value = None;
+        entry.error = None;
+        entry.completed = None;
+        entry.pending = false;
+        Ok(())
     }
 
     fn project(
@@ -120,11 +202,15 @@ impl Cache {
             error: None,
             completed: None,
             pending: false,
+            cursor: None,
+            back: VecDeque::new(),
+            number: 1,
         });
         if !entry.pending && entry.completed.is_none_or(|at| at.elapsed() >= REFRESH) {
             entry.pending = true;
             self.queue.push_back(Read {
                 key,
+                cursor: entry.cursor.clone(),
                 generation: entry.generation.clone(),
                 binding: entry.binding.clone(),
             });
@@ -167,7 +253,19 @@ impl Cache {
         entry.pending = false;
         entry.completed = Some(Instant::now());
         match reply.result {
-            Ok(value) if value["run"]["id"] == entry.binding.run => {
+            Ok(mut value) if value["run"]["id"] == entry.binding.run => {
+                if let Projection::Page(collection) = reply.read.key.1 {
+                    if value["_page"]["collection"] != collection.name() {
+                        entry.error = Some("controller returned another collection".into());
+                        return true;
+                    }
+                    if let Some(cursor) = value["_page"]["cursor"].as_str() {
+                        entry.cursor = Some(cursor.to_string());
+                    }
+                    value["_page"]["number"] = serde_json::json!(entry.number);
+                    value["_page"]["previous_available"] =
+                        serde_json::json!(!entry.back.is_empty());
+                }
                 entry.value = Some(value);
                 entry.error = None;
             }
@@ -191,7 +289,7 @@ impl Cache {
                 .name("managed-view".into())
                 .spawn(move || {
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        fetch(&read.binding, read.key.1)
+                        fetch(&read.binding, read.key.1, read.cursor.as_deref())
                     }))
                     .unwrap_or_else(|_| Err("controller reader stopped unexpectedly".into()));
                     let _ = sender.send(Reply { read, result });
@@ -219,7 +317,7 @@ mod tests {
 
     fn controlled() -> (Cache, mpsc::Receiver<(String, Answer)>) {
         let (started, requests) = mpsc::channel();
-        let cache = Cache::with_fetch(Arc::new(move |binding, _projection| {
+        let cache = Cache::with_fetch(Arc::new(move |binding, _projection, _cursor| {
             let (answer, response) = mpsc::channel();
             started.send((binding.run.clone(), answer)).unwrap();
             response
@@ -368,7 +466,7 @@ mod tests {
     #[test]
     fn summary_and_detail_share_capacity_but_never_share_payloads_or_old_authority() {
         let (started, requests) = mpsc::channel();
-        let mut cache = Cache::with_fetch(Arc::new(move |binding, projection| {
+        let mut cache = Cache::with_fetch(Arc::new(move |binding, projection, _cursor| {
             let (answer, response) = mpsc::channel();
             started
                 .send((binding.run.clone(), projection, answer))
@@ -433,5 +531,98 @@ mod tests {
         );
         cache.overview("p", Err(anyhow::anyhow!("corrupt marker")));
         assert!(!cache.entries.keys().any(|(slug, _)| slug == "p"));
+    }
+    #[test]
+    fn page_navigation_rejects_late_refresh_and_recovers_from_failed_next_page() {
+        let (started, requests) = mpsc::channel();
+        let mut cache = Cache::with_fetch(Arc::new(move |_binding, projection, cursor| {
+            assert_eq!(projection, Projection::Page(Collection::Attempts));
+            let (answer, response) = mpsc::channel();
+            started.send((cursor.map(str::to_owned), answer)).unwrap();
+            response.recv_timeout(Duration::from_secs(5)).unwrap()
+        }));
+        let doc = |id: &str, next: Option<&str>| json!({"run":{"id":"run"},"attempts":[{"id":id}],"_page":{"collection":"attempts","next_cursor":next,"cursor":if id=="b" {"after-a-new"} else {"start"}}});
+        cache.page("p", Ok(binding("run")), Collection::Attempts);
+        let (cursor, first) = requests.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(cursor, None);
+        first.send(Ok(doc("a", Some("after-a")))).unwrap();
+        drain(&mut cache, 0);
+        cache
+            .entries
+            .get_mut(&("p".into(), Projection::Page(Collection::Attempts)))
+            .unwrap()
+            .completed = None;
+        cache.page("p", Ok(binding("run")), Collection::Attempts);
+        let (_, late) = requests.recv_timeout(Duration::from_secs(5)).unwrap();
+        cache
+            .turn_page("p", &binding("run"), Collection::Attempts, PageMove::Next)
+            .unwrap();
+        assert!(matches!(
+            cache.page("p", Ok(binding("run")), Collection::Attempts),
+            View::Loading
+        ));
+        let (cursor, next) = requests.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(cursor.as_deref(), Some("after-a"));
+        next.send(Err("offline".into())).unwrap();
+        late.send(Ok(doc("old-refresh", Some("wrong")))).unwrap();
+        drain(&mut cache, 0);
+        assert!(
+            matches!(cache.page("p",Ok(binding("run")),Collection::Attempts),View::Failed(e) if e=="offline")
+        );
+        cache
+            .turn_page(
+                "p",
+                &binding("run"),
+                Collection::Attempts,
+                PageMove::Previous,
+            )
+            .unwrap();
+        cache.page("p", Ok(binding("run")), Collection::Attempts);
+        let (cursor, previous) = requests.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(cursor.as_deref(), Some("start"));
+        previous
+            .send(Ok(doc("a-updated", Some("after-a-new"))))
+            .unwrap();
+        drain(&mut cache, 0);
+        assert!(
+            matches!(cache.page("p",Ok(binding("run")),Collection::Attempts),View::Current(v) if v["attempts"][0]["id"]=="a-updated" && v["_page"]["number"]==1)
+        );
+        cache
+            .turn_page("p", &binding("run"), Collection::Attempts, PageMove::Next)
+            .unwrap();
+        cache.page("p", Ok(binding("run")), Collection::Attempts);
+        let (cursor, next) = requests.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(cursor.as_deref(), Some("after-a-new"));
+        next.send(Ok(doc("b", None))).unwrap();
+        drain(&mut cache, 0);
+        assert!(
+            matches!(cache.page("p",Ok(binding("run")),Collection::Attempts),View::Current(v) if v["_page"]["number"]==2 && v["_page"]["previous_available"]==true)
+        );
+        assert!(
+            cache
+                .turn_page(
+                    "p",
+                    &binding("other"),
+                    Collection::Attempts,
+                    PageMove::First
+                )
+                .is_err()
+        );
+        assert!(
+            cache
+                .turn_page("p", &binding("run"), Collection::Attempts, PageMove::Next)
+                .is_err()
+        );
+        cache
+            .turn_page("p", &binding("run"), Collection::Attempts, PageMove::First)
+            .unwrap();
+        cache.page("p", Ok(binding("run")), Collection::Attempts);
+        let (cursor, first) = requests.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(cursor, None);
+        first.send(Ok(doc("a-new-scan", None))).unwrap();
+        drain(&mut cache, 0);
+        assert!(
+            matches!(cache.page("p",Ok(binding("run")),Collection::Attempts),View::Current(v) if v["_page"]["number"]==1 && v["_page"]["previous_available"]==false)
+        );
     }
 }

@@ -1960,3 +1960,6 @@ mod wire_limits_tests;
 
 #[path = "pagination_tests.rs"]
 mod pagination_tests;
+
+#[path = "project_pages_tests.rs"]
+mod project_pages_tests;

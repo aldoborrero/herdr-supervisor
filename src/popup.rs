@@ -20,7 +20,7 @@ use crate::thread::{self, Group, Thread};
 
 const REFRESH: Duration = Duration::from_secs(2);
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Section {
     Threads,
     Tasks,
@@ -1031,6 +1031,8 @@ pub struct Popup<'a> {
     /// A pane to focus once the popup has closed: (socket, machine, pane).
     jump: Option<(String, String, String)>,
     managed: crate::managed_refresh::Cache,
+    page_collections:
+        std::collections::BTreeMap<(String, Section), crate::control::pagination::Collection>,
 }
 
 fn managed_selection(row: &Row) -> Option<(String, String)> {
@@ -1038,7 +1040,14 @@ fn managed_selection(row: &Row) -> Option<(String, String)> {
         slug, title, doc, ..
     } = &row.kind
     {
-        Some((slug.clone(), doc["id"].as_str().unwrap_or(title).into()))
+        Some((
+            slug.clone(),
+            doc["id"]
+                .as_str()
+                .or_else(|| doc["topic"].as_str())
+                .unwrap_or(title)
+                .into(),
+        ))
     } else {
         None
     }
@@ -1058,6 +1067,7 @@ impl<'a> Popup<'a> {
             quit: false,
             jump: None,
             managed: crate::managed_refresh::Cache::default(),
+            page_collections: std::collections::BTreeMap::new(),
         };
         popup.reload();
         popup
@@ -1070,10 +1080,23 @@ impl<'a> Popup<'a> {
             SECTIONS[self.section],
             self.scope.as_deref(),
             |project, section| {
-                let view = self
-                    .managed
-                    .view(&project.slug, crate::managed::binding(project));
-                crate::managed::panel_view(&project.slug, section, view)
+                if let Some(default) = crate::managed::page_collections(section).first() {
+                    let collection = *self
+                        .page_collections
+                        .get(&(project.slug.clone(), section))
+                        .unwrap_or(default);
+                    let view = self.managed.page(
+                        &project.slug,
+                        crate::managed::binding(project),
+                        collection,
+                    );
+                    crate::managed::page_view(&project.slug, section, collection, view)
+                } else {
+                    let view = self
+                        .managed
+                        .view(&project.slug, crate::managed::binding(project));
+                    crate::managed::panel_view(&project.slug, section, view)
+                }
             },
         );
         if SECTIONS[self.section] == Section::Settings {
@@ -1948,6 +1971,46 @@ impl<'a> Popup<'a> {
         else {
             return;
         };
+        if doc["_page_collection"].is_string()
+            && matches!(key.code, KeyCode::Char('[' | ']' | 'v') | KeyCode::Home)
+        {
+            use crate::managed_refresh::PageMove;
+            let result = (|| -> anyhow::Result<()> {
+                let collection: crate::control::pagination::Collection =
+                    serde_json::from_value(doc["_page_collection"].clone())?;
+                let choices = crate::managed::page_collections(SECTIONS[self.section]);
+                anyhow::ensure!(
+                    choices.contains(&collection),
+                    "Page belongs to another section"
+                );
+                if key.code == KeyCode::Char('v') {
+                    let at = choices.iter().position(|c| c == &collection).unwrap();
+                    self.page_collections.insert(
+                        (slug.clone(), SECTIONS[self.section]),
+                        choices[(at + 1) % choices.len()],
+                    );
+                } else {
+                    let project = Project::load_view(&self.ctx.root, &slug)?;
+                    let binding = crate::managed::binding(&project)?;
+                    let direction = match key.code {
+                        KeyCode::Char(']') => PageMove::Next,
+                        KeyCode::Char('[') => PageMove::Previous,
+                        _ => PageMove::First,
+                    };
+                    self.managed
+                        .turn_page(&slug, &binding, collection, direction)?;
+                }
+                Ok(())
+            })();
+            match result {
+                Ok(()) => {
+                    self.selected = 0;
+                    self.reload();
+                }
+                Err(error) => self.message = error.to_string(),
+            }
+            return;
+        }
         if key.code == KeyCode::Char('c') {
             if doc["_view_read_only"] == true {
                 self.message = "State is stale; wait for the controller to reconnect".into();
@@ -3068,8 +3131,9 @@ impl<'a> Popup<'a> {
                     Some(RowKind::Managed { doc, .. }) if !doc["_profile_form"].is_null() && doc["_view_read_only"] != true => "↵/n new run profile  c coordinator".into(),
                     Some(RowKind::Managed { doc, .. }) if !doc["_task_form"].is_null() && doc["_view_read_only"] != true => "↵/n new task  c coordinator".into(),
                     Some(RowKind::Managed { actions, doc, .. }) => format!(
-                        "↵ details  c coordinator  {}{}",
+                        "↵ details  c coordinator  {}{}{}",
                         if doc["_editable_task"] == true && doc["_view_read_only"] != true { "e edit task  " } else if doc["_profile_name"].is_string() && doc["_view_read_only"] != true { "e edit profile  " } else { "" },
+                        if doc["_page_collection"].is_string() { "[ prev  ] next  Home first  v list  " } else { "" },
                         actions
                             .iter()
                             .map(|a| format!("{} {}", a.key, a.label))
@@ -3625,13 +3689,16 @@ mod tests {
                     let mut line = String::new();
                     BufReader::new(&stream).read_line(&mut line).unwrap();
                     let request: serde_json::Value = serde_json::from_str(&line).unwrap();
-                    if request["op"] == "coordinator_overview" {
+                    if request["op"] == "coordinator_overview"
+                        || request["op"] == "coordinator_context"
+                    {
                         writeln!(stream, "{}", json!({"data":{"kind":"paginated_context","run":{"id":"run","state":"active"},"collections":{"tasks":{"count":0}},"active_attempts":1}})).unwrap();
                         continue;
                     }
                     break (stream, request);
                 };
-                assert_eq!(request["op"], "coordinator_context");
+                assert_eq!(request["op"], "project_page");
+                assert_eq!(request["collection"], "attempts");
                 assert_eq!(request["run"], "run");
                 arrived.send(epoch).unwrap();
                 released.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -3647,7 +3714,7 @@ mod tests {
                     "run":{"id":"run","state":"active","revision":1},
                     "active_attempts":1,
                     "attempts":attempts,
-                    "tasks":[]
+                    "tasks":[], "_page":{"collection":"attempts","shown":1,"next_cursor":null}, "collections":{"attempts":{"count":1}}
                 }});
                 writeln!(stream, "{value}").unwrap();
             }
@@ -3690,7 +3757,11 @@ mod tests {
         };
         let captured = action.clone();
         popup.managed.invalidate();
-        popup.managed.view("demo", Ok(binding));
+        popup.managed.page(
+            "demo",
+            Ok(binding),
+            crate::control::pagination::Collection::Attempts,
+        );
         assert_eq!(requests.recv_timeout(Duration::from_secs(5)).unwrap(), 2);
         release.send(()).unwrap();
         server.join().unwrap();
@@ -3698,9 +3769,11 @@ mod tests {
         let until = Instant::now() + Duration::from_secs(5);
         loop {
             assert!(!popup.refresh_managed());
-            let view = popup
-                .managed
-                .view("demo", crate::managed::binding(&project));
+            let view = popup.managed.page(
+                "demo",
+                crate::managed::binding(&project),
+                crate::control::pagination::Collection::Attempts,
+            );
             if matches!(view, crate::managed_refresh::View::Current(value) if value["attempts"][0]["epoch"]==2)
             {
                 break;
@@ -3717,6 +3790,125 @@ mod tests {
         assert!(popup.quit);
         assert_eq!(world.runner.count("managed apply"), 0);
         assert_eq!(world.runner.count("thread stop"), 0);
+    }
+
+    #[test]
+    fn paginated_panel_keys_send_exact_cursors_and_memory_history_has_no_approval_action() {
+        use serde_json::json;
+        use std::io::{BufRead, BufReader};
+        use std::os::unix::{fs::PermissionsExt, net::UnixListener};
+        let world = crate::scenarios::World::new();
+        world.project("demo", "a.sock");
+        let state = tempfile::tempdir().unwrap();
+        let credential = state.path().join("token");
+        std::fs::write(&credential, "private-test-token").unwrap();
+        std::fs::set_permissions(&credential, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let binding = crate::managed::Binding {
+            version: 1,
+            controller: state.path().into(),
+            credential,
+            run: "run".into(),
+            launch_config: None,
+        };
+        let project = Project::load_view(&world.root, "demo").unwrap();
+        project::write_json(&project.state_dir().join("managed.json"), &binding).unwrap();
+        let listener = UnixListener::bind(state.path().join("control.sock")).unwrap();
+        let server = std::thread::spawn(move || {
+            for (collection, cursor) in [
+                ("attempts", None),
+                ("attempts", Some("after-a")),
+                ("attempts", None),
+                ("attempts", None),
+                ("memory", None),
+                ("pending_memory", None),
+                ("memory_proposals", None),
+            ] {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut line = String::new();
+                BufReader::new(&stream).read_line(&mut line).unwrap();
+                let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+                assert_eq!(request["op"], "project_page");
+                assert_eq!(request["collection"], collection);
+                assert_eq!(request["cursor"], json!(cursor));
+                let mut data = json!({"kind":"project_page","run":{"id":"run","state":"active"},"active_attempts":2,"collections":{collection:{"count":2}},"_page":{"collection":collection,"shown":1,"next_cursor":null}});
+                match collection {
+                    "attempts" => {
+                        data["attempts"] = json!([{"id":if cursor.is_none(){"a"}else{"b"},"epoch":1,"state":"running"}]);
+                        if cursor.is_none() {
+                            data["_page"]["next_cursor"] = json!("after-a");
+                        }
+                    }
+                    "memory" => {
+                        data["memory"] = json!({"topics":{}});
+                        data["withdrawn_memory"] =
+                            json!([{"topic":"parser","revision":2,"withdrawn":true,"text":""}]);
+                    }
+                    _ => {
+                        data["memory_proposals"] = json!([{"id":"proposal","topic":"parser","text":"example","status":if collection=="pending_memory"{"proposed"}else{"approved"}}]);
+                        data["memory_topics"] = json!([{"topic":"parser","revision":2}]);
+                    }
+                }
+                writeln!(stream, "{}", json!({"data":data})).unwrap();
+            }
+        });
+        fn wait(popup: &mut Popup<'_>, key: &str, value: &str) {
+            let until = Instant::now() + Duration::from_secs(5);
+            loop {
+                popup.refresh_managed();
+                if popup
+                    .rows
+                    .iter()
+                    .any(|row| matches!(&row.kind,RowKind::Managed {doc,..} if doc[key]==value))
+                {
+                    break;
+                }
+                assert!(
+                    Instant::now() < until,
+                    "page did not load: {}",
+                    popup.message
+                );
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+        let ctx = world.ctx();
+        let mut popup = Popup::new(&ctx, Some("demo".into()), String::new());
+        wait(&mut popup, "id", "a");
+        popup.key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE));
+        wait(&mut popup, "id", "b");
+        assert!(popup.rows.iter().any(|row| row.text.contains("page 2")));
+        popup.key(KeyEvent::new(KeyCode::Char('['), KeyModifiers::NONE));
+        wait(&mut popup, "id", "a");
+        popup.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(popup.mode, Mode::Detail { .. }));
+        popup.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        popup.key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+        wait(&mut popup, "id", "a");
+        popup.section = 5;
+        popup.reload();
+        wait(&mut popup, "topic", "parser");
+        assert!(popup.rows.iter().any(|row| row.text.contains("withdrawn")));
+        popup.key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+        wait(&mut popup, "status", "proposed");
+        popup.key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        assert!(
+            matches!(&popup.mode,Mode::Confirm {action,..} if action.iter().any(|arg|arg.contains("expected_revision") && arg.contains(":2")))
+        );
+        popup.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        popup.key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+        wait(&mut popup, "status", "approved");
+        popup.key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        assert!(matches!(popup.mode, Mode::List));
+        let mut rendered = Vec::new();
+        popup.draw(&mut rendered).unwrap();
+        let rendered = String::from_utf8(rendered).unwrap();
+        assert!(rendered.contains("approved"));
+        assert!(rendered.contains("Home first"));
+        assert_eq!(world.runner.count("managed apply"), 0);
+        assert_eq!(world.runner.count("thread stop"), 0);
+        server.join().unwrap();
     }
 
     #[test]

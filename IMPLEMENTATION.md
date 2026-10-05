@@ -104,3 +104,9 @@ Commit `27ed1ae` has completed its full x86_64-linux Nix build/flake gate with a
 ### Bounded Projects picker
 
 The project selector now fetches the coordinator overview with authoritative counts rather than complete run contents. Overview and detail projections share one four-reader pool but retain separate cached payloads; any binding change invalidates both and fences late replies. The large-run IPC and popup regressions cover counts, responsiveness and captured actions. Local validation passes 521 unit tests, 10 CLI tests, strict all-target Clippy and `nix fmt`; the package gate remains pending. Detail panels still need paginated navigation; this checkpoint does not claim completion of that deliverable.
+
+### Paginated Threads, Inbox and Memory
+
+These Projects panels now read one authenticated page with its header and current approval revisions in one SQLite transaction. Bracket keys navigate, Home starts a new scan, and v switches pending/history collections. Initial cursors survive refresh/back navigation; late replies cannot replace a newer page. Existing asynchronous capacity, scope, stale-view and captured-confirmation behavior is retained. Memory history distinguishes approved proposals and withdrawn topics. Focused backend/cache/real-socket popup tests pass, followed by all 526 unit and 10 CLI tests, strict all-target Clippy and `nix fmt`. The full package gate remains pending. Tasks, Routines, Settings, full-context CLI flows and oversized single-record retrieval still require migration.
+
+Commit `352dcec` passes full Nix build/check on x86_64-linux with all 520 unit and 10 CLI tests offline. Picker and panel follow-ups require a newer package gate.

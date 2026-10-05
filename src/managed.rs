@@ -104,6 +104,22 @@ pub fn binding(project: &Project) -> Result<Binding> {
 }
 
 impl Binding {
+    pub fn page(
+        &self,
+        collection: crate::control::pagination::Collection,
+        cursor: Option<&str>,
+    ) -> Result<Value> {
+        api::call(
+            &self.controller,
+            &api::ApiRequest::ProjectPage {
+                token: runtime::credential(&self.credential)?,
+                run: self.run.clone(),
+                collection,
+                cursor: cursor.map(str::to_owned),
+            },
+        )
+    }
+
     pub fn overview(&self) -> Result<Value> {
         api::call(
             &self.controller,
@@ -594,6 +610,54 @@ pub fn panel(project: &Project, section: crate::popup::Section) -> Vec<crate::po
     panel_view(&project.slug, section, view)
 }
 
+pub fn page_collections(
+    section: crate::popup::Section,
+) -> &'static [crate::control::pagination::Collection] {
+    use crate::{control::pagination::Collection::*, popup::Section};
+    match section {
+        Section::Threads => &[Attempts],
+        Section::Inbox => &[PendingNotices, Notices],
+        Section::Memory => &[Memory, PendingMemory, MemoryProposals],
+        _ => &[],
+    }
+}
+
+pub fn page_view(
+    slug: &str,
+    section: crate::popup::Section,
+    collection: crate::control::pagination::Collection,
+    view: crate::managed_refresh::View,
+) -> Vec<crate::popup::Row> {
+    use crate::popup::{Row, RowKind};
+    let read_only = !matches!(&view, crate::managed_refresh::View::Current(_));
+    let mut rows = panel_view(slug, section, view);
+    if !rows
+        .iter()
+        .any(|row| matches!(row.kind, RowKind::Managed { .. }))
+    {
+        rows.push(Row {
+            header: false,
+            text: "Home refresh · v change list".into(),
+            color: None,
+            kind: RowKind::Managed {
+                slug: slug.into(),
+                title: "Page navigation".into(),
+                doc: json!({"_view_read_only":true}),
+                actions: vec![],
+            },
+        });
+    }
+    for row in &mut rows {
+        if let RowKind::Managed { doc, .. } = &mut row.kind {
+            doc["_page_collection"] = json!(collection);
+            if read_only {
+                doc["_view_read_only"] = Value::Bool(true);
+            }
+        }
+    }
+    rows
+}
+
 pub fn panel_view(
     slug: &str,
     section: crate::popup::Section,
@@ -893,6 +957,17 @@ fn panel_rows(
                     )?],
                 );
             }
+            for m in c["withdrawn_memory"].as_array().into_iter().flatten() {
+                add(
+                    format!(
+                        "{} · withdrawn at revision {}",
+                        m["topic"].as_str().unwrap_or_default(),
+                        m["revision"]
+                    ),
+                    m.clone(),
+                    vec![],
+                );
+            }
             for p in c["memory_proposals"].as_array().into_iter().flatten() {
                 let revision = c["memory_topics"]
                     .as_array()
@@ -902,14 +977,22 @@ fn panel_rows(
                     .and_then(|m| m["revision"].as_u64())
                     .unwrap_or(0);
                 add(
-                    format!("{} · proposed", p["topic"].as_str().unwrap_or_default()),
+                    format!(
+                        "{} · {}",
+                        p["topic"].as_str().unwrap_or_default(),
+                        p["status"].as_str().unwrap_or("proposed")
+                    ),
                     p.clone(),
-                    vec![action(
-                        'a',
-                        "approve",
-                        json!({"method":"approve_memory","params":{"proposal":p["id"],"expected_revision":revision}}),
-                        true,
-                    )?],
+                    if p["status"].as_str().unwrap_or("proposed") == "proposed" {
+                        vec![action(
+                            'a',
+                            "approve",
+                            json!({"method":"approve_memory","params":{"proposal":p["id"],"expected_revision":revision}}),
+                            true,
+                        )?]
+                    } else {
+                        vec![]
+                    },
                 );
             }
         }
@@ -921,6 +1004,37 @@ fn panel_rows(
             color: None,
             kind: RowKind::None,
         });
+    }
+    if let Some(collection) = c["_page"]["collection"].as_str() {
+        let has_records = rows
+            .iter()
+            .any(|row| matches!(row.kind, RowKind::Managed { .. }));
+        let title = format!(
+            "{} · page {} · {} shown / {} total · [ previous  ] next  Home first  v list",
+            collection.replace('_', " "),
+            c["_page"]["number"].as_u64().unwrap_or(1),
+            c["_page"]["shown"],
+            c["collections"][collection]["count"]
+        );
+        rows.insert(
+            1,
+            Row {
+                header: has_records,
+                text: title.clone(),
+                color: None,
+                kind: RowKind::Managed {
+                    slug: slug.into(),
+                    title,
+                    doc: json!({"_page_collection":collection,"page":c["_page"]}),
+                    actions: vec![],
+                },
+            },
+        );
+        for row in &mut rows {
+            if let RowKind::Managed { doc, .. } = &mut row.kind {
+                doc["_page_collection"] = json!(collection);
+            }
+        }
     }
     Ok(rows)
 }

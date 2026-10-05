@@ -13,7 +13,9 @@ pub const PAGE_BYTES: usize = 1024 * 1024;
 const ITEM_BYTES: usize = 768 * 1024;
 const ENVELOPE_RESERVE: usize = 8192;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, clap::ValueEnum,
+)]
 #[serde(rename_all = "snake_case")]
 #[value(rename_all = "snake_case")]
 pub enum Collection {
@@ -198,13 +200,26 @@ pub fn page(
     cursor: Option<&str>,
     limit: u32,
 ) -> Result<Value> {
-    ensure!((1..=100).contains(&limit), "page limit must be 1..100");
     let tx = store.connection.unchecked_transaction()?;
-    let (p, owner, revision) = authorize(&tx, token, run)?;
+    let result = read_page(&tx, token, run, collection, cursor, limit)?;
+    tx.commit()?;
+    Ok(result)
+}
+
+fn read_page(
+    tx: &Connection,
+    token: &str,
+    run: &str,
+    collection: Collection,
+    cursor: Option<&str>,
+    limit: u32,
+) -> Result<Value> {
+    ensure!((1..=100).contains(&limit), "page limit must be 1..100");
+    let (p, owner, revision) = authorize(tx, token, run)?;
     let mut position = if let Some(cursor) = cursor {
         Cursor::decode(cursor)?
     } else {
-        start(&tx, &owner, &p, run, collection, revision)?.0
+        start(tx, &owner, &p, run, collection, revision)?.0
     };
     ensure!(
         position.owner == owner
@@ -238,6 +253,7 @@ pub fn page(
         limit + 1,
         ITEM_BYTES
     ])?;
+    let page_cursor = position.encode()?;
     let mut items = Vec::new();
     let mut used = ENVELOPE_RESERVE;
     let mut more = false;
@@ -268,20 +284,25 @@ pub fn page(
         items.push(item);
     }
     ensure!(!more || !items.is_empty(), "page cannot make progress");
-    let result = json!({"run":run,"collection":collection,"items":items,"next_cursor":if more{Some(position.encode()?)}else{None},"consistency":"current_per_page","new_rows":"refresh_context_to_start_a_new_scan","run_revision":revision,"limit":limit,"byte_limit":PAGE_BYTES});
+    let result = json!({"run":run,"collection":collection,"cursor":page_cursor,"items":items,"next_cursor":if more{Some(position.encode()?)}else{None},"consistency":"current_per_page","new_rows":"refresh_context_to_start_a_new_scan","run_revision":revision,"limit":limit,"byte_limit":PAGE_BYTES});
     ensure!(
         serde_json::to_vec(&result)?.len() <= PAGE_BYTES,
         "page envelope too large"
     );
     drop(rows);
     drop(q);
-    tx.commit()?;
     Ok(result)
 }
 
 pub fn overview(store: &Store, token: &str, run: &str) -> Result<Value> {
     let tx = store.connection.unchecked_transaction()?;
-    let (p, owner, revision) = authorize(&tx, token, run)?;
+    let result = read_overview(&tx, token, run)?;
+    tx.commit()?;
+    Ok(result)
+}
+
+fn read_overview(tx: &Connection, token: &str, run: &str) -> Result<Value> {
+    let (p, owner, revision) = authorize(tx, token, run)?;
     // Policy maps have their own pages, so repeated profile edits cannot inflate
     // the overview. Do not deserialize the complete run just to count records.
     let (bytes,doc):(u64,Option<String>)=tx.query_row("SELECT length(CAST(json_remove(doc,'$.policy.profiles','$.policy.checks') AS BLOB)),CASE WHEN length(CAST(json_remove(doc,'$.policy.profiles','$.policy.checks') AS BLOB))<=?2 THEN json_remove(doc,'$.policy.profiles','$.policy.checks') ELSE NULL END FROM runs WHERE id=?1",params![run,ITEM_BYTES],|r|Ok((r.get(0)?,r.get(1)?)))?;
@@ -292,7 +313,7 @@ pub fn overview(store: &Store, token: &str, run: &str) -> Result<Value> {
     let header: Value = serde_json::from_str(&doc.context("run header")?)?;
     let mut collections = serde_json::Map::new();
     for collection in Collection::ALL {
-        let (cursor, count) = start(&tx, &owner, &p, run, collection, revision)?;
+        let (cursor, count) = start(tx, &owner, &p, run, collection, revision)?;
         collections.insert(collection.name().into(),json!({"count":count,"cursor":if count>0{Some(cursor.encode()?)}else{None},"default_limit":50,"byte_limit":PAGE_BYTES}));
     }
     let active: u64 = tx.query_row(
@@ -311,11 +332,79 @@ pub fn overview(store: &Store, token: &str, run: &str) -> Result<Value> {
     for_recovery["policy"]["profiles"] = json!({});
     for_recovery["policy"]["checks"] = json!({});
     let minimal: Run = serde_json::from_value(for_recovery)?;
-    let result = json!({"kind":"paginated_context","run":header,"actor_role":p.role,"generation":p.generation,"active_attempts":active,"unacknowledged_notices":collections["pending_notices"]["count"],"native_coordinator":binding.map(|(generation,endpoint)|Ok::<_,anyhow::Error>(json!({"generation":generation,"endpoint":serde_json::from_str::<Value>(&endpoint)?}))).transpose()?,"repository_recovery":super::recovery::status(&tx,&minimal)?,"collections":collections,"instructions":include_str!("../../skill/MANAGED_COORDINATOR.md"),"consistency":"current_per_page","policy_maps":"Read profiles and policy_checks pages before scheduling or choosing checks"});
+    let result = json!({"kind":"paginated_context","run":header,"actor_role":p.role,"generation":p.generation,"active_attempts":active,"unacknowledged_notices":collections["pending_notices"]["count"],"native_coordinator":binding.map(|(generation,endpoint)|Ok::<_,anyhow::Error>(json!({"generation":generation,"endpoint":serde_json::from_str::<Value>(&endpoint)?}))).transpose()?,"repository_recovery":super::recovery::status(tx,&minimal)?,"collections":collections,"instructions":include_str!("../../skill/MANAGED_COORDINATOR.md"),"consistency":"current_per_page","policy_maps":"Read profiles and policy_checks pages before scheduling or choosing checks"});
     ensure!(
         serde_json::to_vec(&result)?.len() <= PAGE_BYTES,
         "context overview too large"
     );
-    tx.commit()?;
     Ok(result)
+}
+
+/// Bounded panel projection, header and records from the same read transaction.
+/// Ordinary cursors remain live scans, not immutable multi-page snapshots.
+pub fn project_page(
+    store: &Store,
+    token: &str,
+    run: &str,
+    collection: Collection,
+    cursor: Option<&str>,
+) -> Result<Value> {
+    use Collection::*;
+    ensure!(
+        matches!(
+            collection,
+            Attempts | Notices | PendingNotices | Memory | PendingMemory | MemoryProposals
+        ),
+        "collection is not a paginated project panel"
+    );
+    let tx = store.connection.unchecked_transaction()?;
+    let mut context = read_overview(&tx, token, run)?;
+    let mut page = read_page(&tx, token, run, collection, cursor, 50)?;
+    let values: Vec<Value> = page["items"]
+        .as_array_mut()
+        .context("page items")?
+        .drain(..)
+        .map(|mut item| item["value"].take())
+        .collect();
+    page.as_object_mut().unwrap().remove("items");
+    page["shown"] = json!(values.len());
+    context["kind"] = json!("project_page");
+    match collection {
+        Attempts => context["attempts"] = json!(values),
+        Notices | PendingNotices => context["notices"] = json!(values),
+        Memory => {
+            let mut topics = serde_json::Map::new();
+            let mut withdrawn = Vec::new();
+            for value in values {
+                if value["withdrawn"] == true {
+                    withdrawn.push(value);
+                } else {
+                    topics.insert(
+                        value["topic"].as_str().context("memory topic")?.to_string(),
+                        value,
+                    );
+                }
+            }
+            context["memory"] = json!({"topics":topics});
+            context["withdrawn_memory"] = json!(withdrawn);
+        }
+        PendingMemory | MemoryProposals => {
+            let mut revisions = Vec::new();
+            for proposal in &values {
+                let topic = proposal["topic"].as_str().context("proposal topic")?;
+                let revision: u64 = tx.query_row("SELECT COALESCE(MAX(revision),0) FROM memory_revisions WHERE run=?1 AND topic=?2",params![run,topic],|r|r.get(0))?;
+                revisions.push(json!({"topic":topic,"revision":revision}));
+            }
+            context["memory_topics"] = json!(revisions);
+            context["memory_proposals"] = json!(values);
+        }
+        _ => unreachable!(),
+    }
+    context["_page"] = page;
+    ensure!(
+        serde_json::to_vec(&context)?.len() <= 3 * PAGE_BYTES,
+        "project page envelope too large"
+    );
+    tx.commit()?;
+    Ok(context)
 }

@@ -4,9 +4,9 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
-**Last completed full Nix gate:** commit `27ed1aeb94e81e591edb1cdf0167394811b33047` passes package build and `nix flake check` on x86_64-linux, with 511 unit and 10 CLI tests offline. It includes passive Linux recovery and transactional signed-record budgets. The paginated-context extension requires its own package gate. This does not establish other platforms or completion of the remaining feature scope.
+**Last completed full Nix gate:** commit `352dcece5a03e21c079b9a397bdf89a2073df9dd` passes package build and `nix flake check` on x86_64-linux, with 520 unit and 10 CLI tests offline. It includes paginated coordinator context and scoped legacy reads. Picker and panel changes require their follow-up package gate. This does not establish other platforms or completion of the remaining feature scope.
 
-The local implementation suite currently passes **521 unit tests and 10 CLI tests** (local suite with four test threads), including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
+The local implementation suite currently passes **526 unit tests and 10 CLI tests** (local suite with four test threads), including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
 
 | Requirement | Evidence | Limit |
 | --- | --- | --- |
@@ -368,3 +368,21 @@ The signed-record budget commit `27ed1ae` completed its x86_64-linux Nix build/f
 ## Bounded Projects picker
 
 The picker now reads `CoordinatorOverview` independently from panel details, sharing the same four-reader pool. `summary_and_detail_share_capacity_but_never_share_payloads_or_old_authority` covers coalescing, one global limit, distinct payloads, cross-projection rebinding and corrupt-marker invalidation. The large-context regression now exercises the actual `Binding.overview` and default asynchronous cache over real IPC when legacy context exceeds 4 MiB, checking all 32 tasks are counted without downloading contracts. The gated-popup test answers summary and detail requests separately while preserving the selected record, filter and captured stop confirmation. This changes data retrieval, not terminal layout or key bindings. Detail-panel pagination remains pending. The follow-up passes 521 unit tests (32.91 s), 10 CLI tests (22.40 s), strict all-target Clippy (13.19 s) and `nix fmt`. Focused cache/popup/large-context tests also pass. Logs: `.direnv/picker-overview-focused.log`, `.direnv/picker-overview-full.log`, `.direnv/picker-overview-fmt.log`. Its full package gate remains pending.
+
+## Paginated Projects panels
+
+Threads, Inbox and Memory now use an authenticated `project_page` projection with a header and one collection read in the same SQLite transaction. The initial page cursor is returned and retained, preserving the scan boundary across refresh/back navigation until Home restarts. Pages use the existing 50-record/1-MiB collection limit with a 3-MiB projected response limit. Picker, legacy panels and page reads share four background slots. A page change fences late replies; the per-collection history retains 64 previous positions. Tasks, Routines, Settings, full-context CLI flows and oversized individual records remain pending.
+
+| Evidence | Boundary established |
+| --- | --- |
+| `project_memory_pages_keep_full_history_and_current_approval_revisions` | 67 proposals, complete 32,000-byte UTF-8 texts across multiple pages, provenance, withdrawn revision and exact revision-2 approval; history gives no approval action for an approved proposal; reads do not write journal decisions |
+| `project_pages_recheck_credentials_and_cursors_and_never_offer_stale_actions` | Exact attempt/profile snapshot, worker/node denial, principal/collection cursor scope, no leaked capability and stale read-only rendering |
+| `project_page_start_cursor_keeps_scan_boundary_until_explicit_restart` | A later append changes the total but not the original scan; restart includes it; loading/failed panels retain navigation without decisions |
+| `page_navigation_rejects_late_refresh_and_recovers_from_failed_next_page` | Late old-page response cannot overwrite a failed/new page; previous preserves its initial cursor; restart resets it; exact binding and end-of-list checks |
+| `paginated_panel_keys_send_exact_cursors_and_memory_history_has_no_approval_action` | Real Unix socket, actual popup keys for next/previous/Home/list switching, frozen confirmation revision, rendered history/hints and zero submitted decisions; controller replies are protocol fixtures |
+| Extended `context_drains_unacknowledged_notices_across_multiple_pages` | All 106 pending notices are visible without an implicit acknowledgement |
+| Extended large-context IPC regression | Actual Binding page requests remain usable while the full context exceeds 4 MiB; unrelated tasks are not downloaded |
+
+The final local suite passes 526 unit tests (40.46 s), 10 CLI tests (24.83 s), strict all-target Clippy (24.23 s) and `nix fmt`. Focused tests also pass. The full package gate remains pending. Logs: `.direnv/project-pages-first.log`, `.direnv/project-pages-focused.log`, `.direnv/project-pages-final.log`, `.direnv/project-pages-fmt.log`. The earlier full-suite attempt stopped on an incorrect test-module import, corrected before the final run. Model/Herdr/mailer execution remains simulated.
+
+The prior pagination commit `352dcec` completed its x86_64-linux Nix gate with 520 unit tests (98.50 s) and 10 CLI tests (46.97 s). Output: `/nix/store/hdqmjhkxllfynphy0l0z6pnam2ghx97f-herdr-supervisor-0.1.0`. Logs: `.direnv/pagination-nix-build.log` and `.direnv/pagination-nix-check.log`.
