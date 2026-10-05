@@ -4,6 +4,8 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
+**Current full Nix gate:** commit `5afb1d9a02b4649dec6ffa874d341c235d578ffd` passes package build and `nix flake check` on x86_64-linux, with all 441 unit and 7 CLI tests executed offline inside the package build. This supersedes the storage-related validation backlog recorded below; it does not establish builds on other platforms or completion of the remaining feature scope.
+
 The local implementation suite currently passes **441 unit tests and 7 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
 
 | Requirement | Evidence | Limit |
@@ -103,9 +105,9 @@ The service-module checkpoint passes 36 Linux assertions and rendered-unit check
 
 The same source also passes `cargo test --locked --offline` and strict all-target Clippy using a task-local RAM-backed Cargo cache. Earlier `nix flake check --no-build` results established evaluation only; they have now been supplemented by the full package gate. The successful Nix build uses the normal daemon build directory. No shared permissions or daemon settings were changed.
 
-The asynchronous-view commit (`62baee8`) passes the 415 unit/7 CLI tests, strict all-target Clippy and `nix fmt` locally. Its full Nix build compiled the application but failed while compiling the check binaries with `rustc-LLVM ERROR: IO failure on output stream: No space left on device`. The chained flake check did not run. Full package validation for that newer source remains pending; `result` still points to the previously verified cancellation-recovery package.
+The asynchronous-view commit (`62baee8`) passes the 415 unit/7 CLI tests, strict all-target Clippy and `nix fmt` locally. Its full Nix build compiled the application but failed while compiling the check binaries with `rustc-LLVM ERROR: IO failure on output stream: No space left on device`. The chained flake check did not run. Full validation was pending at that checkpoint; the later `5afb1d9` package now covers it. `result` now points to that artifact-content package.
 
-The inbox-ACL commit (`0cd387b`) also passed its 417 unit/7 CLI tests, strict Clippy and formatting locally. Retrying its Nix build with one compilation job reached the check phase but again exhausted the shared filesystem. The subsequent outgoing-retry source passes 422 unit/7 CLI tests and strict Clippy using the RAM-backed Cargo cache. Full Nix package/check validation remains pending for these newer changes; the successful older package is not evidence for them.
+The inbox-ACL commit (`0cd387b`) also passed its 417 unit/7 CLI tests, strict Clippy and formatting locally. Retrying its Nix build with one compilation job reached the check phase but again exhausted the shared filesystem. The subsequent outgoing-retry source passes 422 unit/7 CLI tests and strict Clippy using the RAM-backed Cargo cache. Full Nix validation was pending then and is now supplied by `5afb1d9`, which includes those changes.
 
 The transport audit reproduced a confidentiality gap in the old broker fixtures: their `_INBOX.>` subscription permission let a restricted node observe another consumer's JetStream pull response, even though that node could not issue the other consumer's pull request. The reproduction used a temporary loopback NATS server and fictional assignment/credential data, then stopped its owned process. The implementation now assigns distinct reply prefixes and generates the corresponding subscription ACLs. Real-broker regressions require explicit permission errors and absence of leaked payloads, while the continuous workflow exercises generated runtime permissions end to end. Applying those permissions to a deployed broker is an operator step; no host or shared server has been changed.
 
@@ -145,8 +147,23 @@ Mailer protocol-2 support is an independent local commit **`7a12d5a`** on `feat/
 
 No push, public release, host changes or deployment has occurred. Existing user sessions and shared runtime servers were not modified.
 
-The rejected-delivery change passes 430 unit tests (8.58 s), all 7 CLI tests (22.50 s after fixing the new fixture call) and strict all-target Clippy (21.32 s). The eight reception regressions include real restricted-broker delivery, saturation beyond the 64-message pending window, failed local persistence, missing prerequisites, restart, lost local application receipts, changed wire bytes, cancellation fencing, bounded retention/pruning and schema-5 migration. No live model, deployed broker or host configuration was changed. These are local Cargo results using the existing RAM cache; full Nix package/check validation of this source remains pending.
+The rejected-delivery change passes 430 unit tests (8.58 s), all 7 CLI tests (22.50 s after fixing the new fixture call) and strict all-target Clippy (21.32 s). The eight reception regressions include real restricted-broker delivery, saturation beyond the 64-message pending window, failed local persistence, missing prerequisites, restart, lost local application receipts, changed wire bytes, cancellation fencing, bounded retention/pruning and schema-5 migration. No live model, deployed broker or host configuration was changed. These were local Cargo results using the RAM cache; the later `5afb1d9` Nix package also validates the rejection-recovery changes.
 
-For the same reception source, `nix fmt`, realization of `checks.x86_64-linux.service-modules` and `checks.x86_64-linux.pkgs-formatter-check`, and `nix flake check --no-build` pass. The last command evaluates derivations only; it does not replace the outstanding full package build/check. The shared filesystem still had approximately 773 MiB available, so the previously failing full build was not restarted under equivalent conditions.
+For the same reception source, `nix fmt`, realization of `checks.x86_64-linux.service-modules` and `checks.x86_64-linux.pkgs-formatter-check`, and `nix flake check --no-build` pass. The last command evaluates derivations only; the later `5afb1d9` build/check supplies the full gate. The shared filesystem still had approximately 773 MiB available, so the previously failing full build was not restarted under equivalent conditions.
 
-The artifact-content source passes 441 unit tests (7.29 s), 7 CLI tests (20.93 s) and strict all-target Clippy (9.16 s) using the RAM Cargo cache. The continuous workflow exposed executor-fence contention in the new read-only status path; snapshot reads now avoid that mutation fence and are covered by a regression. File upload retries only the known busy-fence error and preserves operation IDs. These results establish content transfer/sealing, not the pending artifact verifier/reviewer/acceptance stage. Full Nix package validation remains outstanding under the shared disk-space constraint.
+The artifact-content source passes 441 unit tests (7.29 s), 7 CLI tests (20.93 s) and strict all-target Clippy (9.16 s) using the RAM Cargo cache. The continuous workflow exposed executor-fence contention in the new read-only status path; snapshot reads now avoid that mutation fence and are covered by a regression. File upload retries only the known busy-fence error and preserves operation IDs. These results establish content transfer/sealing, not the pending artifact verifier/reviewer/acceptance stage. The full Nix package gate subsequently passed at `5afb1d9` after free space increased.
+
+### Full package gate for artifact content
+
+When approximately 2.1 GiB became available, the pinned local artifact-content commit was built with one compilation job and the normal daemon build directory. Application compilation took 5 min 13 s; the check phase took 5 min 41 s, including compilation and 441 unit tests (74.21 s) plus 7 CLI tests (20.52 s). Both the build and the chained full flake check exited successfully. The installed CLI help was also invoked successfully.
+
+```bash
+nix --option min-free 0 build \
+  'git+file:///home/aldo/Dev/aldoborrero/herdr-supervisor?rev=5afb1d9a02b4649dec6ffa874d341c235d578ffd&shallow=1#herdr-supervisor' \
+  --cores 1 --max-jobs 1 --print-build-logs
+nix --option min-free 0 flake check \
+  'git+file:///home/aldo/Dev/aldoborrero/herdr-supervisor?rev=5afb1d9a02b4649dec6ffa874d341c235d578ffd&shallow=1' \
+  --cores 1 --max-jobs 1 --print-build-logs
+```
+
+The explicit pinned URL avoids this checkout's previously observed shallow-Git source lookup issue. Output: `/nix/store/v5vl9qs4rp3b36vs2z07wj9ch75c5g42-herdr-supervisor-0.1.0`, now referenced by `result`. Logs are `.direnv/artifacts-nix-build.log` and `.direnv/artifacts-nix-check.log` in the implementation worktree. The flake check includes the package, formatter and module checks; incompatible platforms were not built. No host/service activation, publication or shared daemon configuration change was performed. A documentation-only follow-up records this evidence; the tested implementation revision remains the pinned commit above.
