@@ -73,6 +73,10 @@ Owner and node identities use Ed25519 `did:key`. Signed, versioned JSON records 
 
 Worktrees isolate Git checkouts. Credentials and private state operate within a trusted same-UID environment; they are not an OS boundary against hostile processes running as that user.
 
+## Run as a service
+
+The flake exports opt-in NixOS and Home Manager modules for a controller and independently configured execution nodes. Each service uses the initialized runtime owner/state and configuration file paths; keys and tokens stay in private runtime files. See [service setup](docs/services.md) for examples, dependencies and shutdown behavior.
+
 ## Memory and persistence
 
 The controller stores proposals and revisions in `control.sqlite`, with WAL journaling, foreign keys and full synchronization. Approval records the author, evidence, source attempt and approving principal. Withdrawal creates a new revision without deleting history. Dispatch includes only requested topics plus preferences, with at most 32,000 UTF-8 bytes of text.

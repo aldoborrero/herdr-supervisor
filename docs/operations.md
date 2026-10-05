@@ -6,7 +6,7 @@ This guide covers `control` and the managed Projects view. The [inherited Projec
 
 Run `control run-controller --broker BROKER_JSON --repositories REPOSITORIES_JSON` against one private controller state directory. It combines the API, relay and Git verifier. `control serve` and `control relay-controller` expose the first two components independently; they do not execute checks or integration intents. Each execution node has a different private directory, its own signing key, and a `control run-node` process combining its relay, worker API and executor. The node's SQLite inbox/outbox survives process restarts. The separate mailer daemon must already be running locally on that node.
 
-State paths are explicit. No startup command edits global agent configuration, installs Herdr plugins or restarts shared sessions. Service modules and a complete onboarding command remain pending.
+State paths are explicit. No startup command edits global agent configuration, installs Herdr plugins or restarts shared sessions. Opt-in [NixOS and Home Manager service modules](services.md) wrap these commands. A complete onboarding command remains pending.
 
 | File or directory | Owner and purpose |
 | --- | --- |

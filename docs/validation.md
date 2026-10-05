@@ -61,6 +61,12 @@ The local implementation suite currently passes **398 unit tests and 6 CLI tests
 | Service restart reconciles launch intents | `controller_service_pumps_coordinator_intents_and_reconciles_after_restart` | Real NATS and stub Herdr executable; two service cycles, one create attempt |
 | Projects submits once and displays pending state | `managed_open_reserves_once_and_displays_pending_launch_without_legacy_effects` | Real controller API; owner launch configuration required |
 
+## Nix service modules
+
+`checks.<system>.service-modules` evaluates the actual exported NixOS and Home Manager modules with the pinned inputs. Linux checks cover disabled imports, the publishing package default, explicit non-root ownership, controller/node commands, multiple nodes, distinct normalized state, absent runtime configuration files, optional coordinator notifications, dependencies, private masks, restart limits, SIGINT/drain behavior and literal systemd argument escaping. It also reads the rendered unit files from both module systems. Darwin checks disabled imports and rejection of enabled Linux services. These are evaluation/rendering checks; no existing host or user manager is activated. See [services](services.md).
+
+The service-module checkpoint passes 36 Linux assertions and rendered-unit checks, plus evaluation for aarch64-linux and the Darwin rejection case. `nix fmt` passes. The full `nix flake check` attempt stopped in Rust dependency staging with `No space left on device`; it has **not** passed for this checkpoint. The Rust sources/tests are unchanged from `d416dfb` (398 unit tests and 6 CLI tests previously passed). Repeat the complete package/check gates when temporary storage is available.
+
 ## Commands
 
 ```bash
@@ -85,7 +91,6 @@ Mailer protocol-2 support is an independent local commit **`7a12d5a`** on `feat/
 - Aggregate API/wire bounds and large-run context pagination.
 - NATS backoff/expiry handling, node lifecycle operations and deployment ACL examples.
 - Live memory change consumption and optional Markdown projection.
-- Opt-in NixOS/Home Manager modules and their evaluation tests.
 - A complete isolated workflow through the continuous node service, plus stronger model-facing validation.
 
 No push, public release, host changes or deployment has occurred. Existing user sessions and shared runtime servers were not modified.
