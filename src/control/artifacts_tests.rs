@@ -536,7 +536,7 @@ fn controller_artifact_schema_upgrade_preserves_prior_authority_and_frozen_recor
     f.store
         .connection
         .execute_batch(
-            "DROP TABLE integration_policies; DROP TABLE attempt_profiles; DROP TABLE artifact_chunks; DROP TABLE artifact_uploads; DROP TABLE event_recoveries; DROP TABLE registration_recoveries; DROP TABLE coordinator_retirements; DROP TABLE verification_retirements; ALTER TABLE nodes DROP COLUMN draining; ALTER TABLE nodes DROP COLUMN revision; PRAGMA user_version=6;",
+            "DROP TABLE integration_policies; DROP TABLE attempt_profiles; DROP TABLE artifact_chunks; DROP TABLE artifact_uploads; DROP TABLE event_recoveries; DROP TABLE registration_recoveries; DROP TABLE artifact_retirements; DROP TABLE coordinator_retirements; DROP TABLE verification_retirements; ALTER TABLE nodes DROP COLUMN draining; ALTER TABLE nodes DROP COLUMN revision; PRAGMA user_version=6;",
         )
         .unwrap();
     f.store = Store::open(&f.store.dir).unwrap();
@@ -545,7 +545,7 @@ fn controller_artifact_schema_upgrade_preserves_prior_authority_and_frozen_recor
             .connection
             .pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
             .unwrap(),
-        13
+        14
     );
     assert_eq!(
         document::<Attempt>(&f.store.connection, "attempts", &a.id)

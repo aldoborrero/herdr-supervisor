@@ -1,6 +1,8 @@
 //! Managed execution authority. Projects' files are views, never a second scheduler.
 pub mod api;
 mod artifact_inputs;
+mod artifact_removal;
+mod artifact_retirement;
 mod artifact_review;
 pub mod artifacts;
 pub mod broker_policy;

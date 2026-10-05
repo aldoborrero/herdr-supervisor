@@ -1,5 +1,7 @@
 use super::artifacts_tests::{chunks, fixture, put, result};
 use super::*;
+#[path = "artifact_retirement_tests.rs"]
+mod retirement_tests;
 use crate::control::{
     artifact_inputs, artifact_review, artifacts::CHUNK_BYTES, git_pipeline, verification,
 };

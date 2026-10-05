@@ -19,6 +19,13 @@ pub struct ControlArgs {
 
 #[derive(Subcommand)]
 enum ControlCommand {
+    /// Owner maintenance: remove terminal verifier artifact copies, retaining SQLite originals
+    CleanupArtifactInputs {
+        #[arg(long)]
+        credential: PathBuf,
+        #[arg(long)]
+        request: PathBuf,
+    },
     /// Owner maintenance: close an exited owned coordinator workspace, retaining all files
     CleanupCoordinator {
         #[arg(long)]
@@ -783,6 +790,23 @@ pub fn run(args: ControlArgs) -> Result<()> {
             credential: path,
             node,
         } => Store::open(&args.state)?.node_status(&credential(&path)?, &node)?,
+        ControlCommand::CleanupArtifactInputs {
+            credential: path,
+            request,
+        } => {
+            use std::io::Read;
+            super::reception::local_db(&args.state, false, false)?;
+            let mut bytes = Vec::new();
+            std::fs::File::open(request)?
+                .take(16385)
+                .read_to_end(&mut bytes)?;
+            ensure!(bytes.len() <= 16384, "retirement request exceeds 16 KiB");
+            super::artifact_retirement::retire(
+                &mut Store::open(&args.state)?,
+                &credential(&path)?,
+                &serde_json::from_slice(&bytes)?,
+            )?
+        }
         ControlCommand::CleanupCoordinator {
             credential: path,
             request,

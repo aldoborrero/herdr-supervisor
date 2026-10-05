@@ -4,6 +4,25 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
+### Terminal artifact verifier-copy retirement
+
+Controller schema 14 adds owner-local `cleanup-artifact-inputs`. It binds a terminal integration/revision/manifest, stopped run effects, complete authoritative SQLite content and explicit process/source-retention attestations before removing verifier copies. The ledger stores directory identity; a private operation marker precedes the removing phase. Remaining flat files are hash-checked before deletion. No recursive deletion or source pruning occurs. Results, source chunks, checks and reviews remain intact; the retired verifier resource is not recreated by a terminal execution request.
+
+The first focused run passed five of six unit cases (`.direnv/artifact-retirement-focused.log`, 1.27 s). Its last assertion incorrectly expected verification to run after the run was completed. The corrected assertion requires rejection, unchanged applied integration and no recreated input directory. No production lifecycle check was relaxed. The full source suite passes all 625 unit tests (68.44 s), 20 CLI tests (28.99 s) and strict all-target Clippy (38.48 s), with four test threads, in `.direnv/artifact-retirement-full.log`. Both continuous workflows pass, including the new actual owner CLI path with retained SQLite bytes. `nix fmt` passes, formatting only the Python workflow (`.direnv/artifact-retirement-fmt.log`). Full package validation remains pending.
+
+| Evidence | Boundary exercised |
+| --- | --- |
+| `artifact_retirement_removes_only_copies_and_preserves_source_evidence_and_replay` | Retained source bytes/check history, retired resource, owner-only replay/restart and terminal verifier refusal |
+| `artifact_retirement_requires_terminal_scope_exact_manifest_and_complete_original` | Process/source confirmations, revision/manifest, terminal run/check outcome and corrupt source refusal before intent |
+| `artifact_retirement_preserves_extra_changed_symlinked_and_unowned_marker_data` | Extra or changed files, symlinked input and foreign markers retained without an intent |
+| `artifact_retirement_audit_failure_rolls_back_and_reconciles_without_recreating_inputs` | Initial audit rollback, durable uncertain removal after final audit failure, restart and content-collision refusal |
+| `artifact_retirement_preserves_recreated_directory_and_migrates_existing_results` | Schema-13 migration, execution lease, retained recreated/empty unmarked directory and later absence reconciliation |
+| `artifact_retirement_partial_removal_resumes_only_matching_marked_content` | Real filesystem fault after first unlink; changed/extra files and copied marker in a substituted directory refused before continuing |
+| `artifact_retirement_cli_requires_owner_and_bounded_decision_without_creating_state` | Actual scrubbed CLI, missing-state preservation, credential redaction and bounded JSON |
+| Extended continuous artifact workflow | Owner CLI retirement/replay after process stop/completion; exact original bytes and check evidence still readable from SQLite |
+
+Partial removal errors explicitly say earlier removed copies are not restored. A crash after marker removal but before empty-directory removal remains conservative: the unmarked directory is retained until an operator removes it separately; the same decision then reconciles absence. The filesystem contract requires exclusive process quiescence, not protection from a malicious same-UID concurrent writer. Reviewer-node staging and original-source archival/pruning remain separate outstanding work; this checkpoint does not claim they are retired.
+
 ### Owned coordinator workspace retirement
 
 Controller schema 13 adds owner-local `cleanup-coordinator` decisions with exact launch/generation/resource binding and prepared/closing/closed phases. The coordinator launch lease serializes effects and generation changes; authority is rechecked in audit transactions. Native exit or a fenced unclaimed wrapper, explicit operator process quiescence, one exact idle pane and no worktree association precede a non-force workspace close. Home files, transcripts, credentials and database history remain intact. Uncertain close responses reconcile by observation without another close. Public launch summaries and pages expose the retirement phase, without capabilities.

@@ -602,6 +602,33 @@ Upgrade controller consumers together to schema 12. The owner capability is chec
 
 As with worker retirement, `state: removing` reports an uncertain outcome and `resources_deleted: null`; repeating the same decision observes an already-issued effect without issuing it again. A recreated path is preserved. Successful completion records the checkout as `retired` and appends an audit event; replay returns the historical result after reauthenticating the owner. This known terminal resource state does not make a cancelled repository appear to have an unfinished checkout creation. Sealed artifact inputs and uploaded contents need separate retention paths. Coordinator workspaces have the separate close-only command below; their files are retained.
 
+### Retire terminal artifact-verification copies
+
+After an artifact run is `completed` or `cancelled`, the owner can remove its verifier's `verification/INTEGRATION/inputs` copies while keeping the original uploaded bytes in SQLite. All attempts and owned coordinators must have exited, checks must have known outcomes, and repository authority must be released. This requires exclusive use of the input directory and an explicit operator attestation that checks, background jobs and other users have stopped.
+
+```json
+{
+  "operation": "NEW_OPERATION_UUID",
+  "integration": "INTEGRATION_UUID",
+  "expected_revision": 4,
+  "expected_manifest_hash": "EXACT_SHA256_MANIFEST_HASH",
+  "processes_confirmed_stopped": true,
+  "retain_source_remove_inputs": true,
+  "reason": "Checks and all input users stopped; preserve the original uploaded content"
+}
+```
+
+```sh
+herdr-supervisor control --state CONTROLLER cleanup-artifact-inputs \
+  --credential OWNER_TOKEN_FILE --request artifact-retirement.json
+```
+
+SQLite stores the decision and directory identity before a private operation marker is created. The command verifies the original source bytes and every remaining copy against the sealed manifest. Extra files, changed content, symlinks, replaced directories and foreign markers prevent deletion. It removes only declared flat files and then the empty directory; it never recursively deletes a tree. Results, manifests, original chunks, checks and review receipts remain intact. The verifier resource becomes `retired`, so terminal replay does not recreate it.
+
+If interrupted after a file is removed, repeat exactly the same decision. Remaining copies can be removed only from the same marked directory after source and scope revalidation. A missing directory permits reconciliation of a lost final receipt. A recreated or unmarked directory is retained, including an empty directory left by a crash between marker removal and `rmdir`; inspect it and remove it separately only after confirming it is the intended empty directory, then replay the original decision. Errors do not imply rollback of already removed copies; the durable phase remains `prepared` or `removing` until completion. A successful receipt is historical and reauthenticates the owner on replay.
+
+This command handles controller verifier copies. Reviewer-node staging, original-content archival/pruning and unattended process containment are separate retention work; this command neither removes nor claims to retire those resources.
+
 ### Retire an owned coordinator workspace
 
 `cleanup-coordinator` is local owner maintenance for a launcher-owned coordinator whose generation has already exited and lost its capabilities/routes. It closes only the exact saved workspace, pane and terminal. Manually attached sessions have no launch ownership record and cannot be selected. The controller requires a matching native exit receipt or a wrapper that was fenced before claiming its launch. An idle shell alone never proves descendant exit: stop all users and background jobs, keep the workspace exclusive, and explicitly attest quiescence before issuing this command.

@@ -15,6 +15,7 @@ import shutil
 import signal
 import socket
 import socketserver
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -1089,6 +1090,52 @@ class Fixture:
             assert (
                 self.git(self.repo, "rev-parse", receipt["retained_ref"])
                 == applied["candidate_oid"]
+            )
+        else:
+            decision = self.file(
+                "retire-artifact-inputs.json",
+                {
+                    "operation": uid(),
+                    "integration": applied["id"],
+                    "expected_revision": applied["revision"],
+                    "expected_manifest_hash": applied["artifact"]["manifest_hash"],
+                    "processes_confirmed_stopped": True,
+                    "retain_source_remove_inputs": True,
+                    "reason": "Fixture controller, checks and owned runtime processes stopped",
+                },
+            )
+            args = (
+                "cleanup-artifact-inputs",
+                "--credential",
+                self.controller / "admin.token",
+                "--request",
+                decision,
+            )
+            receipt = self.cli(self.controller, *args)
+            assert (
+                receipt["state"] == "removed" and receipt["source_retained"] is True
+            ), receipt
+            assert self.cli(self.controller, *args) == receipt
+            assert not (
+                self.controller / "verification" / applied["id"] / "inputs"
+            ).exists()
+            with sqlite3.connect(
+                f"file:{self.controller / 'control.sqlite'}?mode=ro", uri=True
+            ) as connection:
+                rows = connection.execute(
+                    "SELECT data FROM artifact_chunks WHERE attempt=? AND name='evidence.bin' ORDER BY chunk_index",
+                    (author,),
+                ).fetchall()
+                assert b"".join(row[0] for row in rows) == bytes(range(256)) * 65
+                assert (
+                    connection.execute(
+                        "SELECT count(*) FROM check_runs WHERE integration=? AND state='passed'",
+                        (applied["id"],),
+                    ).fetchone()[0]
+                    == 1
+                )
+            print(
+                "PASS: terminal verifier inputs retired through owner CLI; original artifact bytes/check evidence retained"
             )
         print(
             f"PASS: continuous services, offline dispatch, node restart, native binding, result, checks, review, {'artifact acceptance' if self.artifact_mode else 'Git CAS'}, stop, completion"

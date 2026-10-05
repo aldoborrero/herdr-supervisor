@@ -132,6 +132,7 @@ impl Store {
             11 => (),
             12 => (),
             13 => (),
+            14 => (),
             _ => bail!("unsupported controller schema {version}; no migration applied"),
         }
         if version <= 2 {
@@ -171,6 +172,9 @@ impl Store {
         }
         if version <= 12 {
             tx.execute_batch(super::coordinator_retirement::SCHEMA)?;
+        }
+        if version <= 13 {
+            tx.execute_batch(super::artifact_retirement::SCHEMA)?;
         }
         tx.commit()?;
         Ok(Self {
