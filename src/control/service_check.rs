@@ -67,8 +67,8 @@ fn load(controller: &Path, bundle: &Path) -> Result<(Intent, String)> {
     let c = db(&controller.join("control.sqlite"))?;
     let n = db(&spec.node_state.join("node.sqlite"))?;
     ensure!(
-        c.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))? == 10
-            && n.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))? == 8,
+        c.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))? == 11
+            && n.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))? == 9,
         "database needs a supported service migration before checking"
     );
     let owner: String =

@@ -282,7 +282,7 @@ fn run_profiles_v7_migration_preserves_signed_bytes_and_original_profile_after_p
     f.store
         .connection
         .execute_batch(
-            "DROP TABLE attempt_profiles; DROP TABLE integration_policies; DROP TABLE registration_recoveries; ALTER TABLE nodes DROP COLUMN draining; ALTER TABLE nodes DROP COLUMN revision; PRAGMA user_version=7;",
+            "DROP TABLE attempt_profiles; DROP TABLE integration_policies; DROP TABLE event_recoveries; DROP TABLE registration_recoveries; ALTER TABLE nodes DROP COLUMN draining; ALTER TABLE nodes DROP COLUMN revision; PRAGMA user_version=7;",
         )
         .unwrap();
     f.store = Store::open(&f.store.dir).unwrap();
@@ -304,7 +304,7 @@ fn run_profiles_v7_migration_preserves_signed_bytes_and_original_profile_after_p
             .connection
             .pragma_query_value(None, "user_version", |r| r.get::<_, u64>(0))
             .unwrap(),
-        10
+        11
     );
     assert_eq!(signed.record.payload["body"]["profile"]["runtime"], "codex");
 }
@@ -323,7 +323,7 @@ fn run_profiles_migration_rejects_conflicting_frozen_intent_without_partial_upgr
         .unwrap();
     let owner = Identity::load(&f.store.dir.join("owner.key")).unwrap();
     f.store.prepare_wire(&effect.id, &owner).unwrap();
-    f.store.connection.execute_batch("DROP TABLE attempt_profiles; DROP TABLE integration_policies; DROP TABLE registration_recoveries; ALTER TABLE nodes DROP COLUMN draining; ALTER TABLE nodes DROP COLUMN revision; PRAGMA user_version=7; UPDATE outbox SET payload=json_set(payload,'$.profile.runtime','pi') WHERE kind='execute';").unwrap();
+    f.store.connection.execute_batch("DROP TABLE attempt_profiles; DROP TABLE integration_policies; DROP TABLE event_recoveries; DROP TABLE registration_recoveries; ALTER TABLE nodes DROP COLUMN draining; ALTER TABLE nodes DROP COLUMN revision; PRAGMA user_version=7; UPDATE outbox SET payload=json_set(payload,'$.profile.runtime','pi') WHERE kind='execute';").unwrap();
     assert!(Store::open(&f.store.dir).is_err());
     assert_eq!(
         f.store
@@ -340,7 +340,7 @@ fn run_profiles_missing_legacy_order_stays_unknown_instead_of_borrowing_current_
     let mut f = Fixture::new();
     let task = f.task();
     let (attempt, _) = f.dispatch(&task);
-    f.store.connection.execute_batch("DROP TABLE attempt_profiles; DROP TABLE integration_policies; DELETE FROM outbox WHERE kind='execute'; DROP TABLE registration_recoveries; ALTER TABLE nodes DROP COLUMN draining; ALTER TABLE nodes DROP COLUMN revision; PRAGMA user_version=7;").unwrap();
+    f.store.connection.execute_batch("DROP TABLE attempt_profiles; DROP TABLE integration_policies; DELETE FROM outbox WHERE kind='execute'; DROP TABLE event_recoveries; DROP TABLE registration_recoveries; ALTER TABLE nodes DROP COLUMN draining; ALTER TABLE nodes DROP COLUMN revision; PRAGMA user_version=7;").unwrap();
     f.store = Store::open(&f.store.dir).unwrap();
     assert!(run_profiles::assigned(&f.store.connection, &attempt.id).is_err());
     let snapshot = f.store.snapshot(&f.owner, &f.run).unwrap();

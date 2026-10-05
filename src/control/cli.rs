@@ -19,6 +19,21 @@ pub struct ControlArgs {
 
 #[derive(Subcommand)]
 enum ControlCommand {
+    /// Inspect local node delivery/recovery metadata without the request or response body
+    EventStatus { event: String },
+    /// Queue a renewed delivery of an expired signed node event; retains the original
+    RecoverEvent {
+        #[arg(long)]
+        node: String,
+        #[arg(long)]
+        owner: String,
+        #[arg(long)]
+        grant: PathBuf,
+        #[arg(long)]
+        operation: String,
+        /// UUID of the original event, not a previous recovery envelope
+        event: String,
+    },
     /// Read owner-scoped node authority, drain state and occupied capacity
     NodeStatus {
         #[arg(long)]
@@ -658,6 +673,28 @@ pub fn run(args: ControlArgs) -> Result<()> {
                 "local dependency checks failed; see the structured report"
             );
             return Ok(());
+        }
+        ControlCommand::EventStatus { event } => {
+            super::event_recovery::status(&args.state, &event)?
+        }
+        ControlCommand::RecoverEvent {
+            node,
+            owner,
+            grant,
+            operation,
+            event,
+        } => {
+            // Maintenance cannot silently initialize a missing node database.
+            drop(super::reception::local_db(&args.state, true, false)?);
+            let identity = Identity::load(&args.state.join("node.key"))?;
+            let mut store = super::node::NodeStore::open(
+                &args.state,
+                &node,
+                &owner,
+                read_grant(&grant)?,
+                &identity,
+            )?;
+            store.recover_event(&event, &operation, &identity)?
         }
         ControlCommand::NodeKey => {
             private_dir(&args.state)?;

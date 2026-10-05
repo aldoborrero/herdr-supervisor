@@ -129,6 +129,7 @@ impl Store {
             8 => (),
             9 => (),
             10 => (),
+            11 => (),
             _ => bail!("unsupported controller schema {version}; no migration applied"),
         }
         if version <= 2 {
@@ -159,6 +160,9 @@ impl Store {
         }
         if version <= 9 {
             tx.execute_batch(super::node_lifecycle::SCHEMA)?;
+        }
+        if version <= 10 {
+            tx.execute_batch(super::event_recovery::CONTROLLER_SCHEMA)?;
         }
         tx.commit()?;
         Ok(Self {
@@ -242,7 +246,8 @@ impl Store {
         ensure!(
             record.owner == owner
                 && record.recipient == owner
-                && record.record_type == "local.herdr.supervisor.event",
+                && ["local.herdr.supervisor.event", super::event_recovery::TYPE]
+                    .contains(&record.record_type.as_str()),
             "wrong event authority, type or recipient"
         );
         let tx = self
@@ -256,7 +261,13 @@ impl Store {
             )
             .optional()?
             .context("node key is not enrolled at this epoch")?;
-        let request: Request = serde_json::from_value(record.payload.clone())?;
+        let original = super::event_recovery::original(signed)?;
+        let request: Request = serde_json::from_value(
+            original
+                .as_ref()
+                .map_or(&record.payload, |s| &s.record.payload)
+                .clone(),
+        )?;
         let existing: Option<String> = tx.query_row(
             "SELECT content_hash FROM inbox WHERE owner=?1 AND author=?2 AND id=?3 AND applied=1",
             params![record.owner, record.author, record.id], |r| r.get(0),
@@ -266,49 +277,62 @@ impl Store {
             // A previously accepted, byte-identical broker redelivery is a receipt
             // lookup, not a new use of a retired worker capability. Node authority
             // and signature were checked above; no mutation is executed again.
-            let response: String = tx.query_row(
-                "SELECT o.response FROM operations o JOIN principals p ON p.id=o.principal WHERE p.token_hash=?1 AND o.id=?2",
-                params![digest(request.token.as_bytes()),request.operation_id], |r|r.get(0),
-            )?;
-            return Ok(serde_json::from_str(&response)?);
+            return super::event_recovery::accepted_response(&tx, &request);
         }
-        let p = authenticate(&tx, &request.token)?;
-        let attempt_id = match &request.command {
-            Mutation::BindResource { attempt, .. } | Mutation::ObserveStopped { attempt, .. } => {
+        let response = if original
+            .as_ref()
+            .map(|o| super::event_recovery::prior(&tx, o))
+            .transpose()?
+            .unwrap_or(false)
+        {
+            super::event_recovery::accepted_response(&tx, &request)?
+        } else {
+            let p = authenticate(&tx, &request.token)?;
+            let attempt_id = match &request.command {
+                Mutation::BindResource { attempt, .. }
+                | Mutation::ObserveStopped { attempt, .. } => {
+                    ensure!(
+                        p.role == "node" && p.node.as_deref() == Some(&node_id),
+                        "foreign node capability"
+                    );
+                    attempt
+                }
+                Mutation::FetchArtifactChunk { attempt, .. }
+                | Mutation::SubmitArtifactReview { attempt, .. }
+                | Mutation::PutArtifact { attempt, .. }
+                | Mutation::WorkerReady { attempt, .. }
+                | Mutation::SubmitResult { attempt, .. }
+                | Mutation::SubmitReview { attempt, .. } => {
+                    ensure!(
+                        ["worker", "reviewer"].contains(&p.role.as_str())
+                            && p.attempt.as_deref() == Some(attempt),
+                        "foreign worker capability"
+                    );
+                    attempt
+                }
+                Mutation::ProposeMemory {
+                    source_attempt: Some(attempt),
+                    ..
+                } => {
+                    ensure!(
+                        p.role == "worker" && p.attempt.as_deref() == Some(attempt),
+                        "foreign memory capability"
+                    );
+                    attempt
+                }
+                _ => bail!("nodes cannot forward controller decisions"),
+            };
+            let attempt: Attempt = document(&tx, "attempts", attempt_id)?;
+            ensure!(attempt.node == node_id, "attempt belongs to another node");
+            if original.is_some() && !matches!(&request.command, Mutation::ObserveStopped { .. }) {
+                let run: Run = document(&tx, "runs", &attempt.run)?;
                 ensure!(
-                    p.role == "node" && p.node.as_deref() == Some(&node_id),
-                    "foreign node capability"
+                    run.deadline > now(),
+                    "event recovery cannot extend an expired run deadline"
                 );
-                attempt
             }
-            Mutation::FetchArtifactChunk { attempt, .. }
-            | Mutation::SubmitArtifactReview { attempt, .. }
-            | Mutation::PutArtifact { attempt, .. }
-            | Mutation::WorkerReady { attempt, .. }
-            | Mutation::SubmitResult { attempt, .. }
-            | Mutation::SubmitReview { attempt, .. } => {
-                ensure!(
-                    ["worker", "reviewer"].contains(&p.role.as_str())
-                        && p.attempt.as_deref() == Some(attempt),
-                    "foreign worker capability"
-                );
-                attempt
-            }
-            Mutation::ProposeMemory {
-                source_attempt: Some(attempt),
-                ..
-            } => {
-                ensure!(
-                    p.role == "worker" && p.attempt.as_deref() == Some(attempt),
-                    "foreign memory capability"
-                );
-                attempt
-            }
-            _ => bail!("nodes cannot forward controller decisions"),
+            apply_transaction(&tx, &request)?
         };
-        let attempt: Attempt = document(&tx, "attempts", attempt_id)?;
-        ensure!(attempt.node == node_id, "attempt belongs to another node");
-        let response = apply_transaction(&tx, &request)?;
         tx.execute(
             "INSERT OR IGNORE INTO inbox VALUES (?1,?2,?3,?4,?5,?6,1)",
             params![
@@ -320,6 +344,9 @@ impl Store {
                 now()
             ],
         )?;
+        if let Some(original) = &original {
+            super::event_recovery::remember(&tx, original, &record.id)?;
+        }
         effect(
             &tx,
             &node_id,

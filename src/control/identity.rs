@@ -52,9 +52,17 @@ impl Record {
 
     pub(super) fn encoded(&self) -> Result<Vec<u8>> {
         let bytes = serde_json::to_vec(self)?;
+        // Recovery contains one complete original signed event, without changing
+        // its original budget. The extra envelope fits inside MAX_WIRE_BYTES.
+        let limit = MAX_RECORD_BYTES
+            + if self.record_type == super::event_recovery::TYPE {
+                1024
+            } else {
+                0
+            };
         ensure!(
-            bytes.len() <= MAX_RECORD_BYTES,
-            "signed record uses {} encoded bytes; limit is {MAX_RECORD_BYTES}",
+            bytes.len() <= limit,
+            "signed record uses {} encoded bytes; limit is {limit}",
             bytes.len()
         );
         Ok(bytes)

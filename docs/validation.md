@@ -4,11 +4,30 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
+### Expired node-event recovery
+
+`recover-event` renews transport authority around one immutable original signed event; it does not rewrite an old envelope, renew a worker capability or infer execution from broker storage. Controller recovery records point to an accepted inbox record, and node recovery records link each replacement to its original logical operation. New controller/node schemas are 11/9. Expired controller-origin commands, invalid original repair and native/Git uncertainty are not covered by this feature.
+
+The full local run before the final regressions passes 582 unit tests (48.51 s), 14 CLI tests (22.16 s) and strict all-target Clippy (12.42 s), in `.direnv/event-recovery-full.log`. The final source passes all nine recovery unit tests (2.77 s), the new CLI regression (2.91 s) and strict all-target Clippy (12.88 s), in `.direnv/event-recovery-deadline.log`. `nix fmt` passes without changes (`.direnv/event-recovery-fmt.log`). The complete 584-unit/15-CLI package gate remains pending; the earlier full run does not cover the final additions. All runtime boundaries in this checkpoint use private fixtures; no native model or deployed service is involved.
+
+| Evidence | Boundary established |
+| --- | --- |
+| `event_recovery_applies_expired_unseen_request_once_and_receipt_confirms_original_operation` | Original expired wire is retained; recovery is replayable, conflicting receipts fail and logical acceptance survives restart |
+| `event_recovery_returns_prior_acceptance_after_worker_retirement_but_never_new_old_authority` | Positive accepted-history evidence permits receipt recovery after capability retirement and deadline expiry; an unseen old request gains no authority |
+| `event_recovery_replays_a_prior_recovery_without_reapplying_and_rejects_origin_collisions` | Multiple deliveries preserve one decision; changed original content and nested recovery fail |
+| `event_recovery_is_transactional_with_local_ledger_and_remote_receipt_failures` | Local ledger, controller application/outbox and node receipt failures roll back their whole transactions |
+| `event_recovery_rejects_damaged_originals_foreign_signers_and_revoked_node_authority` | Original integrity, same signer/epoch and current enrollment remain mandatory |
+| `event_recovery_wraps_a_maximum_original_record_without_shrinking_its_budget` | A complete 262,144-byte original fits the recovery-specific envelope budget; ordinary record limits stay unchanged |
+| `event_recovery_real_nats_renews_after_lost_expired_receipt_and_node_restart` | Restricted real broker, actual grant/receipt expiry, renewed same-epoch grant and restarted node recover one accepted operation without reviving its retired worker |
+| `event_recovery_concurrent_envelopes_commit_one_logical_decision` | Eight concurrent controller connections produce one decision and a receipt for each fresh delivery |
+| `event_recovery_cannot_extend_a_run_deadline_but_can_confirm_a_late_stop` | No unseen work after deadline; positive late stop and previously earned receipts remain recoverable |
+| `event_recovery_cli_renews_delivery_and_preserves_original_wire_without_services` | Actual isolated CLI queues/replays/inspects recovery without starting services, exposing tokens or initializing missing state |
+
 ### Owner-controlled node drain and revocation
 
 This checkpoint adds controller schema 10, owner lifecycle mutations, status via CLI/API/MCP, drain-aware author/reviewer reservation and current-enrollment grant issuance. It does not revoke NATS credentials, terminate processes, invalidate a disconnected daemon's cached grant immediately or implement in-place key rotation. The original cleanup and native/remote acceptance gaps remain open.
 
-The full local suite passes 575 unit tests (51.78 s), 14 CLI tests (25.62 s) and strict all-target Clippy (26.36 s), in `.direnv/node-lifecycle-full.log`. The earlier focused `node_` run passes 21 unit/2 CLI tests and Clippy, in `.direnv/node-lifecycle-focused.log`. `nix fmt` passes without changes (`.direnv/node-lifecycle-fmt.log`). The package gate for this checkpoint remains pending.
+The full local suite passes 575 unit tests (51.78 s), 14 CLI tests (25.62 s) and strict all-target Clippy (26.36 s), in `.direnv/node-lifecycle-full.log`. The earlier focused `node_` run passes 21 unit/2 CLI tests and Clippy, in `.direnv/node-lifecycle-focused.log`. `nix fmt` passes without changes (`.direnv/node-lifecycle-fmt.log`). Commit `49d6b1bda05a23f84fd7ed290890115d713a5b80` also passes Nix build and flake check on x86_64-linux with 575 unit tests (141.63 s) and 14 CLI tests (46.92 s) offline. Output: `/nix/store/dl31g6m49f3rvr39cjnkpp2hv770ng7c-herdr-supervisor-0.1.0`. Logs: `.direnv/node-lifecycle-nix-build.log` and `.direnv/node-lifecycle-nix-check.log`.
 
 | Evidence | Boundary established |
 | --- | --- |
@@ -118,7 +137,7 @@ The large-record checkpoint passes strict all-target Clippy (35.45 s, `.direnv/r
 
 The bounded operator/receipt checkpoint also passes strict all-target Clippy (39.89 s, `.direnv/operator-reads-full.log`) and `nix fmt` (no changes, `.direnv/operator-reads-fmt.log`). Its full Nix build/check remains pending.
 
-**Last completed full Nix gate:** commit `753dfd7fce03c6ba4720267e01184d39f67d5c5e`, with 567 unit and 13 CLI tests offline on x86_64-linux, as recorded above. It includes checkout-retention inspection, the read-only local diagnostic, resumable service onboarding, event subscriptions/reconnection and all earlier pagination/navigation changes. Node lifecycle is newer; this gate does not establish other platforms or completion of the remaining feature scope.
+**Last completed full Nix gate:** commit `49d6b1bda05a23f84fd7ed290890115d713a5b80`, with 575 unit and 14 CLI tests offline on x86_64-linux, as recorded above. It includes node lifecycle, checkout-retention inspection, local diagnosis/onboarding, event subscriptions/reconnection and earlier pagination/navigation changes. Expired node-event recovery is newer; this gate does not establish other platforms or completion of the remaining feature scope.
 
 The worker-navigation checkpoint passed **540 unit tests and 10 CLI tests** (local suite with four test threads), including the inherited Projects suite; later checkpoint results are recorded above. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
 
@@ -137,7 +156,7 @@ Bounded operator reads and receipt checkpoint: `.direnv/operator-reads-full.log`
 | Signed origin and route authorization | Identity tampering/expiry tests, controller receive tests, real NATS ACL tests | Explicit node rotation/revocation commands remain pending |
 | Reply inbox confidentiality and broker management | `real_broker_generated_acl_isolates_reply_inboxes_and_runtime_management` requires actual NATS permission errors for foreign reply subscriptions, consumer reads, stream mutations, message reads and ACKs; confirms legitimate deliveries/ACKs/reconnects | Generated runtime policy must be applied to the deployed broker; administrators remain trusted |
 | Broker policy usability and reserved routes | `broker_routes_reject_reserved_names_and_wildcards_before_enrollment_or_grant`; continuous CLI workflow invokes `broker-policy` and installs its permissions on separate controller/node users | Example in `docs/nats-acl.md`; existing host/broker configuration is not changed |
-| Durable offline transport | Real JetStream restart/offline test; ACK follows SQLite acceptance | Recovery of terminal outgoing records remains pending |
+| Durable offline transport | Real JetStream restart/offline and expired node-event recovery tests; ACK follows SQLite acceptance | Expired controller commands and invalid original repair remain pending |
 | Poisoned consumer windows | `poisoned_broker_windows_cannot_starve_valid_commands_and_events`: 65 malformed records per endpoint followed by a valid command/event, real restricted NATS clients, zero broker pending deliveries | TERM follows local persistence, not application acceptance; bounded storage can still exhaust |
 | Failed local quarantine write | `failed_local_hold_never_terminates_broker_delivery` injects SQLite failure on both endpoints and observes one outstanding broker delivery each | No TERM, command or applied inbox row is written |
 | Deferred prerequisites, restart and lost local receipt | `missing_assignment_retries_after_restart_and_lost_application_receipt`; `deferred_controller_application_survives_restart_and_creates_one_receipt` | Real broker/SQLite; no models; retry runs full original authorization |
@@ -147,7 +166,7 @@ Bounded operator reads and receipt checkpoint: `.direnv/operator-reads-full.log`
 | Durable retry and lost SQL publication receipt | `broker_acceptance_with_lost_sql_receipt_retries_identical_bytes_after_restart` injects failure after real broker storage, reopens SQLite and checks unchanged wire/ID, broker dedup and controller application | Network timeout alone never establishes acceptance |
 | Expired, malformed and premature outgoing records | `expired_malformed_and_future_outgoing_records_do_not_block_commands_or_receipts` keeps expired/invalid rows, defers a future timestamp and preserves active process capacity | Outgoing terminal states do not establish task outcomes |
 | Fairness across denied routes | `denied_outgoing_route_does_not_starve_incoming_events_or_other_nodes` receives a worker proposal and delivers its receipt while another destination is denied by real NATS ACLs | Incoming consumer/service outages remain separate failures |
-| Bounded retry schedule and private inspection | `retry_schedule_survives_restart_is_bounded_and_operator_projection_omits_credentials`; continuous CLI workflow invokes `delivery-status` | At most 100 recent metadata rows, with full state counts; no terminal requeue command |
+| Bounded retry schedule and private inspection | `retry_schedule_survives_restart_is_bounded_and_operator_projection_omits_credentials`; continuous CLI workflow invokes `delivery-status` | At most 100 recent metadata rows, with full state counts; expired node events have explicit recovery, other terminal states remain retained |
 | Retry migration and native binding lookup | `node_v4_retry_migration_preserves_wire_jobs_memory_and_idempotent_operations`; extended three-runtime bootstrap test retains a malformed event row | Node schema 5; no native model calls or grant renewal |
 | Artifact content before immutable result | `artifact_result_requires_verified_bytes_and_seals_exact_attempt_contract_and_manifest`, `artifact_hash_mismatch_and_empty_files_have_no_false_completion` | Stored hashes alone are insufficient; separate artifact pipeline tests below cover checks and independent acceptance |
 | Artifact replay, corruption and rollback | `artifact_chunks_are_immutable_replayable_and_finalization_rolls_back_with_journal`, `concurrent_artifact_chunks_commit_one_complete_content_and_manifest` | Journal contains metadata/digests; private signed inboxes still retain wire bytes |
@@ -263,7 +282,7 @@ Mailer protocol-2 support is an independent local commit **`7a12d5a`** on `feat/
 - Reconciliation for legacy/lost-wrapper registration evidence. Explicit recovery covers prelaunch Claude/Pi and still-owned Codex before binding.
 - Service onboarding and cross-host resource focus. Managed project creation now has a form and resumable CLI.
 - Projects/legacy snapshot pagination, oversized individual-record retrieval and remaining aggregate API bounds. Signed-record budgets and coordinator CLI/MCP collection pages are implemented.
-- Recovery/requeue of terminal outgoing records and grant/node lifecycle operations.
+- Expired controller-command recovery, invalid original repair and in-place node-key rotation. Expired node-event recovery, current-enrollment grants and owner drain/revocation are implemented.
 - Optional project/cross-run memory and Markdown projection.
 - Stronger model-facing validation beyond the isolated continuous-service workflow and protocol fixtures.
 

@@ -9,6 +9,7 @@ pub mod cli;
 pub mod coordinator;
 pub mod coordinator_launch;
 mod delivery;
+mod event_recovery;
 pub mod executor;
 pub mod git_pipeline;
 pub mod herdr_events;

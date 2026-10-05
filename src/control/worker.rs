@@ -223,7 +223,7 @@ pub fn handle(store: &mut NodeStore, identity: &Identity, request: WorkerRequest
                 row.context("unknown or unauthorized event")?;
             let result: Option<Value> = response.map(|s| serde_json::from_str(&s)).transpose()?;
             Ok(
-                json!({"event":event,"state":state,"result":result,"delivery":{"tries":tries,"next_attempt_at":next_attempt_at,"last_error":last_error}}),
+                json!({"event":event,"state":state,"result":result,"delivery":{"tries":tries,"next_attempt_at":next_attempt_at,"last_error":last_error,"recoveries":super::event_recovery::summary(&store.connection,&event)?}}),
             )
         }
     }

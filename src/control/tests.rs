@@ -18,6 +18,9 @@ mod cleanup_tests;
 #[path = "node_lifecycle_tests.rs"]
 mod node_lifecycle_tests;
 
+#[path = "event_recovery_tests.rs"]
+mod event_recovery_tests;
+
 fn policy() -> Policy {
     Policy {
         max_active: 2,

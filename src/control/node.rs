@@ -97,6 +97,7 @@ impl NodeStore {
             6 => (),
             7 => (),
             8 => (),
+            9 => (),
             _ => bail!("unsupported node schema"),
         }
         if version <= 2 {
@@ -126,6 +127,9 @@ impl NodeStore {
             // Recovery receipts survive ordinary launcher checkpoint rewrites.
             tx.execute_batch(super::registration_recovery::SCHEMA)?;
             tx.pragma_update(None, "user_version", 8)?;
+        }
+        if version <= 8 {
+            tx.execute_batch(super::event_recovery::NODE_SCHEMA)?;
         }
         let existing: (String, String, String, u64) = tx.query_row(
             "SELECT owner,node,key,epoch FROM authority WHERE singleton=1",
@@ -194,14 +198,7 @@ impl NodeStore {
         )?;
         match kind {
             "memory_update" => super::live_memory::receive(&tx, body)?,
-            "receipt" => {
-                let event = body["event_id"].as_str().context("receipt event ID")?;
-                let operation = body["operation_id"]
-                    .as_str()
-                    .context("receipt operation ID")?;
-                let changed=tx.execute("UPDATE events SET state='controller_applied',response=?3,last_error='',available_at=0 WHERE json_extract(CASE WHEN json_valid(wire) THEN wire ELSE '{}' END,'$.record.id')=?1 AND json_extract(CASE WHEN json_valid(wire) THEN wire ELSE '{}' END,'$.record.payload.operation_id')=?2",params![event,operation,serde_json::to_string(&body["result"])?])?;
-                ensure!(changed == 1, "receipt references an unknown event");
-            }
+            "receipt" => super::event_recovery::receive_receipt(&tx, body)?,
             "execute" => {
                 let order: ExecuteOrder = serde_json::from_value(body.clone())?;
                 ensure!(

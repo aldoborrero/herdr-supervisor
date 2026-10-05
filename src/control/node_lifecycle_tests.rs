@@ -243,7 +243,7 @@ fn node_grants_match_current_enrollment_and_schema_upgrade_preserves_old_signed_
             .node_grant("unknown", &f.node_key.did(), 1, now() + 1000)
             .is_err()
     );
-    f.store.connection.execute_batch("ALTER TABLE nodes DROP COLUMN draining; ALTER TABLE nodes DROP COLUMN revision; PRAGMA user_version=9;").unwrap();
+    f.store.connection.execute_batch("DROP TABLE event_recoveries; ALTER TABLE nodes DROP COLUMN draining; ALTER TABLE nodes DROP COLUMN revision; PRAGMA user_version=9;").unwrap();
     f.store = Store::open(&f.store.dir).unwrap();
     assert_eq!(
         f.store.node_status(&f.owner, "local").unwrap()["revision"],

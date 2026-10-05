@@ -6,6 +6,175 @@ use std::process::Command;
 const BIN: &str = env!("CARGO_BIN_EXE_herdr-supervisor");
 
 #[test]
+fn event_recovery_cli_renews_delivery_and_preserves_original_wire_without_services() {
+    use serde_json::{Value, json};
+    use std::os::unix::fs::PermissionsExt;
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path();
+    let controller = root.join("controller");
+    let node = root.join("node");
+    let parse = |output: std::process::Output| -> Value {
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).unwrap()
+    };
+    let owner = parse(hp(
+        root,
+        &["control", "--state", controller.to_str().unwrap(), "init"],
+    ));
+    let owner = owner["owner"].as_str().unwrap();
+    let key = parse(hp(
+        root,
+        &["control", "--state", node.to_str().unwrap(), "node-key"],
+    ));
+    let key = key["key"].as_str().unwrap();
+    let admin = controller.join("admin.token");
+    let request = root.join("request.json");
+    std::fs::write(
+        &request,
+        json!({"method":"enroll_node","params":{"id":"local","key":key,"max_active":1}})
+            .to_string(),
+    )
+    .unwrap();
+    let enrollment = parse(hp(
+        root,
+        &[
+            "control",
+            "--state",
+            controller.to_str().unwrap(),
+            "apply",
+            "--credential",
+            admin.to_str().unwrap(),
+            "--operation",
+            "enroll",
+            "--request",
+            request.to_str().unwrap(),
+        ],
+    ));
+    let token = enrollment["credential"].as_str().unwrap();
+    let credential = node.join("node.token");
+    std::fs::write(&credential, token).unwrap();
+    std::fs::set_permissions(&credential, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let grant_path = root.join("grant.json");
+    let grant = |expiry: i64| {
+        let output = hp(
+            root,
+            &[
+                "control",
+                "--state",
+                controller.to_str().unwrap(),
+                "grant",
+                "local",
+                key,
+                "--expires-at",
+                &expiry.to_string(),
+            ],
+        );
+        let value = parse(output);
+        std::fs::write(&grant_path, value.to_string()).unwrap();
+    };
+    let expires = jiff::Timestamp::now().as_second() + 3;
+    grant(expires);
+    std::fs::write(&request,json!({"method":"observe_stopped","params":{"attempt":"11111111-1111-4111-8111-111111111111","epoch":1}}).to_string()).unwrap();
+    let event = parse(hp(
+        root,
+        &[
+            "control",
+            "--state",
+            node.to_str().unwrap(),
+            "node-event",
+            "--node",
+            "local",
+            "--owner",
+            owner,
+            "--grant",
+            grant_path.to_str().unwrap(),
+            "--credential",
+            credential.to_str().unwrap(),
+            "--operation",
+            "stopped",
+            "--request",
+            request.to_str().unwrap(),
+        ],
+    ));
+    let event = event["id"].as_str().unwrap();
+    let db = rusqlite::Connection::open(node.join("node.sqlite")).unwrap();
+    let before: String = db
+        .query_row("SELECT wire FROM events", [], |r| r.get(0))
+        .unwrap();
+    while jiff::Timestamp::now().as_second() < expires {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    grant(jiff::Timestamp::now().as_second() + 3600);
+    let recover = [
+        "control",
+        "--state",
+        node.to_str().unwrap(),
+        "recover-event",
+        "--node",
+        "local",
+        "--owner",
+        owner,
+        "--grant",
+        grant_path.to_str().unwrap(),
+        "--operation",
+        "renew-delivery",
+        event,
+    ];
+    let first = parse(hp(root, &recover));
+    assert_eq!(parse(hp(root, &recover)), first);
+    let status = parse(hp(
+        root,
+        &[
+            "control",
+            "--state",
+            node.to_str().unwrap(),
+            "event-status",
+            event,
+        ],
+    ));
+    assert_eq!(status["controller_applied"], false);
+    assert_eq!(status["recoveries"][0]["state"], "pending");
+    assert!(!status.to_string().contains(token));
+    assert!(!first.to_string().contains(token));
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM events", [], |r| r.get::<_, u32>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT wire FROM events WHERE json_extract(wire,'$.record.id')=?1",
+            [event],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        before
+    );
+    let absent = root.join("missing");
+    assert!(
+        !hp(
+            root,
+            &[
+                "control",
+                "--state",
+                absent.to_str().unwrap(),
+                "event-status",
+                event
+            ]
+        )
+        .status
+        .success()
+    );
+    assert!(!absent.exists());
+    assert!(!controller.join("control.sock").exists());
+    assert!(!node.join("worker.sock").exists());
+}
+
+#[test]
 fn node_lifecycle_cli_drains_revokes_replays_and_refuses_stale_grants() {
     use serde_json::{Value, json};
     let home = tempfile::tempdir().unwrap();

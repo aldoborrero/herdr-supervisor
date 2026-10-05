@@ -29,7 +29,7 @@ struct Scope {
 fn scope(c: &mut Connection, id: &str, epoch: u64) -> Result<Scope> {
     let tx = c.transaction_with_behavior(TransactionBehavior::Deferred)?;
     ensure!(
-        tx.pragma_query_value(None, "user_version", |r| r.get::<_, u64>(0))? == 8,
+        tx.pragma_query_value(None, "user_version", |r| r.get::<_, u64>(0))? == 9,
         "unsupported cleanup inspection schema; run the current node service migration first"
     );
     let result = Scope {

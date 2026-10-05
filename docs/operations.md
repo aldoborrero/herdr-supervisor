@@ -327,7 +327,7 @@ A signed record's complete JSON document is limited to **262,144 encoded bytes**
 
 The controller checks every remote command inside the transaction that creates its outbox intent. It uses the same command-envelope constructor as signing and reserves the maximum numeric epoch/timestamp widths. An oversized dispatch or review request rolls back its attempted reservation, credentials, profile snapshot, assignment, journal and operation receipt. The error reports the encoded size and limit. Reduce the contract, assigned profile or selected memory explicitly before retrying; nothing is silently truncated or omitted to meet this transport budget. A profile or memory change can permit the same unapplied dispatch/review request to succeed. Amending the contract also changes its task revision, so the next dispatch must carry that current revision. Existing operation replay semantics still apply once a request succeeds.
 
-Signing enforces the same record limit, so a node cannot persist an oversized outgoing event for publication. Verification rejects oversized records and bounds the base58 signature before decoding. Ordinary incoming wire bounds and NATS stream limits are unchanged. Local controller effects that never cross NATS are not subject to the remote-command envelope check.
+Signing enforces the same record limit, so a node cannot persist an oversized ordinary outgoing event for publication. An `eventRetry` record has a separate **263,168-byte** envelope budget to carry one complete original signed event; the original still has the 262,144-byte limit and must retain its original signature. Nested recovery envelopes are rejected. Verification rejects oversized records and bounds the base58 signature before decoding. The 300,000-byte incoming wire and NATS stream limits are unchanged. Local controller effects that never cross NATS are not subject to the remote-command envelope check.
 
 These guards prevent new oversized records from becoming unpublishable reservations or queued events. They do not rewrite old outbox rows, repair previously uncertain deliveries, or provide large-run API pagination. Terminal-record recovery and aggregate API/context bounds remain tracked separately.
 
@@ -348,7 +348,27 @@ herdr-supervisor control --state CONTROLLER_DIR delivery-status \
 
 The result contains counts for every delivery state and at most 100 recent metadata rows, including attempts, expiry, next attempt time and a diagnostic category. It omits command bodies, signed envelopes and credentials. This command is an inspection of controller state; it does not change the broker or retry a terminal record. Worker `receipt` and MCP `worker_receipt` include the same attempt/schedule/error fields for that worker's event. A zero `next_attempt_at` means no retry is scheduled after a terminal or successful delivery.
 
-Node schema 5 adds retry metadata while preserving existing event IDs/wires, jobs, memory replicas and operation replays. Controller retry metadata uses its existing outbox columns. Expiry does not renew a grant or extend a task deadline. Recovery of terminal outgoing records and explicit grant/node lifecycle operations remain pending. Rejected incoming records follow the durable holding policy below; they never receive an application acceptance ACK.
+Node schema 5 introduced retry metadata while preserving existing event IDs/wires, jobs, memory replicas and operation replays. Controller retry metadata uses its existing outbox columns. Expiry does not renew a grant or extend a task deadline. Expired node-event recovery is described below; controller-origin command recovery, invalid-record repair and in-place node-key rotation remain pending. Rejected incoming records follow the durable holding policy below; they never receive an application acceptance ACK.
+
+### Recover an expired node event
+
+An operator with access to the node's private state can recover an expired event whose original signature and request fingerprint remain intact. First obtain a current owner-signed grant for the **same node key and epoch** using `control grant`, and restart the node service with that grant if its previous grant expired. The running service does not automatically replace its in-memory grant. The controller must still authorize the enrolled node; application revocation cannot be bypassed by a local retry.
+
+```sh
+herdr-supervisor control --state NODE_DIR recover-event \
+  --node NODE_ID --owner OWNER_DID --grant RENEWED_GRANT.json \
+  --operation STABLE_RECOVERY_ID ORIGINAL_EVENT_UUID
+
+herdr-supervisor control --state NODE_DIR event-status ORIGINAL_EVENT_UUID
+```
+
+The first command commits a new `eventRetry` envelope and recovery ledger locally; it starts no process and contacts no broker. The existing relay publishes it. The envelope has a new delivery UUID and current expiry, but contains the entire original signed event unchanged. Its request token, operation ID, command and original node epoch remain fixed. Replay the same recovery operation ID after an uncertain response. A different operation is refused while an unexpired recovery is pending or broker-stored; after that delivery expires, a new recovery can use a renewed grant and the same original event UUID. History is capped at 32 recoveries per original. Malformed signatures, changed fingerprints, already-applied original operations, changed keys/epochs and missing node state cannot create a fresh recovery. A historical replay of an existing recovery remains a historical receipt.
+
+The controller verifies both signatures, current node enrollment and the original route. If the original request has no accepted inbox/recovery evidence, it must pass ordinary current capability, scope and decision checks. A retired worker token cannot create a new decision. If matching acceptance evidence exists, the controller returns the immutable operation result without reapplying it, including when that worker has since stopped. The newly accepted envelope, origin link and fresh receipt are committed together before application ACK. A receipt lost during a prior recovery can itself be recovered this way. These checks never extend the task contract, change an attempt epoch or release capacity merely because a delivery was retried.
+
+The node validates the receipt's replacement/original link and operation before marking the original logical operation `controller_applied`. Both signed envelopes remain stored. Worker `receipt`/MCP and local `event-status` expose the recovery delivery IDs/states so this is distinguishable from receipt of the original transport envelope. `event-status` omits request/response bodies and credentials. Receipt conflicts roll back; redundant pending recovery deliveries become `superseded` after another delivery confirms the same operation.
+
+This path requires controller schema 11 and node schema 9. Migrations preserve existing signed bytes and logical operation IDs. Older controllers reject the new record type; upgrading only the CLI cannot supply receiver support. Recovery of expired controller-origin assignments/cancellations, corrupted original records and uncertain native/Git effects remains separate work.
 
 ## Rejected incoming deliveries
 
