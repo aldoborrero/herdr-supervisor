@@ -154,7 +154,7 @@ Attachment requires no legacy threads, recorded coordinator or task entries; it 
 | Popup section | Controller data and actions |
 | --- | --- |
 | Threads | Attempts, role, node and state; `s` requests stop with the displayed epoch |
-| Tasks | Create a task with Enter/`n` on its creation row; contracts, integration/check/review evidence; `r` requests repair of interrupted/rejected tasks |
+| Tasks | Create a task with Enter/`n` on its creation row; `e` edits a planned contract/dependencies; integration/check/review evidence; `r` requests repair of interrupted/rejected tasks |
 | Inbox | Native coordinator notices and their receipts; `a` acknowledges an inspected notice |
 | Settings | Objective, policy, nodes, native coordinator and launch receipts; `p` pauses/resumes, `x` cancels |
 | Memory | Approved topics with versions and pending proposals with evidence; `a` approves, `w` withdraws |
@@ -168,7 +168,17 @@ The equivalent CLI is `managed apply SLUG --operation ID --request JSON_FILE` (`
 
 The popup and its project picker read controller state in the background, with at most four simultaneous reads and one pending read per project binding. An initial view shows a loading state. Refresh failure retains the last successful snapshot as explicitly stale/read-only; action hints and coordinator launch are disabled there. A changed or malformed binding invalidates the cached authority, and replies for an older binding are discarded. Reconnection restores current data and actions. This cache lives only in the popup process and never writes controller decisions or legacy project files.
 
-Background refresh preserves the selected managed record, project-picker filter and selection, and open confirmations/details. A confirmation retains its captured revision/epoch, which the controller still validates. An explicit mutation uses the existing CLI/API path and may wait for its response; only background reads are asynchronous. `managed status`, `context` and `overview` remain synchronous CLI reads. Service onboarding, task/profile editing forms, resource focus across hosts and aggregate snapshot bounds remain pending. The popup itself must run on the controller host; workers may execute remotely over NATS.
+Background refresh preserves the selected managed record, project-picker filter and selection, and open confirmations/details. A confirmation retains its captured revision/epoch, which the controller still validates. An explicit mutation uses the existing CLI/API path and may wait for its response; only background reads are asynchronous. `managed status`, `context` and `overview` remain synchronous CLI reads. Service onboarding, profile editing forms, resource focus across hosts and aggregate snapshot bounds remain pending. The popup itself must run on the controller host; workers may execute remotely over NATS.
+
+## Amend a planned task
+
+The Tasks panel's **e** key opens the selected planned task with its current contract and dependency list. The form captures the task revision (not the run revision), preserves whitespace in existing instructions, sends the replacement over stdin and freezes its operation before submission. Stale views cannot open it. Escape leaves an uncertain operation intact; inspect controller state before starting a different edit.
+
+The same scoped API/MCP decision is `amend_task`, with `task`, `expected_revision`, a complete `contract` and the full replacement `dependencies` list. The controller requires supervisor/owner authority for that run, an active run, a planned task, and no unresolved prior process/verification effects. It validates the contract against current policy, replaces edges, rejects foreign/missing/self/cyclic dependencies and updates the contract hash/revision in one transaction with its operation receipt and journal. An empty dependency list removes all predecessors. A failure preserves the original contract and edges.
+
+Dispatch and amendment compete on the task revision. Once dispatched, the assigned contract cannot be edited through this operation; use stop/exit and the explicit retry workflow when a revision is needed. After a safe retry has returned a task to planned state, it can be amended before its next dispatch. Earlier assignment/result records and journal entries stay intact. Replaying an already accepted operation returns its historical receipt even after a later edit, without restoring old task state.
+
+Creating or amending a task, or using the existing `add_dependency` decision, now produces a durable coordinator notice through the journal collector. This wakes the coordinator through the configured mailer path; it neither dispatches work automatically nor proves model processing. New task editing requires a controller that supports `amend_task`; older controllers reject the unknown decision.
 
 ## Enroll a node and provision NATS
 

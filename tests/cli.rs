@@ -189,6 +189,42 @@ fn managed_create_publishes_one_bound_view_through_real_controller_ipc_without_l
     let latest: Value = serde_json::from_slice(&latest.stdout).unwrap();
     assert_eq!(latest["tasks"].as_array().unwrap().len(), 1);
     assert_eq!(latest["active_attempts"], 0);
+    let mut replacement = task["contract"].clone();
+    replacement["instructions"] = json!(" Keep revised literal $HOME and trailing space ");
+    let edit = serde_json::to_string(&json!({"method":"amend_task","params":{
+        "task":task["id"],"expected_revision":task["revision"],"contract":replacement,"dependencies":[]}})).unwrap();
+    let edit_args = [
+        "--root",
+        root_arg,
+        "managed",
+        "apply",
+        "managed-demo",
+        "--operation",
+        "edit-task-form",
+        "--request-json",
+        &edit,
+    ];
+    let edited = hp(home.path(), &edit_args);
+    assert!(
+        edited.status.success(),
+        "{}",
+        String::from_utf8_lossy(&edited.stderr)
+    );
+    assert_eq!(hp(home.path(), &edit_args).stdout, edited.stdout);
+    let edited: Value = serde_json::from_slice(&edited.stdout).unwrap();
+    assert_eq!(edited["contract"], replacement);
+    assert_eq!(edited["revision"], 2);
+    assert_ne!(edited["contract_hash"], task["contract_hash"]);
+    // Replaying creation returns its old receipt without restoring that contract.
+    assert_eq!(submit(), task);
+    let final_state = hp(
+        home.path(),
+        &["--root", root_arg, "managed", "status", "managed-demo"],
+    );
+    assert!(final_state.status.success());
+    let final_state: Value = serde_json::from_slice(&final_state.stdout).unwrap();
+    assert_eq!(final_state["tasks"][0], edited);
+    assert_eq!(final_state["active_attempts"], 0);
 }
 
 #[test]

@@ -505,3 +505,70 @@ async fn controller_service_delivers_coordinator_bootstrap_with_real_broker() {
         "mailer_stored"
     );
 }
+
+#[test]
+fn amended_task_generates_one_coordinator_notice_and_replay_does_not_repeat_it() {
+    let mut f = Fixture::new();
+    let task = f.task();
+    bind(&mut f, endpoint());
+    let mut changed = contract();
+    changed.title = "Replanned task".into();
+    let req = request(
+        &f.supervisor,
+        Mutation::AmendTask {
+            task: task.clone(),
+            expected_revision: 1,
+            contract: changed,
+            dependencies: vec![],
+        },
+    );
+    f.store.apply(&req).unwrap();
+    assert_eq!(coordinator::collect(&mut f.store).unwrap(), 1);
+    let notices = f.store.connection.query_row("SELECT COUNT(*) FROM coordinator_notices WHERE run=?1 AND aggregate_id=?2 AND kind='amend_task' AND state='pending'", rusqlite::params![f.run, task], |r| r.get::<_, u64>(0)).unwrap();
+    assert_eq!(notices, 1);
+    f.store.apply(&req).unwrap();
+    assert_eq!(coordinator::collect(&mut f.store).unwrap(), 0);
+}
+
+#[test]
+fn operator_created_task_and_dependency_changes_wake_coordinator_once_each() {
+    let mut f = Fixture::new();
+    let predecessor = f.task();
+    bind(&mut f, endpoint());
+    let run: Run = document(&f.store.connection, "runs", &f.run).unwrap();
+    let create = request(
+        &f.owner,
+        Mutation::CreateTask {
+            run: f.run.clone(),
+            expected_revision: run.revision,
+            contract: contract(),
+            dependencies: vec![],
+        },
+    );
+    let task = f.store.apply(&create).unwrap();
+    assert_eq!(coordinator::collect(&mut f.store).unwrap(), 1);
+    f.store.apply(&create).unwrap();
+    assert_eq!(coordinator::collect(&mut f.store).unwrap(), 0);
+    let dependency = request(
+        &f.owner,
+        Mutation::AddDependency {
+            task: text(&task, "id"),
+            expected_revision: 1,
+            predecessor,
+        },
+    );
+    f.store.apply(&dependency).unwrap();
+    assert_eq!(coordinator::collect(&mut f.store).unwrap(), 1);
+    f.store.apply(&dependency).unwrap();
+    assert_eq!(coordinator::collect(&mut f.store).unwrap(), 0);
+    let context = coordinator::context(&f.store, &f.supervisor, &f.run).unwrap();
+    for kind in ["create_task", "add_dependency"] {
+        assert!(
+            context["notices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|n| n["kind"] == kind && n["reference"] == task["id"])
+        );
+    }
+}

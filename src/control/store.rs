@@ -194,9 +194,9 @@ impl Store {
                 let (table, id) = match command {
                     Mutation::StopAttempt { attempt, .. }
                     | Mutation::RequestVerification { attempt, .. } => ("attempts", attempt),
-                    Mutation::RetryTask { task, .. } | Mutation::Dispatch { task, .. } => {
-                        ("tasks", task)
-                    }
+                    Mutation::RetryTask { task, .. }
+                    | Mutation::Dispatch { task, .. }
+                    | Mutation::AmendTask { task, .. } => ("tasks", task),
                     Mutation::RequestReview { integration, .. }
                     | Mutation::ApplyIntegration { integration, .. } => {
                         ("integrations", integration)
@@ -788,6 +788,39 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
             r.revision += 1;
             save_run(tx, &r)?;
             Ok(serde_json::to_value(task)?)
+        }
+        Mutation::AmendTask {
+            task,
+            expected_revision,
+            contract,
+            dependencies,
+        } => {
+            let mut t: Task = document(tx, "tasks", task)?;
+            supervise(p, &t.run)?;
+            revision(t.revision, *expected_revision)?;
+            let r: Run = document(tx, "runs", &t.run)?;
+            active_run(&r)?;
+            ensure!(
+                t.state == "planned",
+                "only planned tasks can be amended; use the retry workflow after execution"
+            );
+            let busy: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE task=?1 AND active=1) OR EXISTS(SELECT 1 FROM integrations WHERE task=?1 AND state IN ('preparing','checking','applying'))", [task], |row| row.get(0))?;
+            ensure!(
+                !busy,
+                "prior processes or verification effects remain unresolved"
+            );
+            contract.validate(&r.policy)?;
+            // Full replacement is one transaction. A cycle, missing predecessor
+            // or failed journal write rolls back both contract and old edges.
+            tx.execute("DELETE FROM dependencies WHERE task=?1", [task])?;
+            for predecessor in dependencies {
+                add_dependency(tx, &t, predecessor)?;
+            }
+            t.contract = contract.clone();
+            t.contract_hash = digest(&serde_json::to_vec(contract)?);
+            t.revision += 1;
+            save_task(tx, &t)?;
+            Ok(serde_json::to_value(t)?)
         }
         Mutation::AddDependency {
             task,

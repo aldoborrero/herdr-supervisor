@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::Value;
 use std::collections::BTreeSet;
 
-use crate::control::model::{Contract, Mutation, Run, identifier};
+use crate::control::model::{Contract, Mutation, Run, Task, identifier};
 
 pub struct Field {
     pub label: &'static str,
@@ -17,6 +17,7 @@ pub struct Form {
     pub fields: Vec<Field>,
     pub selected: usize,
     run: Run,
+    edit: Option<(String, u64)>,
     dependencies: BTreeSet<String>,
     submitted: Option<Submission>,
 }
@@ -70,9 +71,58 @@ impl Form {
             fields,
             selected: 0,
             run,
+            edit: None,
             dependencies,
             submitted: None,
         })
+    }
+
+    pub fn edit(slug: &str, context: &Value, task: &str) -> Result<Self> {
+        let mut form = Self::new(slug, context)?;
+        let value = context["tasks"]
+            .as_array()
+            .context("task index missing")?
+            .iter()
+            .find(|item| item["id"] == task)
+            .context("task not present in captured context")?;
+        let task: Task = serde_json::from_value(value.clone())?;
+        ensure!(task.state == "planned", "only planned tasks can be edited");
+        let mut predecessors = Vec::new();
+        for edge in context["dependencies"]
+            .as_array()
+            .context("dependency index missing")?
+        {
+            if edge["task"] == task.id {
+                predecessors.push(
+                    edge["predecessor"]
+                        .as_str()
+                        .context("invalid predecessor")?
+                        .to_string(),
+                );
+            }
+        }
+        form.fields[0].value = task.contract.title;
+        form.fields[1].value = task.contract.instructions;
+        form.fields[2].value = serde_json::to_string(&task.contract.criteria)?;
+        form.fields[3].value = task.contract.kind;
+        form.fields[4].value = serde_json::to_string(&task.contract.checks)?;
+        form.fields[5].value = serde_json::to_string(&task.contract.memory_topics)?;
+        form.fields[6].value = serde_json::to_string(&predecessors)?;
+        form.dependencies.remove(&task.id);
+        form.fields[6].hint = format!(
+            "JSON list of predecessor task IDs; [] removes all. Available: {}",
+            form.dependencies
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        form.edit = Some((task.id, task.revision));
+        Ok(form)
+    }
+
+    pub fn editing(&self) -> bool {
+        self.edit.is_some()
     }
 
     pub fn frozen(&self) -> bool {
@@ -141,8 +191,8 @@ impl Form {
             })
         };
         let contract = Contract {
-            title: self.fields[0].value.trim().into(),
-            instructions: self.fields[1].value.trim().into(),
+            title: self.fields[0].value.clone(),
+            instructions: self.fields[1].value.clone(),
             criteria: list(2)?,
             kind: self.fields[3].value.clone(),
             checks: list(4)?,
@@ -154,11 +204,20 @@ impl Form {
             dependencies.iter().all(|id| self.dependencies.contains(id)),
             "Choose dependency IDs from this run's captured task list"
         );
-        let command = Mutation::CreateTask {
-            run: self.run.id.clone(),
-            expected_revision: self.run.revision,
-            contract,
-            dependencies,
+        let command = if let Some((task, revision)) = &self.edit {
+            Mutation::AmendTask {
+                task: task.clone(),
+                expected_revision: *revision,
+                contract,
+                dependencies,
+            }
+        } else {
+            Mutation::CreateTask {
+                run: self.run.id.clone(),
+                expected_revision: self.run.revision,
+                contract,
+                dependencies,
+            }
         };
         ensure!(
             serde_json::to_vec(&command)?.len() <= 300000,
@@ -202,6 +261,52 @@ pub(crate) mod tests {
                 "profiles":{"auto":{"runtime":"codex","argv":[],"limit":2}},"checks":{"test":["cargo","test"]}}},
             "tasks":[{"id":"task-1","run":"run-1","contract":{"title":"Predecessor"}}]})
     }
+    pub(crate) fn edit_context() -> Value {
+        let mut doc = context();
+        doc["tasks"][0] = json!({"id":"task-1","run":"run-1","state":"planned","revision":4,
+            "contract_hash":"old-hash","contract":{"title":"Original title ","instructions":" Keep whitespace ",
+                "criteria":["Original criterion"],"kind":"artifact","checks":["test"],"memory_topics":["parser"]}});
+        let mut other = doc["tasks"][0].clone();
+        other["id"] = json!("task-2");
+        doc["tasks"].as_array_mut().unwrap().push(other);
+        doc["dependencies"] = json!([{"task":"task-1","predecessor":"task-2"}]);
+        doc
+    }
+
+    #[test]
+    fn amend_task_form_preserves_fields_and_uses_task_revision_and_exact_dependencies() {
+        let mut form = Form::edit("demo", &edit_context(), "task-1").unwrap();
+        assert!(form.editing());
+        assert_eq!(form.fields[0].value, "Original title ");
+        assert_eq!(form.fields[1].value, " Keep whitespace ");
+        assert_eq!(form.fields[3].value, "artifact");
+        let submission = form.prepare().unwrap();
+        let command: Value = serde_json::from_str(&submission.request).unwrap();
+        assert_eq!(command["method"], "amend_task");
+        assert_eq!(command["params"]["task"], "task-1");
+        assert_eq!(command["params"]["expected_revision"], 4);
+        assert_eq!(
+            command["params"]["contract"],
+            edit_context()["tasks"][0]["contract"]
+        );
+        assert_eq!(command["params"]["dependencies"], json!(["task-2"]));
+        assert_eq!(form.prepare().unwrap(), submission);
+    }
+
+    #[test]
+    fn amend_task_form_refuses_live_unknown_self_dependent_or_incomplete_context() {
+        let mut doc = edit_context();
+        doc["tasks"][0]["state"] = json!("running");
+        assert!(Form::edit("demo", &doc, "task-1").is_err());
+        assert!(Form::edit("demo", &edit_context(), "missing").is_err());
+        let mut form = Form::edit("demo", &edit_context(), "task-1").unwrap();
+        form.fields[6].value = r#"["task-1"]"#.into();
+        assert!(form.prepare().is_err());
+        doc = edit_context();
+        doc.as_object_mut().unwrap().remove("dependencies");
+        assert!(Form::edit("demo", &doc, "task-1").is_err());
+    }
+
     pub(crate) fn fill(form: &mut Form) {
         form.fields[0].value = "Parser change".into();
         form.fields[1].value = "Preserve literal $HOME and `text`".into();

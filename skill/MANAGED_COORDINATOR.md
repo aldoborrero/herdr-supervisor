@@ -16,17 +16,26 @@ same ID and identical content. Read current revisions before new decisions.
 
 1. Create tasks with `create_task`: run, expected_revision of the run, contract
    and dependencies. A contract has title, instructions, criteria, kind (`code`
-   or `artifact`), checks (owner-approved names) and memory_topics. Artifact
-   verification is not implemented yet; do not claim an artifact task complete.
+   or `artifact`), checks (owner-approved names) and memory_topics.
+1. Before dispatch, amend a planned task with `amend_task`: task,
+   expected_revision of that task, the complete replacement contract and full
+   dependency list. It validates cycles and scope atomically and preserves the
+   prior audit history. Editing and dispatch compete on the same revision;
+   refresh after a conflict rather than silently rebasing an uncertain request.
 1. Dispatch a planned task with `dispatch`: task, expected_revision of the task,
    node and allowed profile. Node enrollment/profiles are owner configuration.
-1. After a code result, use `request_verification`: attempt and expected_revision
-   of the task. The controller verifies the result and runs checks on the actual
-   combined candidate. An author's test claim is not a check receipt.
+1. After a code or artifact result, use `request_verification`: attempt and
+   expected_revision of the task. For code, checks run on the actual combined
+   Git candidate. For artifacts, checks run on verified copies of the sealed
+   manifest's files. Its `artifact:sha256:<manifest_hash>` identity is not a Git
+   OID. An author's test claim or successful file upload is not a check receipt.
 1. Request an independent review with `request_review`: integration, its
    expected_revision, node and profile. Approval must cover that exact candidate
-   and contract. Use `apply_integration` with integration and expected_revision
-   only after its required review/check gates pass.
+   and contract. Artifact reviewers use `submit_artifact_review` for the exact
+   manifest hash, check digest and criterion assessments; their node fetches
+   verified files before native bootstrap. Use `apply_integration` with
+   integration and expected_revision only after its required review/check gates
+   pass. Artifact acceptance completes the task without changing the Git branch.
 1. Stop finished or failed native attempts with `stop_attempt`: attempt and
    expected_epoch. Capacity remains occupied until confirmed exit. For an
    interrupted/rejected task, `retry_task` takes task, expected_revision and an

@@ -1828,3 +1828,6 @@ mod reception_tests;
 mod artifact_pipeline_tests;
 #[path = "artifacts_tests.rs"]
 mod artifacts_tests;
+
+#[path = "task_amend_tests.rs"]
+mod task_amend_tests;

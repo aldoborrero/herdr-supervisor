@@ -1601,7 +1601,12 @@ impl<'a> Popup<'a> {
                     Ok(Outcome::Submit(submission)) => {
                         if self.run(&submission.args, Some(&submission.request)) {
                             self.scope = Some(form.slug.clone());
-                            self.message = "Task created. Dispatch is a separate decision.".into();
+                            self.message = if form.editing() {
+                                "Task updated. Dispatch is a separate decision."
+                            } else {
+                                "Task created. Dispatch is a separate decision."
+                            }
+                            .into();
                             Mode::List
                         } else {
                             Mode::TaskForm(form)
@@ -1927,6 +1932,38 @@ impl<'a> Popup<'a> {
                 return;
             }
             self.run(&["open".into(), slug], None);
+            return;
+        }
+        if key.code == KeyCode::Char('e') && doc["_editable_task"] == true {
+            if doc["_view_read_only"] == true {
+                self.message = "State is stale; wait for the controller to reconnect".into();
+                return;
+            }
+            let result = self
+                .rows
+                .iter()
+                .find_map(|row| match &row.kind {
+                    RowKind::Managed {
+                        slug: owner,
+                        doc: context,
+                        ..
+                    } if owner == &slug && !context["_task_form"].is_null() => {
+                        Some(&context["_task_form"])
+                    }
+                    _ => None,
+                })
+                .ok_or_else(|| anyhow::anyhow!("Task editing requires current run context"))
+                .and_then(|context| {
+                    crate::managed_task_form::Form::edit(
+                        &slug,
+                        context,
+                        doc["id"].as_str().unwrap_or_default(),
+                    )
+                });
+            match result {
+                Ok(form) => self.mode = Mode::TaskForm(Box::new(form)),
+                Err(error) => self.message = error.to_string(),
+            }
             return;
         }
         if !doc["_task_form"].is_null() && matches!(key.code, KeyCode::Enter | KeyCode::Char('n')) {
@@ -2510,7 +2547,12 @@ impl<'a> Popup<'a> {
                     SetAttribute(Attribute::Bold),
                     Print(fit(
                         &format!(
-                            " New task · {}{}",
+                            " {} · {}{}",
+                            if form.editing() {
+                                "Edit task"
+                            } else {
+                                "New task"
+                            },
                             form.slug,
                             if form.frozen() {
                                 " · submission frozen"
@@ -2911,8 +2953,9 @@ impl<'a> Popup<'a> {
                 "{}  N new supervised project  P project  / find  tab section  esc close",
                 match self.current().map(|r| &r.kind) {
                     Some(RowKind::Managed { doc, .. }) if !doc["_task_form"].is_null() && doc["_view_read_only"] != true => "↵/n new task  c coordinator".into(),
-                    Some(RowKind::Managed { actions, .. }) => format!(
-                        "↵ details  c coordinator  {}",
+                    Some(RowKind::Managed { actions, doc, .. }) => format!(
+                        "↵ details  c coordinator  {}{}",
+                        if doc["_editable_task"] == true && doc["_view_read_only"] != true { "e edit task  " } else { "" },
                         actions
                             .iter()
                             .map(|a| format!("{} {}", a.key, a.label))
@@ -2929,7 +2972,7 @@ impl<'a> Popup<'a> {
                 "↑↓ choose  ↵ switch  N new supervised project  / filter  esc close".into()
             }
             Mode::TaskForm(form) if form.frozen() => "↑↓/tab inspect  ↵ retry exact submission  esc return to inspect state".into(),
-            Mode::TaskForm(_) => "↑↓/tab field  ←→ result type  ↵ create task  esc cancel".into(),
+            Mode::TaskForm(form) => format!("↑↓/tab field  ←→ result type  ↵ {} task  esc cancel", if form.editing() { "save" } else { "create" }),
             Mode::Setup(_) => {
                 "↑↓/tab field  ←→ runtime  ↵ create  ctrl-r resume name  esc cancel · starts no model".into()
             }
@@ -3185,6 +3228,61 @@ fn run_popup(mut popup: Popup<'_>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn amend_task_popup_opens_existing_contract_and_refuses_edit_from_stale_view() {
+        use crate::managed_task_form::tests::edit_context;
+        let world = crate::scenarios::World::new();
+        let ctx = world.ctx();
+        let mut popup = Popup::new(&ctx, None, String::new());
+        popup.section = 1;
+        popup.rows = crate::managed::panel_view(
+            "demo",
+            Section::Tasks,
+            crate::managed_refresh::View::Stale(edit_context(), "offline".into()),
+        );
+        popup.selected = popup
+            .rows
+            .iter()
+            .position(|row| matches!(&row.kind, RowKind::Managed {doc,..} if doc["id"] == "task-1"))
+            .unwrap();
+        popup.key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        assert!(matches!(popup.mode, Mode::List));
+        assert_eq!(world.runner.count("managed apply"), 0);
+        popup.rows = crate::managed::panel_view(
+            "demo",
+            Section::Tasks,
+            crate::managed_refresh::View::Current(edit_context()),
+        );
+        popup.selected = popup
+            .rows
+            .iter()
+            .position(|row| matches!(&row.kind, RowKind::Managed {doc,..} if doc["id"] == "task-1"))
+            .unwrap();
+        popup.key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        assert!(
+            matches!(&popup.mode, Mode::TaskForm(form) if form.editing() && form.fields[1].value == " Keep whitespace ")
+        );
+        world
+            .runner
+            .on("managed apply", crate::runner::fake::fail(1, "reply lost"));
+        popup.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(&popup.mode, Mode::TaskForm(form) if form.frozen()));
+        assert!(!popup.refresh_view());
+        popup.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let calls = world.runner.calls.borrow();
+        let submissions = calls
+            .iter()
+            .filter(|c| c.display().contains("managed apply"))
+            .collect::<Vec<_>>();
+        assert_eq!(submissions.len(), 2);
+        assert_eq!(submissions[0].args, submissions[1].args);
+        assert_eq!(submissions[0].stdin, submissions[1].stdin);
+        let body: serde_json::Value =
+            serde_json::from_str(submissions[0].stdin.as_ref().unwrap()).unwrap();
+        assert_eq!(body["method"], "amend_task");
+        assert_eq!(body["params"]["expected_revision"], 4);
+    }
 
     #[test]
     fn managed_task_form_popup_refuses_stale_rows_and_freezes_failed_submission() {

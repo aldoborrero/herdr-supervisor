@@ -4,9 +4,9 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
-**Last completed full Nix gate:** commit `bec9f949376391bfbf64bd52dd1561d8ab72d49a` passes package build and `nix flake check` on x86_64-linux, with all 449 unit and 8 CLI tests executed offline inside the package build. The later coordinator-notice correction is validated locally and awaits its own package gate. This supersedes the storage-related validation backlog recorded below; it does not establish builds on other platforms or completion of the remaining feature scope.
+**Last completed full Nix gate:** commit `102e590662e6bfda91ce3660f7de4f9a40d30905` passes package build and `nix flake check` on x86_64-linux, with 468 unit and 10 CLI tests offline. It includes managed creation/recovery, the plugin-menu correction and task creation. The subsequent planned-task amendment and planning notices pass locally and still require a package gate. This does not establish other platforms or completion of the remaining feature scope.
 
-The local implementation suite currently passes **449 unit tests and 8 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
+The local implementation suite currently passes **477 unit tests and 10 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
 
 | Requirement | Evidence | Limit |
 | --- | --- | --- |
@@ -139,7 +139,7 @@ Mailer protocol-2 support is an independent local commit **`7a12d5a`** on `feat/
 - Recovery/abandonment of uncertain cancelled-run effects and conservative verification checkout cleanup.
 - Recovery after loss of the native wrapper; detached-descendant audit and conservative resource cleanup.
 - Idempotent/reconcilable mailer registration after a lost registration response.
-- Service onboarding, task/profile editing forms and cross-host resource focus. Managed project creation now has a form and resumable CLI.
+- Service onboarding, profile editing forms and cross-host resource focus. Managed project creation now has a form and resumable CLI.
 - Aggregate API/wire bounds and large-run context pagination.
 - Recovery/requeue of terminal outgoing records and grant/node lifecycle operations.
 - Optional project/cross-run memory and Markdown projection.
@@ -238,6 +238,27 @@ Commit `375353812633ff0314e6c924f784d22dd961a934` passes full Nix build and flak
 | Failed submissions stay frozen; background refresh cannot retarget; stale view cannot open | `managed_task_form_popup_refuses_stale_rows_and_freezes_failed_submission` |
 | Actual authority accepts exact replay once and rejects concurrent stale creation | `managed_task_form_applies_one_exact_contract_with_dependencies_and_rejects_stale_creation`, with actual private API/SQLite, persisted dependency and zero attempts |
 
-These tests establish task entry and exact submission, not dispatch, task/profile editing or live model processing. Full package validation of the new source remains required.
+These tests establish task entry and exact submission, not dispatch, task/profile editing or live model processing. Commit `102e590` subsequently passed its full package gate, recorded below.
 
 The task-form source passes the full local suite: 468 unit tests (7.69 s), 10 CLI tests (21.33 s) and strict all-target Clippy (10.57 s). Log: `.direnv/managed-task-form-full.log`. This includes the earlier real-pseudoterminal plugin-menu regression.
+
+## Planned task amendment and coordination
+
+| Invariant | Evidence |
+| --- | --- |
+| Contract/hash/dependency replacement, historical audit and restart replay | `amend_task_replaces_contract_edges_and_hash_once_preserving_prior_audit` |
+| Cycle/self/foreign/missing edges, unauthorized check and journal failure preserve old state | `amend_task_cycle_foreign_edges_invalid_checks_and_journal_failure_roll_back_everything` |
+| Worker/cross-run/stale/live-task/paused-run rejection; old receipt cannot restore old contract | `amend_task_fences_worker_foreign_scope_live_tasks_and_stale_revisions` |
+| Concurrent edit versus dispatch selects one exact contract | `amend_task_and_dispatch_race_keep_one_contract_and_exact_worker_order` runs eight actual SQLite races and inspects the persisted execute order |
+| Form prefill, whitespace, dependency list and task revision | `amend_task_form_preserves_fields_and_uses_task_revision_and_exact_dependencies`; `amend_task_form_refuses_live_unknown_self_dependent_or_incomplete_context` |
+| Stale-view guard, retained editor and exact stdin retry | `amend_task_popup_opens_existing_contract_and_refuses_edit_from_stale_view` |
+| Native notice intent for successful planning decisions | `amended_task_generates_one_coordinator_notice_and_replay_does_not_repeat_it`; `operator_created_task_and_dependency_changes_wake_coordinator_once_each` |
+| Actual CLI/private IPC amendment and replay | The managed creation CLI regression now edits its task, verifies a changed hash/revision and replays the older creation receipt without restoring old state |
+
+The new mutation uses the existing scoped controller API and MCP facade. Tests exercise SQLite transactions, real private IPC and the actual CLI; no live model or shared service is involved. New notice tests establish journal-to-notice persistence; existing notifier tests cover native delivery separately. The coordinator instruction update describes artifact verification and acceptance already covered by the artifact pipeline tests. It does not establish model compliance. The full local suite passes 477 unit tests (7.96 s), 10 CLI tests (22.66 s) and strict all-target Clippy (12.69 s). Log: `.direnv/task-amend-full.log`. Package validation for this source remains pending.
+
+### Full package gate for task creation and plugin menu
+
+Commit `102e590662e6bfda91ce3660f7de4f9a40d30905` passes full Nix build and flake check on x86_64-linux. Compilation took 5 min 50 s and check phase 4 min 58 s, including 468 unit tests (79.99 s) and 10 CLI tests (44.92 s). Formatter/service-module checks pass; incompatible platforms were omitted. Output: `/nix/store/3bkkf5541vy7vjq4sgf2jp7067nslcbj-herdr-supervisor-0.1.0`. Logs: `.direnv/managed-task-form-nix-build.log` and `.direnv/managed-task-form-nix-check.log`. The real-pseudoterminal menu test and large stdin contract run inside the package gate. This predates planned-task amendment and its new notice events.
+
+After a final help-text adjustment excluding the task itself from predecessor choices, the two amendment-form regressions and strict all-target Clippy pass again (`.direnv/task-amend-final.log`). `nix fmt` passes for the amendment source. No host/service activation or publication occurred.

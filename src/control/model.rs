@@ -353,6 +353,12 @@ pub enum Mutation {
         contract: Contract,
         dependencies: Vec<String>,
     },
+    AmendTask {
+        task: String,
+        expected_revision: u64,
+        contract: Contract,
+        dependencies: Vec<String>,
+    },
     AddDependency {
         task: String,
         expected_revision: u64,

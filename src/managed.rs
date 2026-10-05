@@ -716,7 +716,7 @@ fn panel_rows(
             if c["run"]["state"] == "active" {
                 add(
                     "Create a task…".into(),
-                    json!({"_task_form":{"run":c["run"],"tasks":c["tasks"]}}),
+                    json!({"_task_form":{"run":c["run"],"tasks":c["tasks"],"dependencies":c["dependencies"]}}),
                     vec![],
                 );
             }
@@ -734,13 +734,17 @@ fn panel_rows(
                 } else {
                     vec![]
                 };
+                let mut doc = t.clone();
+                if t["state"] == "planned" && c["run"]["state"] == "active" {
+                    doc["_editable_task"] = Value::Bool(true);
+                }
                 add(
                     format!(
                         "{} · {}",
                         t["state"].as_str().unwrap_or_default(),
                         t["contract"]["title"].as_str().unwrap_or_default()
                     ),
-                    t.clone(),
+                    doc,
                     actions,
                 );
             }

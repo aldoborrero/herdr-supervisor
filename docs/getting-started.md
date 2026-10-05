@@ -82,7 +82,7 @@ Open the **Tasks** section and select **Create a task…** (Enter or `n`). This 
 
 Enter creates the task through `managed apply`. It does not dispatch an agent. The request retains the run revision captured when the form opened, so a concurrent change may require returning to the refreshed task list and opening a new form. Controller errors keep the submitted form visible. Once submitted, its request is frozen: Enter retries exactly the same operation and Escape returns to inspect current state. Do not interpret Escape as cancelling a request that the controller may already have accepted. After an uncertain response, inspect the task list before intentionally creating another task.
 
-The form writes its JSON request to CLI stdin, so large instructions do not become one oversized process argument. Dedicated forms for editing existing task contracts and run profiles remain pending.
+The form writes its JSON request to CLI stdin, so large instructions do not become one oversized process argument. Select a **planned** task and press **e** to edit its contract and complete dependency list. The form preserves its existing fields and captures that task's revision. Saving uses the same frozen-retry behavior as creation. Editing run profiles remains pending.
 
 ## Start the coordinator when ready
 
