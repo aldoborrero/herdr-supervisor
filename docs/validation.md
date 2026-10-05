@@ -18,7 +18,7 @@ it passes (0.24 s), followed by strict all-target Clippy (0.42 s), in
 `.direnv/live-acceptance-driver-focused.log`. The complete local suite passes
 638 unit tests (57.91 s) and 22 CLI tests (28.90 s), with four test threads, in
 `.direnv/live-acceptance-driver-full.log`. `nix fmt` passes. The driver additions
-still require their own committed-source package gate. These tests validate the
+pass their committed-source package gate at `abb8f98`, recorded below. These tests validate the
 helper's framing and evaluation rules, not an end-to-end authenticated run.
 The actual plan-only CLI also passed for Codex, Claude and Pi against the packaged
 `c646172` binary path. Its three output plans are retained under
@@ -28,9 +28,36 @@ authenticated services. No process, socket or model was started by those plans.
 
 ### Latest completed package gate
 
+Commit `abb8f9843f19e24b88f5dfe73b088c0e7a27c630` passes `nix build` and
+`nix flake check` on x86_64-linux: 638 unit tests (174.65 s), 22 CLI tests
+(56.64 s), including the five Python driver cases, and formatting. Output:
+`/nix/store/j5558370qyhqgdpnqqq7gbbh3c5ccm5h-herdr-supervisor-0.1.0`.
+Logs: `.direnv/live-acceptance-driver-nix-build.log` and
+`.direnv/live-acceptance-driver-nix-check.log`. Strict Clippy passed separately
+in the local focused gate above; the Nix package does not run Clippy. Other
+systems were omitted by this host gate. No native model or remote-host execution
+is implied. The [acceptance inventory](acceptance-audit.md) maps the original
+fourteen deliverables, nine acceptance groups and twelve recovery cases to their
+current evidence boundaries.
+
+### Installed Herdr smoke for the accepted package
+
+The executable and manifest from the `abb8f98` output above pass
+`tests/native_resources.py` against installed Herdr 0.9.1, protocol 22. Log:
+`.direnv/acceptance-package-native-resources.log`. The isolated named server
+validated disabled manifest link/list/unlink and exact commands, real worktree
+creation/binding/replay, native event subscription/snapshot, real NATS cancellation,
+non-force worktree removal with retained commits, and owned coordinator workspace
+closure/replay with retained files and a paged receipt. The coordinator command
+was `false`; no wrapper or model launched. HOME/XDG/socket state was temporary,
+owned processes were closed by the driver, and no user session was selected.
+
+### Previous package gate
+
 Commit `c6461723b46b0c3d0f76cdbf5b447cf7ce5ac4c8` passes `nix build` and
 `nix flake check` on x86_64-linux, including 638 unit tests (172.39 s), 21 CLI
-tests (56.92 s), strict Clippy and formatting. Output:
+tests (56.92 s) and formatting. Strict Clippy passed in the separate local gates
+recorded below. Output:
 `/nix/store/yj3afdvv0dy00sy18nrh78pn2h7irad7-herdr-supervisor-0.1.0`.
 Logs: `.direnv/questions-nix-build.log` and `.direnv/questions-nix-check.log`.
 This includes the pager-full, reviewer/verifier retirement and final question
@@ -520,18 +547,37 @@ The Nix build of the controller/transport foundation passed on `x86_64-linux`. P
 
 Mailer protocol-2 support is an independent local commit **`7a12d5a`** on `feat/supervisor-delivery`, based on `939cff1`. `nix flake check` passes for that commit on `x86_64-linux`; the package runs Go tests, race, vet, real NATS tests and native bridge SDK tests offline. Supervisor sends require its operation-ID and recipient-precondition capabilities.
 
-## Still required
+## Remaining acceptance
 
-- Broader replanning and abandonment of an uncertain verifier.
-- Recovery/abandonment of uncertain cancelled-run effects, artifact-input retention and coordinator resource cleanup. Explicit worker and code-verification checkout retirement now have implementation/tests; their final package gates remain separate.
-- Recovery of still-live orphans, legacy capture gaps, changed boots/namespaces and non-Linux wrapper loss; detached-descendant audit and conservative resource cleanup.
-- Reconciliation for legacy/lost-wrapper registration evidence. Explicit recovery covers prelaunch Claude/Pi and still-owned Codex before binding.
-- Native/remote acceptance of the implemented service bundle, dependency diagnosis and cross-host focus routes. Managed creation, local onboarding and focus have fixture coverage.
-- Final acceptance of bounded Projects pages and oversized-record retrieval. Those features are implemented; legacy full snapshots and internal aggregate response allocation retain their documented limits.
-- Expired execution/memory command handling, invalid original repair and in-place node-key rotation. Expired node events and cancellation delivery have explicit recovery; current-enrollment grants and owner drain/revocation are implemented.
-- Stronger model-facing validation beyond the isolated continuous-service workflow and protocol fixtures.
+- Authenticated fresh Codex, Claude and Pi workflows: native notice, scoped task
+  read/readiness, author result, independent review, question resolution, approved
+  memory acknowledgement and recorded exits. The prepared driver has not run.
+- Actual remote-host execution and focus using the enrolled node, distinct local
+  repositories, signed NATS transport and the selected NetBird route. Local
+  multi-node fixtures do not establish this.
+- Native restart-boundary acceptance, including supervisor loss with live workers,
+  conservative endpoint resnapshot and resume without duplicate registration or
+  spawn. The ordinary live driver does not inject these failures.
+- Final sign-off against each original requirement using those new observations;
+  the [inventory](acceptance-audit.md) is an evidence map, not that sign-off.
 
-Project/cross-run memory and Markdown exports are optional extensions, not remaining requirements for this goal.
+### Conservative limits and historical backlog
+
+The earlier backlog mixed required acceptance with later extensions. Planned-task
+amendment, stopped-task retry, cancelled-run reconciliation and worker/verifier/
+reviewer/coordinator retirement now have implementation and package evidence.
+Active contracts and unresolved processes remain fenced by design. A missing exit
+or ambiguous verifier outcome retains capacity and resources; automatically
+abandoning it is not required by the original conservative recovery contract.
+
+Legacy/lost-wrapper registration without attributable evidence, live orphans,
+changed boot/PID namespaces, non-Linux wrapper loss, invalid record repair,
+in-place key rotation and automatic renewal of expired execution/memory records
+remain documented limits. None may silently be reported as successful recovery.
+The named original recovery cases still require the evidence in the inventory.
+
+Project/cross-run memory, Markdown exports and pruning retained original artifact
+content are optional extensions, not prerequisites for completing this goal.
 
 No push, public release, host changes or deployment has occurred. Existing user sessions and shared runtime servers were not modified.
 

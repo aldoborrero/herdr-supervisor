@@ -28,7 +28,14 @@ The opt-in native acceptance driver is prepared and documented in
 private services and an explicit exception for additional native agents under
 `AGENTS.md`; no authenticated model execution has occurred. The current local
 suite passes 638 unit/22 CLI tests and strict Clippy. Its new driver test is not
-live model evidence and still needs a committed-source package gate.
+live model evidence. Commit `abb8f98` also passes the x86_64-linux Nix build/check
+with all 638 unit/22 CLI tests. The requirement-by-requirement evidence map is in
+`docs/acceptance-audit.md`; authenticated native/restart/remote acceptance remains
+open. The subsequent documentation-only evidence commit does not claim a new
+package build. The `abb8f98` executable and manifest also pass the isolated real
+Herdr 0.9.1/protocol-22 resource driver: manifest commands, worktree creation and
+retirement, events, cancellation, and coordinator workspace closure. No model or
+user session is involved.
 
 Scoped task questions/resolutions are implemented through worker/controller API,
 CLI/MCP, NATS replication, exact native hints and the managed Inbox projection.
