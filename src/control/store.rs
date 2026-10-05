@@ -128,6 +128,7 @@ impl Store {
             7 => (),
             8 => (),
             9 => (),
+            10 => (),
             _ => bail!("unsupported controller schema {version}; no migration applied"),
         }
         if version <= 2 {
@@ -155,6 +156,9 @@ impl Store {
             // Recovery receipts are independent of mutable launch checkpoints.
             tx.execute_batch(super::registration_recovery::SCHEMA)?;
             tx.pragma_update(None, "user_version", 9)?;
+        }
+        if version <= 9 {
+            tx.execute_batch(super::node_lifecycle::SCHEMA)?;
         }
         tx.commit()?;
         Ok(Self {
@@ -727,6 +731,9 @@ fn add_dependency(c: &Connection, task: &Task, predecessor: &str) -> Result<()> 
 
 pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) -> Result<Value> {
     match command {
+        Mutation::SetNodeDrain { .. } | Mutation::RevokeNode { .. } => {
+            super::node_lifecycle::change(tx, p, command)
+        }
         Mutation::SetProfile { .. } | Mutation::CreateProfile { .. } => {
             super::run_profiles::change(tx, p, command)
         }
@@ -752,11 +759,11 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
                 "invalid node capacity"
             );
             tx.execute(
-                "INSERT INTO nodes VALUES (?1,?2,1,?3,1)",
+                "INSERT INTO nodes(id,key,epoch,max_active,active) VALUES (?1,?2,1,?3,1)",
                 params![node_id, key, max_active],
             )?;
             let credential = issue(tx, "node", None, None, Some(node_id), 1)?;
-            Ok(json!({"id":node_id,"epoch":1,"credential":credential}))
+            Ok(json!({"id":node_id,"epoch":1,"revision":1,"credential":credential}))
         }
         Mutation::CreateRun {
             project,
@@ -929,12 +936,12 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
                 .context("profile not allowed")?;
             let node_limit: u32 = tx
                 .query_row(
-                    "SELECT max_active FROM nodes WHERE id=?1 AND active=1",
+                    "SELECT max_active FROM nodes WHERE id=?1 AND active=1 AND draining=0",
                     [node],
                     |r| r.get(0),
                 )
                 .optional()?
-                .context("node not enrolled")?;
+                .context("node is absent, draining or revoked")?;
             let (active,workers): (u32,u32) = tx.query_row("SELECT count(*),COALESCE(SUM(role='worker'),0) FROM attempts WHERE run=?1 AND active=1",[&t.run],|r|Ok((r.get(0)?,r.get(1)?)))?;
             ensure!(
                 active < r.policy.max_active

@@ -87,7 +87,7 @@ impl Collection {
             Self::Checks => "SELECT c.rowid AS key,c.doc FROM check_runs c JOIN integrations i ON i.id=c.integration WHERE i.run=?1".into(),
             Self::Reviews => "SELECT v.rowid AS key,v.doc FROM reviews v JOIN tasks t ON t.id=v.task WHERE t.run=?1".into(),
             Self::Dependencies => "SELECT d.rowid AS key,json_object('task',d.task,'predecessor',d.predecessor) AS doc FROM dependencies d JOIN tasks t ON t.id=d.task WHERE t.run=?1".into(),
-            Self::Nodes => "SELECT n.rowid AS key,json_object('id',n.id,'max_active',n.max_active,'active_attempts',(SELECT count(*) FROM attempts a WHERE a.node=n.id AND a.active=1)) AS doc FROM nodes n WHERE n.active=1".into(),
+            Self::Nodes => "SELECT n.rowid AS key,json_object('id',n.id,'epoch',n.epoch,'revision',n.revision,'active',json(CASE WHEN n.active=1 THEN 'true' ELSE 'false' END),'draining',json(CASE WHEN n.draining=1 THEN 'true' ELSE 'false' END),'max_active',n.max_active,'active_attempts',(SELECT count(*) FROM attempts a WHERE a.node=n.id AND a.active=1)) AS doc FROM nodes n".into(),
             Self::Profiles | Self::PolicyChecks => {
                 let field = if self == Self::Profiles {"profiles"} else {"checks"};
                 format!("SELECT j.key AS key,json_object('name',j.key,'value',json(j.value)) AS doc FROM runs r,json_each(r.doc,'$.policy.{field}') j WHERE r.id=?1")

@@ -245,7 +245,7 @@ fn registration_recovery_schema_upgrade_preserves_prior_receipts_and_rejects_old
         .unwrap();
     f.store
         .connection
-        .execute_batch("DROP TABLE registration_recoveries")
+        .execute_batch("DROP TABLE registration_recoveries; ALTER TABLE nodes DROP COLUMN draining; ALTER TABLE nodes DROP COLUMN revision;")
         .unwrap();
     f.store
         .connection
@@ -271,7 +271,7 @@ fn registration_recovery_schema_upgrade_preserves_prior_receipts_and_rejects_old
             .connection
             .pragma_query_value(None, "user_version", |r| r.get::<_, u64>(0))
             .unwrap(),
-        9
+        10
     );
     let after: String = node
         .connection

@@ -19,6 +19,12 @@ pub struct ControlArgs {
 
 #[derive(Subcommand)]
 enum ControlCommand {
+    /// Read owner-scoped node authority, drain state and occupied capacity
+    NodeStatus {
+        #[arg(long)]
+        credential: PathBuf,
+        node: String,
+    },
     /// Inspect retention reasons for one node checkout; never authorize or perform removal
     CleanupInspect {
         #[arg(long)]
@@ -694,12 +700,14 @@ pub fn run(args: ControlArgs) -> Result<()> {
             epoch,
             expires_at,
         } => {
-            super::model::identifier(&node)?;
-            let identity = Identity::load(&args.state.join("owner.key"))?;
-            let grant = identity.delegation(&node, &key, epoch, expires_at)?;
-            grant.verify(jiff::Timestamp::now().as_second())?;
+            std::fs::symlink_metadata(args.state.join("control.sqlite"))?;
+            let grant = Store::open(&args.state)?.node_grant(&node, &key, epoch, expires_at)?;
             serde_json::to_value(grant)?
         }
+        ControlCommand::NodeStatus {
+            credential: path,
+            node,
+        } => Store::open(&args.state)?.node_status(&credential(&path)?, &node)?,
         ControlCommand::CleanupInspect {
             executor,
             expected_epoch,

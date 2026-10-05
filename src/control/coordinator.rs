@@ -227,8 +227,8 @@ pub fn context(store: &Store, token: &str, run: &str) -> Result<Value> {
     supervise(&p, run)?;
     let mut snapshot = store.snapshot(token, run)?;
     snapshot["actor_role"] = json!(p.role);
-    let mut q=store.connection.prepare("SELECT n.id,n.max_active,(SELECT count(*) FROM attempts a WHERE a.node=n.id AND a.active=1) FROM nodes n WHERE n.active=1 ORDER BY n.id")?;
-    let nodes:Vec<Value>=q.query_map([],|r|Ok(json!({"id":r.get::<_,String>(0)?,"max_active":r.get::<_,u32>(1)?,"active_attempts":r.get::<_,u32>(2)?})))?.collect::<rusqlite::Result<_>>()?;
+    let mut q=store.connection.prepare("SELECT n.id,n.max_active,(SELECT count(*) FROM attempts a WHERE a.node=n.id AND a.active=1),n.epoch,n.revision,n.active,n.draining FROM nodes n ORDER BY n.id")?;
+    let nodes:Vec<Value>=q.query_map([],|r|Ok(json!({"id":r.get::<_,String>(0)?,"max_active":r.get::<_,u32>(1)?,"active_attempts":r.get::<_,u32>(2)?,"epoch":r.get::<_,u64>(3)?,"revision":r.get::<_,u64>(4)?,"active":r.get::<_,bool>(5)?,"draining":r.get::<_,bool>(6)?})))?.collect::<rusqlite::Result<_>>()?;
     snapshot["nodes"] = json!(nodes);
     snapshot["coordinator_launches"] =
         super::coordinator_launch::summaries(&store.connection, run)?;

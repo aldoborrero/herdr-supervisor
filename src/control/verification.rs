@@ -225,12 +225,12 @@ pub(super) fn mutate(tx: &Transaction<'_>, p: &Principal, command: &Mutation) ->
                 .context("review profile not allowed")?;
             let node_limit: u32 = tx
                 .query_row(
-                    "SELECT max_active FROM nodes WHERE id=?1 AND active=1",
+                    "SELECT max_active FROM nodes WHERE id=?1 AND active=1 AND draining=0",
                     [node],
                     |r| r.get(0),
                 )
                 .optional()?
-                .context("review node not enrolled")?;
+                .context("review node is absent, draining or revoked")?;
             let active: u32 = tx.query_row(
                 "SELECT count(*) FROM attempts WHERE run=?1 AND active=1",
                 [&r.id],

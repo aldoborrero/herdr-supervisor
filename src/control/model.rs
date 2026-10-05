@@ -337,6 +337,17 @@ pub enum Mutation {
         key: String,
         max_active: u32,
     },
+    SetNodeDrain {
+        node: String,
+        expected_epoch: u64,
+        expected_revision: u64,
+        draining: bool,
+    },
+    RevokeNode {
+        node: String,
+        expected_epoch: u64,
+        expected_revision: u64,
+    },
     CreateRun {
         project: String,
         repo: String,

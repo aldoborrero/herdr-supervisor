@@ -6,6 +6,115 @@ use std::process::Command;
 const BIN: &str = env!("CARGO_BIN_EXE_herdr-supervisor");
 
 #[test]
+fn node_lifecycle_cli_drains_revokes_replays_and_refuses_stale_grants() {
+    use serde_json::{Value, json};
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path();
+    let state = root.join("controller");
+    let node = root.join("node");
+    assert!(
+        hp(
+            root,
+            &["control", "--state", state.to_str().unwrap(), "init"]
+        )
+        .status
+        .success()
+    );
+    let key = hp(
+        root,
+        &["control", "--state", node.to_str().unwrap(), "node-key"],
+    );
+    assert!(key.status.success());
+    let key: Value = serde_json::from_slice(&key.stdout).unwrap();
+    let key = key["key"].as_str().unwrap();
+    let credential = state.join("admin.token");
+    let request = root.join("request.json");
+    let apply = |operation: &str, command: Value| {
+        std::fs::write(&request, command.to_string()).unwrap();
+        hp(
+            root,
+            &[
+                "control",
+                "--state",
+                state.to_str().unwrap(),
+                "apply",
+                "--credential",
+                credential.to_str().unwrap(),
+                "--operation",
+                operation,
+                "--request",
+                request.to_str().unwrap(),
+            ],
+        )
+    };
+    assert!(
+        apply(
+            "enroll",
+            json!({"method":"enroll_node","params":{"id":"local","key":key,"max_active":2}})
+        )
+        .status
+        .success()
+    );
+    let expiry = (jiff::Timestamp::now().as_second() + 3600).to_string();
+    let grant = [
+        "control",
+        "--state",
+        state.to_str().unwrap(),
+        "grant",
+        "local",
+        key,
+        "--epoch",
+        "1",
+        "--expires-at",
+        &expiry,
+    ];
+    assert!(hp(root, &grant).status.success());
+    let status = [
+        "control",
+        "--state",
+        state.to_str().unwrap(),
+        "node-status",
+        "--credential",
+        credential.to_str().unwrap(),
+        "local",
+    ];
+    let first = hp(root, &status);
+    assert!(first.status.success());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&first.stdout).unwrap()["revision"],
+        1
+    );
+    let drain = json!({"method":"set_node_drain","params":{"node":"local","expected_epoch":1,"expected_revision":1,"draining":true}});
+    assert!(apply("drain", drain.clone()).status.success());
+    let revoke = json!({"method":"revoke_node","params":{"node":"local","expected_epoch":1,"expected_revision":2}});
+    let retired = apply("revoke", revoke.clone());
+    assert!(
+        retired.status.success(),
+        "{}",
+        String::from_utf8_lossy(&retired.stderr)
+    );
+    assert_eq!(apply("revoke", revoke).stdout, retired.stdout);
+    assert!(
+        apply("drain", drain).status.success(),
+        "historical receipt survives retirement"
+    );
+    assert!(!hp(root, &grant).status.success());
+    let final_status = hp(root, &status);
+    assert!(final_status.status.success());
+    let final_status: Value = serde_json::from_slice(&final_status.stdout).unwrap();
+    assert_eq!(final_status["active"], false);
+    assert_eq!(final_status["epoch"], 2);
+    assert!(
+        !retired
+            .stdout
+            .windows(32)
+            .any(|part| part == &std::fs::read(&credential).unwrap()[..32])
+    );
+    assert!(!state.join("control.sock").exists());
+    assert!(!node.join("node.sqlite").exists());
+}
+
+#[test]
 fn cleanup_inspect_cli_never_initializes_missing_node_state() {
     let home = tempfile::tempdir().unwrap();
     let root = home.path();

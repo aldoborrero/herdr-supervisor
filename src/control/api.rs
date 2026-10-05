@@ -41,6 +41,10 @@ fn response_bytes(value: &Value) -> Result<Vec<u8>> {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ApiRequest {
+    NodeStatus {
+        token: String,
+        node: String,
+    },
     FocusAttempt {
         token: String,
         run: String,
@@ -116,6 +120,7 @@ pub enum ApiRequest {
 
 pub fn handle(store: &mut Store, request: ApiRequest) -> Result<Value> {
     match request {
+        ApiRequest::NodeStatus { token, node } => store.node_status(&token, &node),
         ApiRequest::FocusAttempt {
             token,
             run,
@@ -461,6 +466,7 @@ fn mcp_request(dir: &Path, token: &str, request: &Value) -> Result<Value> {
         }
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({"tools":[
+            {"name":"supervisor_node_status","description":"Owner-only read of node authority, drain revision and active attempts. Drain blocks future assignments; revocation does not stop processes or revoke NATS credentials.","inputSchema":{"type":"object","properties":{"node":{"type":"string"}},"required":["node"],"additionalProperties":false}},
             {"name":"supervisor_context","description":"Read a bounded run overview and collection cursors. Read supervisor_page for tasks, profiles, checks, memory and notices before deciding.","inputSchema":{"type":"object","properties":{"run":{"type":"string"}},"required":["run"],"additionalProperties":false}},
             {"name":"supervisor_page","description":"Read complete records from one authorized collection. Follow next_cursor until null. Pages are current read snapshots, not one frozen scan; refresh context for new rows and recheck revisions before decisions.","inputSchema":{"type":"object","properties":{"run":{"type":"string"},"collection":{"type":"string","enum":super::pagination::Collection::ALL.iter().map(|c|c.name()).collect::<Vec<_>>()},"cursor":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":100,"default":50}},"required":["run","collection"],"additionalProperties":false}},
             {"name":"supervisor_record","description":"Read one UTF-8 JSON fragment from a page's record reference. Concatenate text fields in offset order through next_cursor=null and verify bytes/sha256 before interpreting. A changed record requires a fresh page. Cursors do not grant authority.","inputSchema":{"type":"object","properties":{"run":{"type":"string"},"cursor":{"type":"string"}},"required":["run","cursor"],"additionalProperties":false}},
@@ -477,6 +483,10 @@ fn mcp_request(dir: &Path, token: &str, request: &Value) -> Result<Value> {
                     .into())
             };
             let api = match request["params"]["name"].as_str().context("tool name")? {
+                "supervisor_node_status" => ApiRequest::NodeStatus {
+                    token: token.into(),
+                    node: get("node")?,
+                },
                 "supervisor_context" => ApiRequest::CoordinatorOverview {
                     token: token.into(),
                     run: get("run")?,

@@ -288,9 +288,38 @@ Creating or amending a task, or using the existing `add_dependency` decision, no
 
 Broker JSON contains `url`, `credentials` (an absolute private `.creds` or JSON user/password file), and optional `private_network_plaintext`. TLS is required by default. Plaintext requires an explicit private-network choice. NetBird addresses can provide reachability without changing record authorization.
 
-Subjects are `hs.<sha256-owner-DID>.to.<node-id>` and `.to.controller`. Consumers use explicit ACK after SQLite application. Grant expiry and node epoch are checked on reception. Automated grant renewal and node rotation/revocation commands are not yet provided.
+Subjects are `hs.<sha256-owner-DID>.to.<node-id>` and `.to.controller`. Consumers use explicit ACK after SQLite application. Grant expiry and node epoch are checked on reception. `control grant` now signs only the enrolled, active node's exact key/epoch, under the controller write transaction. Automated grant renewal and in-place key rotation remain pending.
 
 A node's broker ACL must prevent publishing to other nodes' command subjects and reading their consumers or reply inboxes. Generate the exact runtime permissions with `control --state CONTROLLER_DIR broker-policy --node NODE_ID`; see the [deployment example and reply-prefix migration](nats-acl.md). The controller and each node use distinct `_HS_INBOX.<owner-hash>...` prefixes automatically. The generated policy includes only the runtime's publish routes, its own pull consumer and ACKs, and its own reply subscriptions. Broker administration is a separate credential. The continuous-service test uses the generated permissions for both the controller and node, while real-broker regressions verify rejected reads, writes and management requests.
+
+### Drain and revoke node authority
+
+The owner can drain a node before maintenance or retirement. Drain prevents new worker and reviewer reservations; previously committed assignments, including offline/queued assignments that have not launched yet, retain their authority. Existing jobs can finish, submit evidence and stop. Drain does not cancel them or release their occupied capacity.
+
+Read the current epoch, revision, drain state and active-attempt count:
+
+```sh
+herdr-supervisor control --state CONTROLLER_DIR node-status \
+  --credential CONTROLLER_DIR/admin.token NODE_ID
+```
+
+Submit this decision through `control apply --credential ... --operation STABLE_ID --request FILE`, the controller API or `supervisor_apply` MCP. Replace the example revisions with the observed values:
+
+```json
+{"method":"set_node_drain","params":{"node":"local","expected_epoch":1,"expected_revision":1,"draining":true}}
+```
+
+Only the owner can change node lifecycle. A run supervisor, worker, node token or Projects run-scoped facade cannot exercise these global decisions. Read status again before resuming with `draining:false`. Replaying a successful operation returns its historical receipt without changing the current drain state; reusing its ID for a different decision fails. `supervisor_node_status` provides the same owner-only read over MCP. Coordinator node pages include active/draining state, epoch and revision, including retained revoked nodes; dispatch only to active nodes with `draining:false`.
+
+After all attempts have a controller-applied stop and `active_attempts` is zero, revoke a drained node:
+
+```json
+{"method":"revoke_node","params":{"node":"local","expected_epoch":1,"expected_revision":2}}
+```
+
+One transaction increases the node epoch/revision, retires its node capabilities, marks still-pending outgoing effects `node_revoked`, and records the operation/audit. It retains signed bytes, payloads, previous broker receipts and attempts. An unresolved attempt, elapsed deadline or broker ACK cannot authorize revocation. Old events, including byte-identical replays, must authenticate the current node and are rejected after revocation. Old direct capability calls and grant issuance also fail. Draining/resuming does not change the node epoch; revocation is terminal for that node ID. Enroll a replacement under a fresh ID/key; do not wipe and reuse old node state to circumvent the retained identity.
+
+Revocation changes controller application authority, not the broker's credentials or a disconnected daemon's already-held grant. It sends no process signals, deletes no worktrees and cannot retract a publication already in flight or stored at NATS. Broker credential/ACL revocation is a separate operator action. No empty-process-tree or cleanup guarantee follows from `active_attempts:0`; native-process stop receipts have the scope described below. This lifecycle requires controller schema 10 (node schema remains 8); start upgraded controller services before using the commands. Migration retains existing identities, queued signed records and capacity.
 
 ## Signed-record size budgets
 

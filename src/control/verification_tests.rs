@@ -39,6 +39,66 @@ struct GitFixture {
     config: git_pipeline::Config,
 }
 
+#[test]
+fn draining_node_refuses_new_reviewers_and_resumes_on_current_owner_revision() {
+    let mut x = GitFixture::new("sha1", "true", true);
+    x.submit();
+    let initial = x.request();
+    let verified = x.advance(&initial.id);
+    let req = request(
+        &x.f.supervisor,
+        Mutation::RequestReview {
+            integration: verified.id.clone(),
+            expected_revision: verified.revision,
+            node: "local".into(),
+            profile: "auto".into(),
+        },
+    );
+    call(
+        &mut x.f.store,
+        &x.f.owner,
+        Mutation::SetNodeDrain {
+            node: "local".into(),
+            expected_epoch: 1,
+            expected_revision: 1,
+            draining: true,
+        },
+    );
+    let before: u32 =
+        x.f.store
+            .connection
+            .query_row("SELECT count(*) FROM attempts", [], |r| r.get(0))
+            .unwrap();
+    assert!(
+        x.f.store
+            .apply(&req)
+            .unwrap_err()
+            .to_string()
+            .contains("draining")
+    );
+    assert_eq!(
+        x.f.store
+            .connection
+            .query_row("SELECT count(*) FROM attempts", [], |r| r.get::<_, u32>(0))
+            .unwrap(),
+        before
+    );
+    call(
+        &mut x.f.store,
+        &x.f.owner,
+        Mutation::SetNodeDrain {
+            node: "local".into(),
+            expected_epoch: 1,
+            expected_revision: 2,
+            draining: false,
+        },
+    );
+    assert_eq!(
+        x.f.store.apply(&req).unwrap()["attempt"]["role"],
+        "reviewer"
+    );
+}
+
 fn cancel_with_exit(x: &mut GitFixture) {
     let run: Run = document(&x.f.store.connection, "runs", &x.f.run).unwrap();
     call(
@@ -1198,7 +1258,7 @@ fn migration_preserves_v2_authority_credentials_and_operation_replays() {
         .query_row("SELECT count(*) FROM journal", [], |r| r.get(0))
         .unwrap();
     // Restore the actual v2 schema, retaining the authoritative rows and signed outbox.
-    f.store.connection.execute_batch("DROP TABLE coordinator_processes; DROP TABLE coordinator_launches; DROP TABLE coordinator_notices; DROP TABLE coordinator_routes; DROP TABLE verification_worktrees; DROP TABLE check_runs; DROP TABLE review_assignments; DROP TABLE repository_bindings; DROP INDEX active_integration; DROP TABLE integration_policies; DROP TABLE attempt_profiles; DROP TABLE artifact_chunks; DROP TABLE artifact_uploads; DROP TABLE reception_failures; DROP TABLE registration_recoveries; PRAGMA user_version=2;").unwrap();
+    f.store.connection.execute_batch("DROP TABLE coordinator_processes; DROP TABLE coordinator_launches; DROP TABLE coordinator_notices; DROP TABLE coordinator_routes; DROP TABLE verification_worktrees; DROP TABLE check_runs; DROP TABLE review_assignments; DROP TABLE repository_bindings; DROP INDEX active_integration; DROP TABLE integration_policies; DROP TABLE attempt_profiles; DROP TABLE artifact_chunks; DROP TABLE artifact_uploads; DROP TABLE reception_failures; DROP TABLE registration_recoveries; ALTER TABLE nodes DROP COLUMN draining; ALTER TABLE nodes DROP COLUMN revision; PRAGMA user_version=2;").unwrap();
     let state = f.store.dir.clone();
     f.store = Store::open(&state).unwrap();
     assert_eq!(f.store.snapshot(&f.supervisor, &f.run).unwrap(), before);
@@ -1443,7 +1503,7 @@ fn run_profiles_updates_preserve_migrated_check_receipts_and_inflight_reviewer_b
     x.f.store
         .connection
         .execute_batch(
-            "DROP TABLE attempt_profiles; DROP TABLE integration_policies; DROP TABLE registration_recoveries; PRAGMA user_version=7;",
+            "DROP TABLE attempt_profiles; DROP TABLE integration_policies; DROP TABLE registration_recoveries; ALTER TABLE nodes DROP COLUMN draining; ALTER TABLE nodes DROP COLUMN revision; PRAGMA user_version=7;",
         )
         .unwrap();
     x.f.store = Store::open(&x.f.store.dir).unwrap();
