@@ -4,6 +4,7 @@ mod artifact_inputs;
 mod artifact_review;
 pub mod artifacts;
 pub mod broker_policy;
+mod cleanup;
 pub mod cli;
 pub mod coordinator;
 pub mod coordinator_launch;

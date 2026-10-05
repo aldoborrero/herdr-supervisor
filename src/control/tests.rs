@@ -12,6 +12,9 @@ mod service_setup_tests;
 
 const BASE: &str = "1234567890123456789012345678901234567890";
 
+#[path = "cleanup_tests.rs"]
+mod cleanup_tests;
+
 fn policy() -> Policy {
     Policy {
         max_active: 2,

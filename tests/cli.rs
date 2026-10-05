@@ -6,6 +6,32 @@ use std::process::Command;
 const BIN: &str = env!("CARGO_BIN_EXE_herdr-supervisor");
 
 #[test]
+fn cleanup_inspect_cli_never_initializes_missing_node_state() {
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path();
+    let config = root.join("executor.json");
+    std::fs::write(&config, serde_json::json!({"repositories":{},"worktree_root":root.join("worktrees"),"herdr_binary":"/unused/herdr","herdr_socket":root.join("herdr.sock")}).to_string()).unwrap();
+    let state = root.join("missing node");
+    let output = hp(
+        root,
+        &[
+            "control",
+            "--state",
+            state.to_str().unwrap(),
+            "cleanup-inspect",
+            "--executor",
+            config.to_str().unwrap(),
+            "--expected-epoch",
+            "1",
+            "11111111-1111-4111-8111-111111111111",
+        ],
+    );
+    assert!(!output.status.success());
+    assert!(!state.exists());
+    assert!(!root.join("worktrees").exists());
+}
+
+#[test]
 fn local_service_setup_cli_resumes_private_bundle_and_does_not_start_services() {
     use serde_json::{Value, json};
     let home = tempfile::tempdir().unwrap();

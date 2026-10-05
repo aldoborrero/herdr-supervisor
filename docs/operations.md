@@ -442,6 +442,22 @@ The pane wrapper now remains alive around the native runtime and holds a private
 
 Only the wrapper signals its own unreaped child. After a wrapper crash, the node does **not** signal a stored numeric PID or infer exit from an absent pane.
 
+### Inspect retained worker checkouts
+
+On the execution node, use its existing private state and the same executor configuration:
+
+```sh
+herdr-supervisor control --state /private/node-state cleanup-inspect \
+  --executor /private/service-bundle/executor.json \
+  --expected-epoch 2 ATTEMPT_UUID
+```
+
+This local maintenance command returns JSON retention reasons. It checks the saved attempt/node/epoch and resource plan, the authorized repository/root/socket, the exact linked Git checkout and branch, tracked/untracked changes, ignored files, index visibility overrides, submodules and the saved Herdr workspace/pane/terminal. A recorded controller application of `ObserveStopped` is distinct from broker storage. It rechecks local authority after external observations. Git observations disable repository fsmonitor and the untracked cache, and do not take optional index-write locks. File names, file contents, native response bodies and credentials are omitted from the report.
+
+Exit success means an inspection report was produced, not that removal is allowed. `removal_authorized` and `resources_deleted` remain false. A clean checkout, one foreground shell and even a native-process exit receipt do not prove that background jobs or detached descendants stopped. Their status and the not-yet-implemented retention policy remain `unknown`; an empty native foreground list is not a positive idle-shell observation. No cleanup intent is recorded, resource adopted, process signalled, ref changed or worktree removed. Missing state is not initialized. Changed epoch/configuration or malformed durable state fails the command; other unmet observations appear as retention reasons. Observations are not atomic with Git/Herdr activity, so this output cannot be reused as a removal permit.
+
+Actual conservative removal still requires process containment/exit evidence, a retention decision, a persisted effect intent and reconciliation of native removal after a lost reply. Herdr's [worktree removal contract](https://github.com/herdrdev/herdr/blob/master/docs/next/website/src/content/docs/cli-reference.mdx) retains the branch and exposes an explicit force option; this plugin's future cleanup must preserve refs and avoid force. This inspection is a prerequisite, not completion of the cleanup deliverable.
+
 ### Passive recovery after wrapper loss
 
 Dedicated wrappers reset inherited `SIGCHLD` auto-reaping before spawn so their Child handle retains the original PID until wait. On Linux, new wrappers capture `kernel_identity` while they still own their unreaped child: kernel boot UUID, PID namespace device/inode, PID and process birth ticks. Node lifecycle reconciliation and coordinator advancement can recover a missing exit receipt automatically. Recovery must acquire the existing private wrapper ownership lease, match the exact process row/epoch and observe the same boot and PID namespace. It holds that lease through a conditional SQLite update; a live wrapper retains its ordinary exit-receipt path. Invalid, missing, public, symlink or non-regular lease files cannot authorize recovery.

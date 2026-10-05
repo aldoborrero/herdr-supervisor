@@ -19,6 +19,14 @@ pub struct ControlArgs {
 
 #[derive(Subcommand)]
 enum ControlCommand {
+    /// Inspect retention reasons for one node checkout; never authorize or perform removal
+    CleanupInspect {
+        #[arg(long)]
+        executor: PathBuf,
+        #[arg(long)]
+        expected_epoch: u64,
+        attempt: String,
+    },
     /// Read the next UTF-8 JSON fragment of a referenced large record
     Record {
         #[arg(long)]
@@ -692,6 +700,16 @@ pub fn run(args: ControlArgs) -> Result<()> {
             grant.verify(jiff::Timestamp::now().as_second())?;
             serde_json::to_value(grant)?
         }
+        ControlCommand::CleanupInspect {
+            executor,
+            expected_epoch,
+            attempt,
+        } => super::cleanup::inspect(
+            &args.state,
+            &super::executor::read_config(&executor)?,
+            &attempt,
+            expected_epoch,
+        )?,
         ControlCommand::RecoverRegistration {
             node,
             operation,

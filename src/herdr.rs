@@ -323,8 +323,9 @@ impl<'a> Herdr<'a> {
         self.call_as(&["workspace", "list"], "workspaces")
     }
 
-    /// True when the pane's shell is its foreground process: nothing runs in
-    /// it. Unknown (no shell pid, an error) counts as busy.
+    /// True only for a positive observation of the shell alone in the foreground.
+    /// This says nothing about background jobs or detached descendants.
+    /// Incomplete observations count as busy.
     pub fn pane_idle_shell(&self, pane: &str) -> bool {
         let Ok(result) = self.call(&["pane", "process-info", "--pane", pane], CALL_TIMEOUT) else {
             return false;
@@ -333,10 +334,12 @@ impl<'a> Herdr<'a> {
         let Some(shell) = info["shell_pid"].as_u64() else {
             return false;
         };
-        info["foreground_process_group_id"].as_u64() == Some(shell)
+        shell > 0
+            && shell <= u32::MAX as u64
+            && info["foreground_process_group_id"].as_u64() == Some(shell)
             && info["foreground_processes"]
                 .as_array()
-                .is_some_and(|all| all.iter().all(|p| p["pid"].as_u64() == Some(shell)))
+                .is_some_and(|all| all.len() == 1 && all[0]["pid"].as_u64() == Some(shell))
     }
 
     fn created(result: &serde_json::Value) -> Result<Created, HerdrError> {
@@ -731,6 +734,52 @@ impl<'a> Herdr<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn idle_foreground_requires_one_positive_shell_observation() {
+        use crate::runner::fake::{FakeRunner, ok};
+        use serde_json::json;
+        for (info, expected) in [
+            (
+                json!({"shell_pid":12,"foreground_process_group_id":12,"foreground_processes":[{"pid":12}]}),
+                true,
+            ),
+            (
+                json!({"shell_pid":12,"foreground_process_group_id":12,"foreground_processes":[]}),
+                false,
+            ),
+            (
+                json!({"shell_pid":0,"foreground_process_group_id":0,"foreground_processes":[{"pid":0}]}),
+                false,
+            ),
+            (
+                json!({"shell_pid":12,"foreground_process_group_id":12,"foreground_processes":[{"pid":12},{"pid":13}]}),
+                false,
+            ),
+            (
+                json!({"shell_pid":12,"foreground_process_group_id":13,"foreground_processes":[{"pid":12}]}),
+                false,
+            ),
+            (
+                json!({"shell_pid":12,"foreground_process_group_id":12}),
+                false,
+            ),
+            (
+                json!({"shell_pid":4294967296u64,"foreground_process_group_id":4294967296u64,"foreground_processes":[{"pid":4294967296u64}]}),
+                false,
+            ),
+        ] {
+            let runner = FakeRunner::new();
+            runner.on(
+                "process-info",
+                ok(&json!({"result":{"process_info":info}}).to_string()),
+            );
+            assert_eq!(
+                Herdr::new("herdr", Path::new("/unused.sock"), &runner).pane_idle_shell("pane"),
+                expected
+            );
+        }
+    }
 
     #[test]
     fn parses_versions() {

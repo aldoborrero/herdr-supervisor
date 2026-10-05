@@ -50,10 +50,16 @@ pub struct PaneBinding {
     pub terminal: String,
 }
 
-fn git(runner: &dyn Runner, repo: &Path, args: &[&str]) -> Result<String> {
+pub(super) fn git(runner: &dyn Runner, repo: &Path, args: &[&str]) -> Result<String> {
     let out = runner.run(
         &Cmd::new("git", Duration::from_secs(20))
             .args(["-c", "core.hooksPath=/dev/null"])
+            .args([
+                "-c",
+                "core.fsmonitor=false",
+                "-c",
+                "core.untrackedCache=false",
+            ])
             .args(args.iter().copied())
             .cwd(repo)
             .env_remove("GIT_DIR")
@@ -66,6 +72,7 @@ fn git(runner: &dyn Runner, repo: &Path, args: &[&str]) -> Result<String> {
             .env_remove("GIT_CONFIG_COUNT")
             .env_remove("GIT_CONFIG_PARAMETERS")
             .env("GIT_NO_REPLACE_OBJECTS", "1")
+            .env("GIT_OPTIONAL_LOCKS", "0")
             .env("GIT_TERMINAL_PROMPT", "0"),
     )?;
     ensure!(
