@@ -6,6 +6,25 @@ use std::process::Command;
 const BIN: &str = env!("CARGO_BIN_EXE_herdr-supervisor");
 
 #[test]
+fn live_acceptance_driver_tests_never_launch_models_or_use_host_services() {
+    let python = std::env::var_os("PYTHON").unwrap_or_else(|| "python3".into());
+    let output = Command::new(python)
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/live_acceptance_test.py"
+        ))
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn reviewer_copy_retirement_cli_requires_bounded_confirmed_request_without_initializing_state() {
     let home = tempfile::tempdir().unwrap();
     let root = home.path();

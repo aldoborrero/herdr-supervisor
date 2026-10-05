@@ -4,6 +4,39 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
+### Opt-in native acceptance driver (preparation only)
+
+The [native acceptance guide](live-acceptance.md) documents a default plan-only
+command and separate execution against fresh private services. The driver creates
+a run/coordinator, then observes real scoped worker results instead of fabricating
+them. It requires exact review/check/Git evidence, questions, memory approval and
+acknowledgement, and native exit records. It retains uncertain requests and never
+claims remote-host acceptance. It has not been executed with authenticated models.
+
+The focused CLI wrapper runs five Python cases without models or host services;
+it passes (0.24 s), followed by strict all-target Clippy (0.42 s), in
+`.direnv/live-acceptance-driver-focused.log`. The complete local suite passes
+638 unit tests (57.91 s) and 22 CLI tests (28.90 s), with four test threads, in
+`.direnv/live-acceptance-driver-full.log`. `nix fmt` passes. The driver additions
+still require their own committed-source package gate. These tests validate the
+helper's framing and evaluation rules, not an end-to-end authenticated run.
+The actual plan-only CLI also passed for Codex, Claude and Pi against the packaged
+`c646172` binary path. Its three output plans are retained under
+`.direnv/native-{codex,claude,pi}-acceptance-plan.json`; the corresponding isolated
+roots do not exist, so these observations explicitly do not claim prepared or
+authenticated services. No process, socket or model was started by those plans.
+
+### Latest completed package gate
+
+Commit `c6461723b46b0c3d0f76cdbf5b447cf7ce5ac4c8` passes `nix build` and
+`nix flake check` on x86_64-linux, including 638 unit tests (172.39 s), 21 CLI
+tests (56.92 s), strict Clippy and formatting. Output:
+`/nix/store/yj3afdvv0dy00sy18nrh78pn2h7irad7-herdr-supervisor-0.1.0`.
+Logs: `.direnv/questions-nix-build.log` and `.direnv/questions-nix-check.log`.
+This includes the pager-full, reviewer/verifier retirement and final question
+migration/MCP regressions; their earlier pending package notes below are
+historical. Other target systems were not built by this gate.
+
 ### Scoped questions and one-time resolutions
 
 Controller schema 15 adds `task_questions`; node schema 12 adds the bounded local
@@ -32,7 +65,7 @@ removed their sockets (`.direnv/questions-final-focused.log`). The fixture now
 retains that root through graceful shutdown. All seven focused tests now pass
 (0.80 s), followed by strict Clippy (17.91 s), in
 `.direnv/questions-final-corrected.log`. No production assertion or authorization
-check was relaxed. Final package validation remains pending.
+check was relaxed. Final package validation passed at `c646172`, as recorded above.
 
 | Regression | Evidence boundary |
 | --- | --- |
@@ -53,11 +86,11 @@ still open.
 
 ### Current audit findings beyond the passing suite
 
-The requirement audit must inspect the proposed operations as well as the fourteen broad deliverables. At `1eeaa4e`, the scoped task-question contract in `supervisor-design.md` (tools and mailer sections) was absent: assignment notices and standalone mailer ask/reply did not provide the managed conversation workflow. The implementation and evidence for that finding are now recorded above; its final package gate remains pending.
+The requirement audit must inspect the proposed operations as well as the fourteen broad deliverables. At `1eeaa4e`, the scoped task-question contract in `supervisor-design.md` (tools and mailer sections) was absent: assignment notices and standalone mailer ask/reply did not provide the managed conversation workflow. The implementation and evidence for that finding are now recorded above; its package gate passed at `c646172`.
 
 The persistence matrix requires disk-full behavior. Existing `RAISE(ABORT,'disk full')` tests establish statement-error rollback, not the SQLite pager's `SQLITE_FULL` behavior. The new isolated `storage_fault_tests.rs` test bounds a temporary database with `max_page_count` and attempts a larger allocation from effect/audit insertion triggers; it checks the real error code, automatic transaction rollback, complete application-row equality, restart and idempotent retry. The real JetStream persistence test uses the same pager fault on job insertion and checks that the broker message remains unacknowledged. Validation of these additions is tracked below; no host filesystem is filled.
 
-The pager regression passes (0.28 s), as does `real_jetstream_offline_node_restart_and_ack_after_persistence` with the actual pager fault (0.63 s). Strict all-target Clippy passes (38.17 s); log: `.direnv/sqlite-full-focused.log`. `nix fmt` passes without changes (`.direnv/sqlite-full-fmt.log`). The full suite also passes: 631 unit tests (68.05 s) and 21 CLI tests (25.50 s), with four test threads, in `.direnv/sqlite-full-suite.log`. Package evidence for these added tests remains pending. This proves SQLite's bounded-pager failure path; it does not claim a host-wide ENOSPC exercise or every possible WAL/fsync failure.
+The pager regression passes (0.28 s), as does `real_jetstream_offline_node_restart_and_ack_after_persistence` with the actual pager fault (0.63 s). Strict all-target Clippy passes (38.17 s); log: `.direnv/sqlite-full-focused.log`. `nix fmt` passes without changes (`.direnv/sqlite-full-fmt.log`). The full suite also passes: 631 unit tests (68.05 s) and 21 CLI tests (25.50 s), with four test threads, in `.direnv/sqlite-full-suite.log`. Package evidence is included in the `c646172` gate above. This proves SQLite's bounded-pager failure path; it does not claim a host-wide ENOSPC exercise or every possible WAL/fsync failure.
 
 Authenticated Codex/Claude/Pi processing and actual remote-host acceptance remain unproven. The installed native resource test starts no model. The local continuous workflows use real NATS/Git/SQLite/processes and controlled native/model boundaries; they cannot establish the remote-host matrix or a model's scoped API response. `AGENTS.md` currently prohibits additional workers and live user sessions. Preparing acceptance drivers and reviewing their contracts is still possible within the worktree; actual new model sessions require resolving that restriction explicitly.
 

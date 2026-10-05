@@ -17,6 +17,12 @@ PYTHONDONTWRITEBYTECODE=1 python3 tests/native_resources.py \
 
 The driver creates fresh temporary HOME/XDG state, a private named Herdr server, a Git repository and restricted NATS services. It exercises actual worktree creation/removal, exact resource binding, replay, event subscription and cancellation before launch. `--plugin` is optional; it links the packaged manifest disabled, checks its registry entries and executable, then unlinks it. No startup hook or model is invoked, and existing sessions/configuration are not selected. All owned processes and temporary files are cleaned up on exit. Failures print fixture logs. This is opt-in because the installed Herdr binary is not a pinned package-test dependency; it does not establish model processing or multi-host behavior. See [validation](validation.md) for tested versions and boundaries.
 
+## Native model acceptance
+
+For an opt-in task executed by authenticated models, see [native model
+acceptance](live-acceptance.md). Its default is plan-only; executing it requires
+fresh prepared services and separately authorized native sessions.
+
 ## Processes and authority
 
 Run `control run-controller --broker BROKER_JSON --repositories REPOSITORIES_JSON` against one private controller state directory. It combines the API, relay and Git verifier. `control serve` and `control relay-controller` expose the first two components independently; they do not execute checks or integration intents. Each execution node has a different private directory, its own signing key, and a `control run-node` process combining its relay, worker API and executor. The node's SQLite inbox/outbox survives process restarts. The separate mailer daemon must already be running locally on that node.
