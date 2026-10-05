@@ -6,7 +6,7 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 **Last completed full Nix gate:** commit `737eb14217fcb40bbef57c96e9c7e0ed9d65845a` passes package build and `nix flake check` on x86_64-linux, with 500 unit and 10 CLI tests offline. It includes Codex registration recovery with live ownership. The passive kernel-exit recovery extension still requires its package gate. This does not establish other platforms or completion of the remaining feature scope.
 
-The local implementation suite currently passes **505 unit tests and 10 CLI tests** (local suite with four test threads), including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
+The local implementation suite currently passes **511 unit tests and 10 CLI tests** (local suite with four test threads), including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
 
 | Requirement | Evidence | Limit |
 | --- | --- | --- |
@@ -337,3 +337,18 @@ The new recovery regressions exercise the following boundaries:
 | Private regular ownership file | `native_ownership_lease_requires_live_holder_and_rejects_missing_symlink_or_public_file` | Also rejects a FIFO without blocking |
 
 Recovered exit status remains unknown, even when the fixture deliberately exits with code 7. These tests do not establish detached-descendant cleanup, active orphan termination, another platform or model processing. The final local suite passes 505 unit tests (38.82 s) and 10 CLI tests (23.67 s), with four test threads. `nix fmt` passes without source changes. Logs are `.direnv/kernel-recovery-final.log` and `.direnv/kernel-recovery-fmt.log`; the earlier pre-SIGCHLD suite is retained in `.direnv/kernel-recovery-full.log`. Strict all-target Clippy passes (26.18 s). The full package gate remains pending.
+
+## Transactional signed-record size limits
+
+The controller now checks the complete command envelope before committing each remote outbox intent. Both author dispatch and independent reviewer reservation roll back on an oversized combination of separately valid inputs. A shared constructor keeps preflight and later signing aligned, reserving the largest epoch/timestamp widths. Signing and verification use the same 262,144-byte record budget; the transport retains its 300,000-byte wire limit. No data is silently truncated.
+
+| Invariant | Evidence | Scope |
+| --- | --- | --- |
+| Oversized combined contract/memory consumes no capacity or capabilities | `wire_limits_dispatch_rolls_back_capacity_credentials_and_all_effects` | Legal 65,536-byte instructions plus criteria and a 32,000-byte memory selection with six-byte JSON escapes; explicit withdrawal permits the same dispatch operation to succeed once |
+| Reviewer reservation is equally atomic | `wire_limits_review_reservation_rolls_back_assignment_and_capacity_before_retry` | Real Git verification, owner profile update, memory, failed review reservation and exact retry without an orphaned reviewer assignment |
+| Exact JSON record boundary | `wire_limits_signing_exact_encoded_boundary_and_signature_bound` | ASCII, multibyte UTF-8 and six-byte escapes at the exact record limit and one byte over; malformed oversized signatures rejected before base58 decoding |
+| Node outbox never persists an oversized new event | `wire_limits_node_rejects_oversized_event_before_durable_enqueue_and_allows_retry` | A command that fits the mutation budget but exceeds the signed-event envelope; no stored event or consumed operation key |
+| Near-limit valid execution still works | `wire_limits_large_execute_roundtrip_over_real_broker_preserves_full_contract` | More than 250,000 encoded bytes over restricted real NATS; exact contract/memory after node restart and ACK after persistence; no model execution |
+| Envelope and future numeric widths included | `wire_limits_command_budget_includes_future_epoch_and_full_json_envelope` | Exact command-preflight boundary, one byte over, larger epoch before signing, exact wire limit and excess whitespace rejection |
+
+The final local suite passes 511 unit tests (42.68 s), 10 CLI tests (25.35 s), all six focused size regressions and strict all-target Clippy (30.44 s), with four test threads. `nix fmt` passes. Logs: `.direnv/wire-limits-final.log` and `.direnv/wire-limits-fmt.log`. The full Nix gate remains pending. These tests do not establish aggregate API pagination or recovery of previously oversized terminal deliveries.

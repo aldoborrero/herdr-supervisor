@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 
 use super::model::{digest, id};
 
+pub(super) const MAX_RECORD_BYTES: usize = 262144;
+pub(super) const MAX_WIRE_BYTES: usize = 300000;
+
 pub struct Identity(SigningKey);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -22,6 +25,40 @@ pub struct Record {
     pub created_at: i64,
     pub expires_at: i64,
     pub payload: serde_json::Value,
+}
+
+impl Record {
+    pub(super) fn command(
+        owner: &str,
+        recipient: String,
+        epoch: u64,
+        id: &str,
+        deadline: i64,
+        kind: &str,
+        body: serde_json::Value,
+    ) -> Self {
+        Self {
+            record_type: "local.herdr.supervisor.command".into(),
+            id: id.into(),
+            owner: owner.into(),
+            author: owner.into(),
+            recipient,
+            epoch,
+            created_at: jiff::Timestamp::now().as_second(),
+            expires_at: deadline,
+            payload: serde_json::json!({"kind":kind,"body":body}),
+        }
+    }
+
+    pub(super) fn encoded(&self) -> Result<Vec<u8>> {
+        let bytes = serde_json::to_vec(self)?;
+        ensure!(
+            bytes.len() <= MAX_RECORD_BYTES,
+            "signed record uses {} encoded bytes; limit is {MAX_RECORD_BYTES}",
+            bytes.len()
+        );
+        Ok(bytes)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -74,7 +111,7 @@ impl Identity {
 
     pub fn sign(&self, record: Record) -> Result<SignedRecord> {
         ensure!(record.author == self.did(), "author/key mismatch");
-        let bytes = serde_json::to_vec(&record)?;
+        let bytes = record.encoded()?;
         let signature = bs58::encode(self.0.sign(&bytes).to_bytes()).into_string();
         Ok(SignedRecord {
             record,
@@ -137,10 +174,11 @@ impl SignedRecord {
             "unsupported record namespace"
         );
         uuid::Uuid::parse_str(&self.record.id)?;
-        let bytes = serde_json::to_vec(&self.record)?;
+        ensure!(self.signature.len() <= 88, "invalid signature length");
+        let bytes = self.record.encoded()?;
         ensure!(
-            bytes.len() <= 262144 && digest(&bytes) == self.content_hash,
-            "record content mismatch or too large"
+            digest(&bytes) == self.content_hash,
+            "record content mismatch"
         );
         let sig = bs58::decode(&self.signature).into_vec()?;
         verifying_key(&self.record.author)?.verify_strict(&bytes, &Signature::from_slice(&sig)?)?;

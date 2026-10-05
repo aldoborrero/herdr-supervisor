@@ -342,17 +342,15 @@ impl Store {
             [&target],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
-        let record = identity.sign(super::identity::Record {
-            record_type: "local.herdr.supervisor.command".into(),
-            id: effect_id.into(),
-            owner: identity.did(),
-            author: identity.did(),
-            recipient: key,
+        let record = identity.sign(super::identity::Record::command(
+            &identity.did(),
+            key,
             epoch,
-            created_at: now(),
-            expires_at: deadline,
-            payload: json!({"kind":kind,"body":serde_json::from_str::<Value>(&payload)?}),
-        })?;
+            effect_id,
+            deadline,
+            &kind,
+            serde_json::from_str(&payload)?,
+        ))?;
         tx.execute(
             "UPDATE outbox SET wire=?2 WHERE id=?1",
             params![effect_id, serde_json::to_string(&record)?],
@@ -664,6 +662,27 @@ pub(super) fn effect(
     deadline: i64,
 ) -> Result<String> {
     let effect_id = id();
+    if target != "controller" {
+        let owner: String =
+            c.query_row("SELECT value FROM meta WHERE key='owner'", [], |r| r.get(0))?;
+        let recipient: String =
+            c.query_row("SELECT key FROM nodes WHERE id=?1", [target], |r| r.get(0))?;
+        // Reserve the largest numeric envelope before committing any capacity,
+        // credential or decision. Timestamp/epoch growth cannot invalidate it
+        // when prepare_wire later freezes the signed bytes. Ed25519 did:key
+        // encodings have a fixed length for this multicodec prefix.
+        let mut record = super::identity::Record::command(
+            &owner,
+            recipient,
+            u64::MAX,
+            &effect_id,
+            i64::MAX,
+            kind,
+            payload.clone(),
+        );
+        record.created_at = i64::MIN;
+        record.encoded().map_err(|error| anyhow::anyhow!("outgoing command is too large: {error}; reduce the contract, profile, review context or selected memory"))?;
+    }
     c.execute("INSERT INTO outbox(id,target,kind,payload,available_at,expires_at) VALUES (?1,?2,?3,?4,?5,?6)", params![effect_id,target,kind,serde_json::to_string(payload)?,now(),deadline])?;
     Ok(effect_id)
 }

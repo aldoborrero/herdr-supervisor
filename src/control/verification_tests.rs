@@ -1521,3 +1521,78 @@ fn run_profiles_updates_preserve_migrated_check_receipts_and_inflight_reviewer_b
         current.candidate_oid.unwrap()
     );
 }
+
+#[test]
+fn wire_limits_review_reservation_rolls_back_assignment_and_capacity_before_retry() {
+    let mut x = GitFixture::new("sha1", "true", true);
+    x.submit();
+    let candidate = x.request();
+    let candidate = x.advance(&candidate.id);
+    assert_eq!(candidate.state, "awaiting_review");
+    super::wire_limits_tests::approve(&mut x.f, &"\u{1}".repeat(32000));
+    let mut profile = policy().profiles["auto"].clone();
+    profile.argv = (0..280)
+        .flat_map(|_| ["--model".into(), "x".repeat(256)])
+        .collect();
+    let run: Run = document(&x.f.store.connection, "runs", &x.f.run).unwrap();
+    call(
+        &mut x.f.store,
+        &x.f.owner,
+        Mutation::SetProfile {
+            run: x.f.run.clone(),
+            expected_revision: run.revision,
+            name: "auto".into(),
+            profile: Some(profile),
+        },
+    );
+    let req = request(
+        &x.f.supervisor,
+        Mutation::RequestReview {
+            integration: candidate.id.clone(),
+            expected_revision: candidate.revision,
+            node: "local".into(),
+            profile: "auto".into(),
+        },
+    );
+    let before = super::wire_limits_tests::counts(&x.f);
+    assert!(
+        x.f.store
+            .apply(&req)
+            .unwrap_err()
+            .to_string()
+            .contains("outgoing command is too large")
+    );
+    assert_eq!(super::wire_limits_tests::counts(&x.f), before);
+    assert_eq!(
+        verification::integration(&x.f.store.connection, &candidate.id)
+            .unwrap()
+            .revision,
+        candidate.revision
+    );
+    let run: Run = document(&x.f.store.connection, "runs", &x.f.run).unwrap();
+    call(
+        &mut x.f.store,
+        &x.f.owner,
+        Mutation::SetProfile {
+            run: x.f.run.clone(),
+            expected_revision: run.revision,
+            name: "auto".into(),
+            profile: Some(policy().profiles["auto"].clone()),
+        },
+    );
+    let accepted = x.f.store.apply(&req).unwrap();
+    assert_eq!(x.f.store.apply(&req).unwrap(), accepted);
+    let effect =
+        x.f.store
+            .pending(&x.f.node, "local")
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == "execute" && e.payload["attempt"]["id"] == accepted["id"])
+            .unwrap();
+    let owner = Identity::load(&x.f.store.dir.join("owner.key")).unwrap();
+    x.f.store
+        .prepare_wire(&effect.id, &owner)
+        .unwrap()
+        .verify(now())
+        .unwrap();
+}

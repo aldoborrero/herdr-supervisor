@@ -8,7 +8,7 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
 use super::broker_policy::{Endpoint, inbox_prefix};
-use super::identity::{Identity, SignedRecord};
+use super::identity::{Identity, MAX_WIRE_BYTES, SignedRecord};
 use super::model::{digest, identifier};
 use super::node::NodeStore;
 use super::store::Store;
@@ -92,7 +92,7 @@ impl Broker {
                 discard: jetstream::stream::DiscardPolicy::New,
                 max_bytes: 1024 * 1024 * 1024,
                 max_messages: 1_000_000,
-                max_message_size: 300_000,
+                max_message_size: MAX_WIRE_BYTES as i32,
                 max_age: Duration::ZERO,
                 duplicate_window: Duration::from_secs(120),
                 ..Default::default()
@@ -148,7 +148,7 @@ impl Broker {
     pub async fn publish(&self, target: &str, record: &SignedRecord) -> Result<()> {
         record.verify(jiff::Timestamp::now().as_second())?;
         let bytes = serde_json::to_vec(record)?;
-        ensure!(bytes.len() <= 300000, "wire record too large");
+        ensure!(bytes.len() <= MAX_WIRE_BYTES, "wire record too large");
         let mut headers = async_nats::HeaderMap::new();
         let dedup = digest(
             format!(
@@ -168,7 +168,7 @@ impl Broker {
 }
 
 pub fn decode(bytes: &[u8]) -> Result<SignedRecord> {
-    ensure!(bytes.len() <= 300000, "incoming record too large");
+    ensure!(bytes.len() <= MAX_WIRE_BYTES, "incoming record too large");
     Ok(serde_json::from_slice(bytes)?)
 }
 

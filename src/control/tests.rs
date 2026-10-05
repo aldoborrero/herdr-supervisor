@@ -1944,3 +1944,6 @@ mod run_profiles_tests;
 
 #[path = "registration_recovery_tests.rs"]
 mod registration_recovery_tests;
+
+#[path = "wire_limits_tests.rs"]
+mod wire_limits_tests;
