@@ -4,7 +4,7 @@ Reviewed 2026-10-05. This document separates implemented/tested behavior from th
 
 ## Evidence collected
 
-The local implementation suite currently passes **398 unit tests and 6 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
+The local implementation suite currently passes **398 unit tests and 7 CLI tests**, including the inherited Projects suite. The controller tests use private temporary state; real Git, SQLite, sockets, native child processes, a pseudoterminal and isolated NATS brokers are exercised. Runtime tests replace the model executables and Herdr/mailer boundaries with controlled fixtures.
 
 | Requirement | Evidence | Limit |
 | --- | --- | --- |
@@ -37,6 +37,8 @@ The local implementation suite currently passes **398 unit tests and 6 CLI tests
 | Remote result import and ancestry | `remote_result_requires_configured_node_source_and_exact_ancestry` clones a separate repository and imports only from the configured node source | Local Git transport; SSH credentials/connectivity are deployment configuration |
 | Schema migration | `migration_preserves_v2_authority_credentials_and_operation_replays` retains live v2 rows, signed outbox and operation replay across migration | No downgrade supported |
 | Controller service | `continuous_controller_verifies_without_blocking_api_and_applies_owned_ref` runs the service with real NATS and Git; a gated check keeps running while a Unix API snapshot succeeds | One-cycle service mode; no authenticated models |
+| Continuous controller/node workflow | CLI test `continuous_services_deliver_review_integrate_and_stop_across_node_restart` runs `tests/service_workflow.py`: offline dispatch, exact native binding before bootstrap, node restart, worker result, controller checks, a separate reviewer, owned-ref CAS, native exits, capacity release and completion | Real services/Git/IPC/restricted NATS; Codex process and Herdr/mailer are fixtures. No direct writes to service databases; no live models |
+| SIGINT during node execution | The same test gates the mailer response, sends SIGINT while the executor is blocked, releases the call and requires clean shutdown/socket removal before restart | Fails on the packaged `d416dfb` binary with a shutdown timeout; passes with persistent signal receivers. Checks that worktrees, wrappers and registrations are not duplicated |
 | Reviewer transport | `assigned_reviewer_uses_signed_node_transport_and_receives_controller_receipt` uses a restricted NATS node account and the worker boundary | The review decision is simulated; broker ACK cannot approve it |
 | Native exit and durable capacity release | `normal_exit_receipt_survives_restart_and_loss_between_event_and_job_update` waits for a real child, restarts node state and injects failure after event enqueue | Native-process scope, not a detached-descendant or remote-provider audit |
 | Cancellation and deadlines | `cancellation_stops_owned_child_and_fences_workers_before_releasing_capacity`, `deadline_stops_native_process_without_a_live_controller_and_controller_expires_run` | Real harmless children, including TERM refusal and KILL escalation; no model sessions |
@@ -65,7 +67,9 @@ The local implementation suite currently passes **398 unit tests and 6 CLI tests
 
 `checks.<system>.service-modules` evaluates the actual exported NixOS and Home Manager modules with the pinned inputs. Linux checks cover disabled imports, the publishing package default, explicit non-root ownership, controller/node commands, multiple nodes, distinct normalized state, absent runtime configuration files, optional coordinator notifications, dependencies, private masks, restart limits, SIGINT/drain behavior and literal systemd argument escaping. It also reads the rendered unit files from both module systems. Darwin checks disabled imports and rejection of enabled Linux services. These are evaluation/rendering checks; no existing host or user manager is activated. See [services](services.md).
 
-The service-module checkpoint passes 36 Linux assertions and rendered-unit checks, plus evaluation for aarch64-linux and the Darwin rejection case. `nix fmt` passes. The full `nix flake check` attempt stopped in Rust dependency staging with `No space left on device`; it has **not** passed for this checkpoint. The Rust sources/tests are unchanged from `d416dfb` (398 unit tests and 6 CLI tests previously passed). Repeat the complete package/check gates when temporary storage is available.
+The service-module checkpoint passes 36 Linux assertions and rendered-unit checks, plus evaluation for aarch64-linux and the Darwin rejection case. The first full `nix flake check` attempt stopped in Rust dependency staging with `No space left on device`. The following service-workflow checkpoint adds persistent SIGINT receivers and the seventh CLI test. Local compilation and tests use a task-local target directory in `/dev/shm`; complete package/check gates remain pending until recorded below.
+
+For the service-workflow checkpoint, `cargo test --locked --offline` (398 unit/7 CLI tests), strict all-target Clippy, `nix fmt`, the actual `service-modules` and `pkgs-formatter-check` derivations, and `nix flake check --no-build` pass on x86_64-linux. The latter evaluates the flake; it does **not** run the full package gate. Attempts to use a RAM-backed Nix build directory were rejected because `/dev/shm` has a world-writable parent and Nix build users cannot traverse the private `/run/user/1000` parent. No shared permissions or daemon settings were changed. Full Nix package/check validation remains outstanding; local Cargo validation is not a substitute for it.
 
 ## Commands
 
@@ -76,6 +80,14 @@ nix fmt
 nix build .#herdr-supervisor --cores 2 --max-jobs 1 --print-build-logs
 nix flake check --cores 2 --max-jobs 1 --print-build-logs
 ```
+
+The CLI suite requires Python 3 as well as NATS; both are included in the devshell and Nix check inputs. To run the continuous workflow separately:
+
+```bash
+python3 tests/service_workflow.py --binary target/debug/herdr-supervisor --nats-server "$NATS_SERVER"
+```
+
+All fixture services and worktrees are private and temporary. The test starts actual controller/node processes without `--once`, uses only their authenticated APIs for mutations, and stops its owned children on success or failure. Native submission is explicitly checked to leave the attempt awaiting readiness until the simulated worker reports it.
 
 The Nix build of the controller/transport foundation passed on `x86_64-linux`. Package and flake checks are required again after executor changes; the local implementation commit records the completed gates for its snapshot. Some build attempts exhausted the shared filesystem, including one after the local suite passed. Only generated task compilation caches were removed manually; unrelated temporary directories and system-wide garbage collection were not touched.
 
@@ -91,6 +103,6 @@ Mailer protocol-2 support is an independent local commit **`7a12d5a`** on `feat/
 - Aggregate API/wire bounds and large-run context pagination.
 - NATS backoff/expiry handling, node lifecycle operations and deployment ACL examples.
 - Live memory change consumption and optional Markdown projection.
-- A complete isolated workflow through the continuous node service, plus stronger model-facing validation.
+- Stronger model-facing validation beyond the isolated continuous-service workflow and protocol fixtures.
 
 No push, public release, host changes or deployment has occurred. Existing user sessions and shared runtime servers were not modified.

@@ -54,6 +54,10 @@ pub async fn run(
     runtime: RuntimeConfig,
     once: bool,
 ) -> Result<Value> {
+    // Register once, before the first relay/effect. A fresh ctrl_c future in
+    // each select loses interrupts received while that future does not exist.
+    // Signal's buffer retains shutdown requested during bounded in-flight work.
+    let mut shutdown = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
     let _relay = super::api::lock(&access.state, "relay.lock")?;
     let (mut store, _) = access.open()?;
     let broker = super::transport::Broker::connect(
@@ -85,7 +89,7 @@ pub async fn run(
                 return Ok(json!({"relayed":relayed?,"execution":executed}));
             }
             tokio::select! {
-                _=tokio::signal::ctrl_c()=>return Ok(json!({"stopped":true})),
+                _=shutdown.recv()=>return Ok(json!({"stopped":true})),
                 _=tokio::time::sleep(Duration::from_millis(500))=>(),
             }
         }
@@ -105,6 +109,7 @@ pub async fn controller(
     once: bool,
     coordinator: Option<super::coordinator::Config>,
 ) -> Result<Value> {
+    let mut shutdown = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
     let _relay = super::api::lock(&state, "relay.lock")?;
     let mut store = super::store::Store::open(&state)?;
     let broker = super::transport::Broker::connect(
@@ -199,7 +204,7 @@ pub async fn controller(
                             anyhow::bail!("controller API stopped during verification");
                         }
                     }
-                    _=tokio::signal::ctrl_c()=>{
+                    _=shutdown.recv()=>{
                         // Drain the bounded in-flight check instead of silently detaching it.
                         let _=work.await?;
                         return Ok(json!({"stopped":true}));
@@ -208,7 +213,7 @@ pub async fn controller(
             }
             if once{return Ok(json!({"relayed":relayed?,"verification":executed}));}
             tokio::select!{
-                _=tokio::signal::ctrl_c()=>return Ok(json!({"stopped":true})),
+                _=shutdown.recv()=>return Ok(json!({"stopped":true})),
                 _=tokio::time::sleep(Duration::from_millis(500))=>(),
             }
         }

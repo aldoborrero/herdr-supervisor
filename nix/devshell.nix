@@ -11,6 +11,7 @@ perSystem.devshell.mkShell {
     # Actual repository and broker integration tests, without any model processes.
     git
     nats-server
+    python3
     openssh
     rsync
   ];

@@ -9,6 +9,7 @@
   coreutils,
   bash,
   nats-server,
+  python3,
   gh,
   tzdata,
 }:
@@ -25,6 +26,7 @@ rustPlatform.buildRustPackage {
     coreutils
     bash
     nats-server
+    python3
   ];
   HERDR_SUPERVISOR_BUILD_ID = "source-${
     builtins.substring 0 12 (builtins.hashString "sha256" (toString src))

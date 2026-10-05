@@ -6,6 +6,27 @@ use std::process::Command;
 const BIN: &str = env!("CARGO_BIN_EXE_herdr-supervisor");
 
 #[test]
+fn continuous_services_deliver_review_integrate_and_stop_across_node_restart() {
+    let python = std::env::var_os("PYTHON").unwrap_or_else(|| "python3".into());
+    let nats = std::env::var_os("NATS_SERVER").unwrap_or_else(|| "nats-server".into());
+    let output = Command::new(python)
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/service_workflow.py"
+        ))
+        .args(["--binary", BIN, "--nats-server"])
+        .arg(nats)
+        .output()
+        .expect("Python 3 and NATS are required for the continuous service acceptance test");
+    assert!(
+        output.status.success(),
+        "service workflow failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn managed_control_help_and_bootstrap_are_usable_without_herdr() {
     let home = tempfile::tempdir().unwrap();
     assert!(hp(home.path(), &["control", "--help"]).status.success());

@@ -14,6 +14,10 @@ let
       nixfmt.enable = true;
       nixfmt.priority = 2;
       rustfmt.enable = true;
+      ruff-check.enable = true;
+      ruff-check.priority = 1;
+      ruff-format.enable = true;
+      ruff-format.priority = 2;
       yamlfmt.enable = true;
       jsonfmt.enable = true;
       mdformat.enable = true;
