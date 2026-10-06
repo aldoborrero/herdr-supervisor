@@ -755,13 +755,10 @@ impl Drop for NatsServer {
 impl NatsServer {
     fn start(owner: &str) -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
         let policy =
             super::broker_policy::policy(owner, &["local".into(), "other".into()]).unwrap();
         let config = json!({
-            "listen":format!("127.0.0.1:{port}"),
+            "host":"127.0.0.1","port":-1,
             "jetstream":{"store_dir":dir.path().join("jetstream"),"max_file_store":2147483648_u64,"max_memory_store":16777216},
             "authorization":{"users":[
                 {"user":"admin","password":"admin-test-password"},
@@ -777,6 +774,8 @@ impl NatsServer {
         let mut child = std::process::Command::new(binary)
             .arg("-c")
             .arg(path)
+            .arg("--ports_file_dir")
+            .arg(dir.path())
             .stdout(log.try_clone().unwrap())
             .stderr(log)
             .spawn()
@@ -784,23 +783,32 @@ impl NatsServer {
                 "NATS_SERVER or nats-server is required; integration tests never silently skip",
             );
         let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-                break;
-            }
+        // Let this child bind its own ephemeral port. Reserving then releasing
+        // a port can probe a different parallel test's broker and report false
+        // readiness before our own child exits with an address collision.
+        let ports = dir.path().join(format!("nats-server_{}.ports", child.id()));
+        let url = loop {
             if child.try_wait().unwrap().is_some() || std::time::Instant::now() > until {
+                let _ = child.kill();
+                let _ = child.wait();
                 panic!(
                     "NATS failed: {}",
                     std::fs::read_to_string(dir.path().join("server.log")).unwrap()
                 );
             }
+            if let Ok(bytes) = std::fs::read(&ports)
+                && let Ok(report) = serde_json::from_slice::<Value>(&bytes)
+                && let Some(url) = report["nats"][0].as_str()
+                && let Some(address) = url.strip_prefix("nats://127.0.0.1:")
+                && let Ok(port) = address.parse::<u16>()
+                && port != 0
+                && std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
+            {
+                break url.to_owned();
+            }
             std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        Self {
-            child,
-            dir,
-            url: format!("nats://127.0.0.1:{port}"),
-        }
+        };
+        Self { child, dir, url }
     }
     fn config(&self, name: &str) -> super::transport::BrokerConfig {
         let path = self.dir.path().join(format!("{name}.json"));

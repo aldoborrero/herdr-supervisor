@@ -29,8 +29,19 @@ session-header files and Herdr's `kind: path` representation. The resolver test
 rejects missing, symlinked, wrong-workspace, publicly writable, incomplete and
 oversized headers; the filename supplies no identity. Log:
 `.direnv/local-lab-final-suite.log`. Strict all-target Clippy also passes in the
-same log (1m 09s), and `nix fmt` passes. The committed-source Nix package gate
-for these follow-up changes is recorded separately below when completed.
+same log (1m 09s), and `nix fmt` passes.
+
+The first follow-up package gate at `f884c04` failed one of 639 unit tests:
+`continuous_controller_verifies_without_blocking_api_and_applies_owned_ref`
+received `Connection refused` at its initial broker connection. Its shared NATS
+fixture reserved then released a TCP port before spawning the server, leaving a
+race between parallel tests and allowing its TCP readiness probe to reach a
+different broker. The fixture now lets NATS bind an ephemeral port atomically
+and discovers it from that child's PID-specific ports file. Child failure is
+checked before readiness and timeout cleanup reaps the owned child. Production
+transport, authorization and test assertions are unchanged. No successful Nix
+gate is claimed for `f884c04`; log: `.direnv/local-lab-final-nix-build.log`.
+Validation of the corrected fixture is recorded below when completed.
 
 ## Historical evidence collected before local model acceptance
 
