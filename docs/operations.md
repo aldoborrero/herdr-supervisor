@@ -525,7 +525,15 @@ This command can create Herdr workspaces and start real models for dispatched jo
 
 Low-level `prepare`, `launch`, `relay-node` and `serve-workers` commands expose the same components independently. Do not run a separate relay against a directory already owned by `run-node`.
 
-Profiles accept model selection and a limited set of runtime tuning flags. Session, root, config/profile switching and permission overrides are reserved to the launcher. Codex uses the installed CLI's `--approve-for-me --sandbox workspace-write`; this requires a CLI supporting those options. See [official CLI reference](https://learn.chatgpt.com/docs/developer-commands?surface=cli) and the local `codex --help` when updating supported versions.
+Profiles accept model selection and a limited set of runtime tuning flags. Session, root, config/profile switching and permission overrides are reserved to the launcher. Codex uses the installed CLI's `--approve-for-me`, which selects automatic approval review and workspace-write. Codex 0.158.0 rejects combining it with an explicit `--sandbox` flag. See [official CLI reference](https://learn.chatgpt.com/docs/developer-commands?surface=cli) and the local `codex --help` when updating supported versions.
+
+Codex receives a fixed initial prompt asking it to wait for bootstrap. Its TUI
+does not expose a thread UUID before the first prompt; without that initialization,
+the launcher cannot register an exact destination for mailer. This prompt contains
+no task or credentials. Assignment delivery and readiness still require the
+observed UUID, durable registration and scoped bootstrap. Workspace trust must be
+prepared by the operator; the [disposable local lab](local-lab.md) does this only
+in its private Codex configuration.
 
 ## Recover a lost registration
 

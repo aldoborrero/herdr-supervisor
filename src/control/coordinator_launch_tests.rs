@@ -384,9 +384,14 @@ fn coordinator_native(recover_registration: bool) {
                 .any(|s| s.contains("danger") || s.contains("bypass"))
         );
         if name == "codex" {
-            assert_eq!(
-                &inv.argv[..3],
-                ["--approve-for-me", "--sandbox", "workspace-write"]
+            assert_eq!(&inv.argv[..2], ["--approve-for-me", "--cd"]);
+            assert!(!inv.argv.iter().any(|arg| arg == "--sandbox"));
+            assert_eq!(inv.argv[inv.argv.len() - 2], "--");
+            assert!(
+                inv.argv
+                    .last()
+                    .unwrap()
+                    .contains("before that bootstrap message arrives")
             );
         } else {
             assert!(inv.environment["HERDR_MAILER_CONFIG"].ends_with("mailer.json"));

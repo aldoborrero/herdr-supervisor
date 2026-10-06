@@ -178,9 +178,9 @@ pub fn native_invocation(
         "codex" => (
             programs.codex_binary.clone(),
             vec![
+                // Auto already selects workspace-write. Codex rejects combining
+                // this flag with an explicit --sandbox argument.
                 "--approve-for-me".into(),
-                "--sandbox".into(),
-                "workspace-write".into(),
                 "--cd".into(),
                 cwd.to_string_lossy().into(),
             ],
@@ -208,6 +208,13 @@ pub fn native_invocation(
         _ => bail!("unsupported runtime"),
     };
     argv.extend(profile.argv.clone());
+    if profile.runtime == "codex" {
+        // The interactive CLI has no thread UUID until its first prompt. Create
+        // that thread without issuing an assignment: only the observed exact
+        // UUID may be registered and receive the authoritative mailer bootstrap.
+        argv.push("--".into());
+        argv.push("You are a managed Herdr participant. Your assignment will arrive through herdr-mailer after this native session is registered. Do not start work, read credentials or call supervisor APIs before that bootstrap message arrives. For now, acknowledge that you are waiting for bootstrap and wait.".into());
+    }
     ensure!(program.is_absolute(), "runtime binary must be absolute");
     Ok(Invocation {
         program,

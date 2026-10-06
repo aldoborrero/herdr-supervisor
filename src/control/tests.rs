@@ -1736,7 +1736,8 @@ fn native_launchers(recover_registration: bool) {
         assert!(invocation.contains(&a.id));
         assert!(invocation.contains("mock-model"));
         if runtime == "codex" {
-            assert!(invocation.contains("--approve-for-me\n--sandbox\nworkspace-write"));
+            assert!(invocation.contains("--approve-for-me\n--cd\n"));
+            assert!(!invocation.contains("--sandbox"));
         }
         if runtime == "claude" {
             assert!(invocation.contains("--development-channel"));

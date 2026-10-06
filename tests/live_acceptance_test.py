@@ -7,6 +7,7 @@ import tempfile
 import threading
 import unittest
 import uuid
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,6 +15,47 @@ import live_acceptance as live
 
 
 class AcceptanceDriverTests(unittest.TestCase):
+    def test_local_stack_isolation_and_shutdown_boundaries(self):
+        import local_stack_test
+
+        suite = unittest.defaultTestLoader.loadTestsFromModule(local_stack_test)
+        result = unittest.TestResult()
+        suite.run(result)
+        self.assertEqual(result.testsRun, 4)
+        self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
+
+    def test_exited_coordinator_fails_without_waiting_for_deadline(self):
+        driver = live.Live(live.plan(self.spec))
+        driver.node_name = "local"
+        driver.config = {}
+        driver.base = "base"
+        driver.preflight = lambda: None
+        operations = []
+
+        def apply(method, **params):
+            operations.append(method)
+            return (
+                {"id": "run", "revision": 1}
+                if method == "create_run"
+                else {"id": "launch"}
+            )
+
+        driver.apply = apply
+        driver.call = lambda *args, **kwargs: {
+            "run": {"state": "active"},
+            "tasks": [],
+            "attempts": [],
+        }
+        driver.page = lambda collection: [{"id": "launch", "state": "exited"}]
+        with (
+            patch.object(
+                live.time, "sleep", side_effect=AssertionError("must fail promptly")
+            ),
+            self.assertRaisesRegex(live.Failure, "coordinator exited"),
+        ):
+            driver.execute()
+        self.assertEqual(operations, ["create_run", "start_coordinator"])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="herdr-supervisor-live.")
         self.addCleanup(self.temp.cleanup)
@@ -112,11 +154,11 @@ class AcceptanceDriverTests(unittest.TestCase):
         driver.base = "base"
         for directory in (driver.controller, driver.node):
             directory.mkdir(mode=0o700)
-        with sqlite3.connect(driver.controller / "control.sqlite") as db:
+        with closing(sqlite3.connect(driver.controller / "control.sqlite")) as db:
             db.executescript(
                 "CREATE TABLE principals(id TEXT,role TEXT); INSERT INTO principals VALUES('p','supervisor'); CREATE TABLE journal(principal TEXT,kind TEXT,aggregate_id TEXT); INSERT INTO journal VALUES('p','create_task','task');"
             )
-        with sqlite3.connect(driver.node / "node.sqlite") as db:
+        with closing(sqlite3.connect(driver.node / "node.sqlite")) as db:
             db.executescript(
                 "CREATE TABLE worker_memory(attempt TEXT,version INTEGER,acknowledged INTEGER); INSERT INTO worker_memory VALUES('author',1,1);"
             )
@@ -206,8 +248,9 @@ class AcceptanceDriverTests(unittest.TestCase):
             change(candidate)
             with self.subTest(change=change), self.assertRaises(live.Failure):
                 driver.evaluate(candidate)
-        with sqlite3.connect(driver.node / "node.sqlite") as db:
+        with closing(sqlite3.connect(driver.node / "node.sqlite")) as db:
             db.execute("UPDATE worker_memory SET acknowledged=NULL")
+            db.commit()
         with self.assertRaises(live.Failure):
             driver.evaluate(snapshot)
 

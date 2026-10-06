@@ -19,6 +19,7 @@ import subprocess
 import sys
 import time
 import uuid
+from contextlib import closing
 from pathlib import Path
 
 
@@ -177,7 +178,7 @@ def rpc(path, value, native=False):
 
 def readonly(path):
     private(path)
-    return sqlite3.connect(Path(path).as_uri() + "?mode=ro", uri=True)
+    return closing(sqlite3.connect(Path(path).as_uri() + "?mode=ro", uri=True))
 
 
 class Live:
@@ -433,6 +434,13 @@ class Live:
             )
             if snapshot["run"]["state"] == "completed":
                 return self.evaluate(snapshot)
+            require(
+                not any(
+                    launch["id"] == self.launch and launch["state"] == "exited"
+                    for launch in self.page("coordinator_launches")
+                ),
+                "native coordinator exited before completing the run; inspect its private pane/receipt",
+            )
             time.sleep(1)
         raise Failure("native acceptance deadline elapsed")
 

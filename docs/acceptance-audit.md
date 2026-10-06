@@ -1,8 +1,10 @@
-# Acceptance inventory at abb8f98
+# Acceptance inventory and local integration follow-up
 
 This is an evidence map, not a completion certificate. The original fourteen
 IMPLEMENTATION.md deliverables and nine design acceptance groups remain the scope.
-No authenticated native execution or actual remote host has been tested here.
+The baseline below is abb8f98. Local native testing was authorized on 2026-10-06;
+its subsequent results are recorded in [local-lab.md](local-lab.md). Actual remote
+host testing is deferred at the user's request.
 
 ## Deliverables
 
@@ -78,13 +80,17 @@ must retain exact intent/receipt evidence and be checked against its required
 scope. The authenticated runtime and real remote acceptance gaps cannot be closed
 by any of the local fixture results above.
 
-## Next dependency
+## Current local testing scope
 
-Await the pending user response authorizing the fresh native participants and
-identifying a NetBird host/user. Current AGENTS.md prohibits additional workers.
-Do not treat the pending question or a plan's --execute flag as authorization.
-Pinned build/check at abb8f98 completed successfully (638 unit tests, 22 CLI
-checks). Logs and the exact output path are recorded in [validation.md](validation.md).
-The packaged resource smoke also passed on isolated Herdr 0.9.1/protocol 22.
-No new model or remote connection has run. The authorization question remains
-pending; elapsed time and automatic goal continuations are not approval.
+The user authorized a local process-compose environment and fresh isolated native
+participants on 2026-10-06. AGENTS.md records that exception. NetBird/SSH and an
+actual remote target are deferred; they do not block local progress. Existing
+user sessions, host activation and publication remain outside this work.
+
+The local lab runs real NATS/ACLs, mailer, Herdr, controller and node. Real launch
+attempts have already exposed the incompatible Codex Auto/sandbox flags, a need
+for exact persisted workspace trust, and Codex's lack of a thread UUID before its
+first prompt. Those findings are distinct from a completed model workflow. See
+[local lab evidence](local-lab.md) and [validation](validation.md) for results and
+remaining native boundaries. The baseline package/resource evidence above is
+retained; it does not certify later source changes.

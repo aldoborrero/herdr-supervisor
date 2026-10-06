@@ -4,6 +4,8 @@ Rust adaptation of eliasstravik/herdr-projects at 4e4548c3c43888e6be1c9690621599
 
 Work only in the implementation worktree. No push, deployment, global configuration, live user sessions, or additional workers. Local commits are authorized.
 
+User exception, 2026-10-06: prepare a local process-compose/Docker Compose environment and continue isolated native runtime tests, including fresh coordinator/author/reviewer sessions. Existing user sessions remain out of scope. NetBird/SSH testing is deferred; it is not a prerequisite for local acceptance. This does not authorize implementation sub-agents or host deployment.
+
 SQLite is authoritative for managed tasks, attempts, operations, memory revisions and outboxes. Herdr owns resources, mailer owns messages and native delivery. Never treat broker ACK or runtime acceptance as a model result. Separate owner DID, host, logical agent, attempt, UUID and epoch. Persist intent before side effects, reconcile uncertainty, reserve capacity transactionally, and accept evidence only for its exact contract and commit.
 
 NATS is the coordination transport from the initial design; single-host development uses the same node protocol as remote execution. NetBird supplies connectivity, not application authorization. No federation or ATProto compatibility claim.

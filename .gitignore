@@ -6,3 +6,4 @@ result-*
 .direnv/
 .envrc.local
 .cargo-home/
+__pycache__/

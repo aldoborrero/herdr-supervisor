@@ -1,0 +1,71 @@
+# Local integration lab; run via python3 dev/local_stack.py up --root ROOT.
+# The helper supplies a private HOME, credentials, sockets and logs.
+version: "0.5"
+is_strict: true
+processes:
+  nats:
+    command: python3 dev/local_stack.py service nats
+    log_location: ${HERDR_SUPERVISOR_LAB}/logs/nats.log
+    readiness_probe:
+      exec:
+        command: python3 dev/local_stack.py probe nats
+      period_seconds: 1
+    shutdown:
+      signal: 2
+      timeout_seconds: 30
+  mailer:
+    command: python3 dev/local_stack.py service mailer
+    log_location: ${HERDR_SUPERVISOR_LAB}/logs/mailer.log
+    readiness_probe:
+      exec:
+        command: python3 dev/local_stack.py probe mailer
+      period_seconds: 1
+    shutdown:
+      signal: 2
+      timeout_seconds: 30
+  herdr:
+    command: python3 dev/local_stack.py service herdr
+    log_location: ${HERDR_SUPERVISOR_LAB}/logs/herdr.log
+    readiness_probe:
+      exec:
+        command: python3 dev/local_stack.py probe herdr
+      period_seconds: 1
+    shutdown:
+      signal: 2
+      timeout_seconds: 30
+  bootstrap:
+    command: python3 dev/local_stack.py service bootstrap
+    log_location: ${HERDR_SUPERVISOR_LAB}/logs/bootstrap.log
+    depends_on:
+      nats:
+        condition: process_healthy
+      mailer:
+        condition: process_healthy
+      herdr:
+        condition: process_healthy
+  controller:
+    command: python3 dev/local_stack.py service controller
+    log_location: ${HERDR_SUPERVISOR_LAB}/logs/controller.log
+    depends_on:
+      bootstrap:
+        condition: process_completed_successfully
+    readiness_probe:
+      exec:
+        command: python3 dev/local_stack.py probe controller
+      period_seconds: 1
+    shutdown:
+      signal: 2
+      timeout_seconds: 30
+  node:
+    command: python3 dev/local_stack.py service node
+    log_location: ${HERDR_SUPERVISOR_LAB}/logs/node.log
+    depends_on:
+      bootstrap:
+        condition: process_completed_successfully
+    readiness_probe:
+      exec:
+        command: python3 dev/local_stack.py probe node
+      period_seconds: 1
+    shutdown:
+      signal: 2
+      timeout_seconds: 30
