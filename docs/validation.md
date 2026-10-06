@@ -1,6 +1,46 @@
 # Validation and completion status
 
-Reviewed 2026-10-06. This document separates implemented/tested behavior from the full delivery contract in [IMPLEMENTATION.md](../IMPLEMENTATION.md). Passing the current suite does not establish completion of the supervisor.
+Reviewed 2026-10-07. This document separates implemented/tested behavior from the full delivery contract in [IMPLEMENTATION.md](../IMPLEMENTATION.md). Passing the current suite does not establish completion of the supervisor.
+
+## Workspace creation recovery, 2026-10-07
+
+Commit `d71052b3dc70190e297f4c4a81a194febd2424e6` fixes discarded coordinator
+workspace results. A typed local spawn failure permits retry after its receipt
+commits. Successful replies retain workspace/tab/pane IDs and constrain later
+observation. Other failures retain bounded, redacted diagnostics and remain
+uncertain. Missing results, including legacy documents and failed SQLite writes,
+never authorize another create. See [workspace recovery](operations.md#recover-workspace-creation)
+for the existing owner-authorized generation retirement/replacement path.
+
+The five new `coordinator_workspace_*` regressions cover:
+
+- Real OS spawn failure, restart and successful retry.
+- Timeout, nonzero exit, an untrusted `not_started` server code and unclassified
+  runner errors; diagnostic persistence/redaction, public pagination and late
+  panel observation without another create.
+- Successful creation followed by missing or different workspace/tab/pane IDs,
+  then recovery with the exact receipt after restart.
+- Failed result commits for both success and spawn failure, retaining the
+  original uncertain intent.
+- Legacy/interrupted intent, generation fencing, refusal of the old wrapper and
+  replacement in a different private directory.
+
+The existing real-NATS controller/restart regression now also verifies that the
+original workspace error survives repeated service passes. No native models or
+existing user sessions were launched for this fix.
+
+The full local suite passes **644 unit tests** (15.31 s) and **22 CLI tests**
+(29.08 s), followed by strict all-target Clippy (59.28 s). Log:
+`.direnv/workspace-create-fix-suite.log`. `nix fmt` passes. The normal Git flake
+build and flake check pass on **x86_64-linux**, including the offline 644-unit
+(14.42 s) and 22-CLI (26.57 s) suites and formatting. Other systems were not built.
+Logs: `.direnv/workspace-create-fix-nix-build.log` and
+`.direnv/workspace-create-fix-nix-check.log`.
+
+Package: `/nix/store/xh0c3wz6hpgc00dvp3nrd5gg9864pac9-herdr-supervisor-0.1.0`.
+Local result link: `.direnv/workspace-create-fix-result`. Unknown external
+outcomes still need observation or explicit generation retirement; this is not
+an automatic-retry or exactly-once claim for interrupted Herdr calls.
 
 ## Current local native evidence, 2026-10-06
 
