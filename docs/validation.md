@@ -41,7 +41,25 @@ and discovers it from that child's PID-specific ports file. Child failure is
 checked before readiness and timeout cleanup reaps the owned child. Production
 transport, authorization and test assertions are unchanged. No successful Nix
 gate is claimed for `f884c04`; log: `.direnv/local-lab-final-nix-build.log`.
-Validation of the corrected fixture is recorded below when completed.
+The corrected fixture at `e2eb467` passes the full local suite with 32 test
+threads: 639 unit tests (20.01 s), 22 CLI tests (40.02 s), followed by strict
+all-target Clippy (57.00 s). Log: `.direnv/local-lab-broker-suite.log`.
+
+### Completed follow-up package gate
+
+Commit `e2eb467b0b0bf4d98512c52c5faac042c210ed1e` passes the x86_64-linux
+Nix build and flake check, including 639 unit tests (16.22 s), 22 CLI tests
+(32.79 s) and formatting. The broker fixture uses child-owned ephemeral ports;
+no tests were skipped and no assertions were relaxed. Clippy passed separately
+as recorded above. Other systems were not built by this host gate.
+
+Output: `/nix/store/23apr0kfw97fzq2xxnb4c1q5rr1sxyw2-herdr-supervisor-0.1.0`.
+Local result link: `.direnv/local-lab-final-result`. Logs:
+`.direnv/local-lab-broker-nix-build.log` and
+`.direnv/local-lab-broker-nix-check.log`. The source was an exact `git archive`
+export to `/tmp/herdr-supervisor-nix-e2eb467`, using the same documented workaround
+for Nix's missing historical Git object. This package contains the Pi binding and
+lab refinements; it does not turn the deferred Pi model test into a passed run.
 
 ## Historical evidence collected before local model acceptance
 

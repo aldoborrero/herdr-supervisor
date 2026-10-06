@@ -89,7 +89,11 @@ the shared checkout although Git could read and archive HEAD. The package gate
 therefore used an exact `git archive HEAD` export and `path:` flake reference;
 no ignored lab data entered that export and shared Git metadata was not repaired.
 
-Final follow-up suite/package evidence is recorded in `docs/validation.md`.
+The final follow-up commit `e2eb467` passes the complete 639-unit/22-CLI suite,
+strict Clippy, Nix build and flake check on x86_64-linux. Its package is
+`/nix/store/23apr0kfw97fzq2xxnb4c1q5rr1sxyw2-herdr-supervisor-0.1.0`.
+The intervening `f884c04` package failure and the test broker's atomic port
+allocation correction are retained in [validation](validation.md).
 The tests cover the local happy path and their named regression boundaries.
 They do not establish the full live restart/recovery matrix, real remote-host
 operation, other-system builds or completion of all supervisor deliverables.
