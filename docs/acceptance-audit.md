@@ -2,9 +2,10 @@
 
 This is an evidence map, not a completion certificate. The original fourteen
 IMPLEMENTATION.md deliverables and nine design acceptance groups remain the scope.
-The baseline below is abb8f98. Local native testing was authorized on 2026-10-06;
-its subsequent results are recorded in [local-lab.md](local-lab.md). Actual remote
-host testing is deferred at the user's request.
+The baseline package evidence is abb8f98, supplemented by the October 6 local
+model runs below. Fresh native testing was authorized on 2026-10-06; exact results
+are recorded in [local lab evidence](local-lab-evidence.md). Actual remote-host
+testing is deferred at the user's request.
 
 ## Deliverables
 
@@ -16,27 +17,27 @@ host testing is deferred at the user's request.
 | D4 Durable effects | Real JetStream offline/restart test preserves a reserved job once and refuses ACK on actual SQLITE_FULL. recovery.rs blocks cancellation release on unresolved worker, coordinator, checkout, check or CAS effects. Lost native effects additionally need the actual runtime matrix. |
 | D5 Identity/enrollment/routes | identity.rs defines owner/author/recipient/epoch/expiry and signed hashed records with private Ed25519 keys. Service-setup regressions cover isolated enrollment, lost token publication, changed grants and authority collisions. Actual remote key/grant transfer remains untested. |
 | D6 NATS | Real restricted broker tests reject unauthorized node publishing and preserve messages across offline delivery and failed persistence. This establishes local real broker behavior, not NetBird transport or actual host outages. |
-| D7 Native executor and functional readiness | Three-launcher tests cover exact sessions/bootstrap using simulated runtimes. Fresh abb8f98 Herdr resource acceptance starts no models. Authenticated coordinator/author/reviewer workflows for Codex, Claude and Pi are required and unproven. |
+| D7 Native executor and functional readiness | Three-launcher tests cover exact sessions/bootstrap using simulated runtimes. Fresh abb8f98 Herdr resource acceptance starts no models. Real local Codex and Claude coordinator/author/reviewer workflows now pass. Pi model acceptance is deferred pending `/login`; real restart boundaries remain unproven. |
 | D8 Mailer extension | Independent commit 7a12d5a/package evidence is recorded in docs/validation.md. No new independent mailer build was performed in this audit. It must be the protocol-2 implementation selected by live acceptance. |
 | D9 Scoped API/CLI/MCP and lifecycle | Private IPC/MCP and scoped worker tests, plus questions regressions, cover actor boundaries. lifecycle_tests.rs uses real owned harmless child processes to test cancellation/deadline/exit accounting; model behavior is not inferred. |
-| D10 Results/review/Git/cleanup | verification_tests.rs covers exact combined candidate for SHA-1/SHA-256, checks, independent review, lying author, CAS recovery, conflict and changed base. Worker/verifier/reviewer/coordinator retirement is implemented; missing exit evidence deliberately retains resources. Authenticated reviewer and real remote commit transport remain open. |
-| D11 Curated memory | live_memory_tests.rs checks selected topics, transactional outbox, preserved assignment snapshot, revision/withdrawal ordering, scoped explicit ack and native hint identity. Its acknowledgement explicitly reports model_behavior_verified=false. Actual model read/ack remains open. |
-| D12 UI authority | managed_tests.rs verifies controller projections, exact revisions, legacy fencing, scoped focus and memory actions. Paginated/record tests cover bounded IPC/MCP reads and changed content. Actual remote focus and authenticated interactive workflow remain open. |
+| D10 Results/review/Git/cleanup | verification_tests.rs covers exact combined candidate for SHA-1/SHA-256, checks, independent review, lying author, CAS recovery, conflict and changed base. Worker/verifier/reviewer/coordinator retirement is implemented; missing exit evidence deliberately retains resources. Real local independent review passes for Codex and Claude; real remote commit transport remains open. |
+| D11 Curated memory | live_memory_tests.rs checks selected topics, transactional outbox, preserved assignment snapshot, revision/withdrawal ordering, scoped explicit ack and native hint identity. Its acknowledgement explicitly reports model_behavior_verified=false. Actual model read/ack passes in the local Codex and Claude runs; Pi is deferred. |
+| D12 UI authority | managed_tests.rs verifies controller projections, exact revisions, legacy fencing, scoped focus and memory actions. Paginated/record tests cover bounded IPC/MCP reads and changed content. Actual remote focus remains open. Local model/API workflows pass; this is not an interactive popup acceptance claim. |
 | D13 Nix/package/docs | Blueprint prefix=nix, locked Cargo/flake inputs, package manifest/resources, service module evaluations and pinned CI are present. abb8f98 x86_64-linux build/check passed with 638 unit/22 CLI tests. No host activation or CI remote run is claimed. |
-| D14 Acceptance evidence | Local suite at abb8f98 predecessor working source: 638 unit/22 CLI, strict Clippy, formatting; three actual plan-only driver commands. Real model, restart-boundary and remote-host acceptance is not supplied by those results. |
+| D14 Acceptance evidence | Local suite at abb8f98 predecessor working source: 638 unit/22 CLI, strict Clippy, formatting; three actual plan-only driver commands. October 6 adds real local Codex/Claude results. Pi, model-bearing restart boundaries and remote-host acceptance remain open. |
 
 ## Original design acceptance groups
 
 | Group | Existing evidence | Unproven scope |
 | --- | --- | --- |
 | Native Herdr | Real isolated resources/replay/retirement; protocol fixtures cover identity failures and watcher reconnect/resnapshot | Actual model-bearing resource recovery and remote endpoint behavior |
-| Scheduler | Transactional simultaneous claims, dependency/cycle checks, reviewer reservation, immutable active contracts and amendment races | Behavior of an authenticated coordinator exercising these APIs |
-| Identity | Signed records, retired credentials/generations, exact native UUID/epoch and conflicting parent-environment fixtures | Complete installed runtime chain with real credentials |
-| Mailer | Frozen operation and recipient preconditions, duplicate/lost-receipt fixtures; independent protocol-2 package evidence | Authenticated native notification to scoped API result |
+| Scheduler | Transactional regressions plus real Codex/Claude coordinators dispatching author and reviewer | Complex live DAG/race scenarios beyond the one-task local acceptance |
+| Identity | Signed records, retired credentials/generations, exact native UUID/epoch and conflicting parent-environment fixtures | Codex/Claude installed chains pass locally; Pi provider login remains pending |
+| Mailer | Frozen operation and recipient preconditions, duplicate/lost-receipt fixtures; independent protocol-2 package evidence | Codex/Claude native notification to scoped API results passes locally; Pi deferred |
 | Persistence | SQLite pager-full, failed audit/outbox transactions, migration rollback, restart/CAS/effect receipt tests | Full named recovery-table coverage still must be matched individually; do not infer every crash boundary from a suite count |
-| Git/review | Real Git combined candidates, SHA-256, changed base, conflict, dirty checkouts, failed/mutating checks and false author claims | Actual remote source transport and authenticated independent reviewer |
+| Git/review | Real Git combined candidates, SHA-256, changed base, conflict, dirty checkouts, failed/mutating checks and false author claims | Actual remote source transport; local Codex/Claude independent reviewers pass |
 | Lifecycle | Real harmless process cancellation/deadline, lost-wrapper/exit accounting and cancellation recovery | Authenticated supervisor loss with live workers and end-to-end resume without duplicate spawn |
-| Runtimes | Model-free launch protocol fixtures; opt-in driver prepared | Fresh authenticated Codex/Claude/Pi sessions and result-by-API, with transport/turn/result separated |
+| Runtimes | Model-free launch fixtures plus fresh Codex/Claude result-by-API runs | Pi pending `/login`; Claude first-launch channel confirmations remain interactive |
 | Nix | Offline local package/check, evaluated opt-in modules, CLI/MCP/service fixtures and fresh abb8f98 installed packaged manifest/resource smoke | abb8f98 gate passed; no other-system build or deployed service claim |
 
 ## Named recovery-table cases
@@ -87,10 +88,15 @@ participants on 2026-10-06. AGENTS.md records that exception. NetBird/SSH and an
 actual remote target are deferred; they do not block local progress. Existing
 user sessions, host activation and publication remain outside this work.
 
-The local lab runs real NATS/ACLs, mailer, Herdr, controller and node. Real launch
-attempts have already exposed the incompatible Codex Auto/sandbox flags, a need
-for exact persisted workspace trust, and Codex's lack of a thread UUID before its
-first prompt. Those findings are distinct from a completed model workflow. See
-[local lab evidence](local-lab.md) and [validation](validation.md) for results and
-remaining native boundaries. The baseline package/resource evidence above is
-retained; it does not certify later source changes.
+The local lab runs real NATS/ACLs, mailer, Herdr, controller and node. Complete
+Codex and Claude runs passed, including independent review, exact integration,
+questions, memory acknowledgement and confirmed exits. Claude required explicit
+local development-channel confirmation for each new participant. Pi's missing
+provider authentication remains deferred by the user; its path-to-UUID binding
+fix is covered by automated tests, without a model-success claim.
+
+The runs exposed incompatible Codex Auto/sandbox flags, persisted workspace and
+hook trust requirements, the need for an initial native conversation before
+bootstrap, and Pi's path-based session reference. See [local lab evidence](local-lab-evidence.md)
+for versions, source/package boundaries and retained private receipts. These
+local successes do not certify actual remote operation or the live crash matrix.

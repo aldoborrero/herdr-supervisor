@@ -21,7 +21,7 @@ class AcceptanceDriverTests(unittest.TestCase):
         suite = unittest.defaultTestLoader.loadTestsFromModule(local_stack_test)
         result = unittest.TestResult()
         suite.run(result)
-        self.assertEqual(result.testsRun, 4)
+        self.assertEqual(result.testsRun, 6)
         self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
 
     def test_exited_coordinator_fails_without_waiting_for_deadline(self):

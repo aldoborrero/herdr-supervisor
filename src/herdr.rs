@@ -200,6 +200,8 @@ pub struct WorkspaceWorktree {
 pub struct AgentSession {
     #[serde(default)]
     pub value: String,
+    #[serde(default)]
+    pub kind: String,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Default)]
@@ -243,6 +245,67 @@ impl Agent {
             .as_ref()
             .map(|s| s.value.as_str())
             .unwrap_or("")
+    }
+
+    /// Resolve a local native identity. Pi's official integration reports a
+    /// transcript path; only its bounded session header supplies the UUID.
+    /// Callers on remote routes must not interpret that path on this host.
+    pub fn native_session_id(&self) -> Result<String> {
+        use std::io::{BufRead, BufReader, Read};
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+        let reference = self
+            .agent_session
+            .as_ref()
+            .context("native session not reported")?;
+        let value = if reference.kind == "path" {
+            anyhow::ensure!(
+                self.agent == "pi",
+                "path identity is only supported for local Pi"
+            );
+            let path = Path::new(&reference.value);
+            anyhow::ensure!(
+                path.is_absolute() && std::fs::canonicalize(path)? == path,
+                "Pi session path is not canonical"
+            );
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(path)?;
+            let meta = file.metadata()?;
+            anyhow::ensure!(
+                meta.is_file()
+                    && meta.uid() == unsafe { libc::getuid() }
+                    && meta.mode() & 0o022 == 0,
+                "Pi session must be an owned, non-writable-by-others regular file"
+            );
+            let mut line = String::new();
+            BufReader::new(file).take(65537).read_line(&mut line)?;
+            anyhow::ensure!(
+                line.len() <= 65536 && line.ends_with('\n'),
+                "Pi session header is incomplete or oversized"
+            );
+            let header: serde_json::Value = serde_json::from_str(&line)?;
+            anyhow::ensure!(
+                header["type"] == "session"
+                    && header["cwd"].as_str().is_some_and(|cwd| self.works_in(cwd)),
+                "Pi session header belongs to another workspace"
+            );
+            header["id"]
+                .as_str()
+                .context("Pi session header has no UUID")?
+                .to_owned()
+        } else {
+            anyhow::ensure!(
+                reference.kind.is_empty() || reference.kind == "id",
+                "unsupported native session reference"
+            );
+            reference.value.clone()
+        };
+        anyhow::ensure!(
+            uuid::Uuid::parse_str(&value)?.to_string() == value,
+            "canonical native UUID required"
+        );
+        Ok(value)
     }
 }
 
@@ -792,5 +855,46 @@ mod tests {
         assert_eq!(parse_version("herdr"), None);
         assert!(Version(0, 9, 0) < MIN_VERSION);
         assert!(Version(0, 10, 0) > MIN_VERSION);
+    }
+
+    #[test]
+    fn native_pi_uuid_comes_from_owned_header_not_filename() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("misleading-name.jsonl");
+        let session = uuid::Uuid::new_v4().to_string();
+        let mut agent: Agent = serde_json::from_value(serde_json::json!({
+            "pane_id":"p","tab_id":"t","workspace_id":"w","agent":"pi",
+            "cwd":root.path(),"agent_session":{"kind":"path","value":path}
+        }))
+        .unwrap();
+        assert!(agent.native_session_id().is_err()); // No guessed UUID before persistence.
+        let header =
+            serde_json::json!({"type":"session","version":3,"id":session,"cwd":root.path()});
+        std::fs::write(&path, format!("{header}\nnot a parsed conversation\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(agent.native_session_id().unwrap(), session);
+        agent.cwd = "/foreign".into();
+        assert!(agent.native_session_id().is_err());
+        agent.cwd = root.path().to_string_lossy().into();
+        agent.agent = "codex".into();
+        assert!(agent.native_session_id().is_err());
+        agent.agent = "pi".into();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o622)).unwrap();
+        assert!(agent.native_session_id().is_err());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let alias = root.path().join("alias.jsonl");
+        std::os::unix::fs::symlink(&path, &alias).unwrap();
+        agent.agent_session.as_mut().unwrap().value = alias.to_string_lossy().into();
+        assert!(agent.native_session_id().is_err());
+        agent.agent_session.as_mut().unwrap().value = path.to_string_lossy().into();
+        for invalid in [
+            header.to_string(),
+            " ".repeat(65537) + "\n",
+            "{\"type\":\"message\"}\n".into(),
+        ] {
+            std::fs::write(&path, invalid).unwrap();
+            assert!(agent.native_session_id().is_err());
+        }
     }
 }

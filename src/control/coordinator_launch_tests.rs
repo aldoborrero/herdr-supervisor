@@ -70,7 +70,17 @@ fn shell(world: &World, home: &Path, lose_create: bool) {
     world.runner.on("pane run", timeout());
 }
 fn observed(world: &World, p: &launch::Plan, uuid: &str, terminal: &str, home: &Path) {
-    *world.agents.borrow_mut()=json!([{"workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p1","terminal_id":terminal,"cwd":home,"agent":p.profile.runtime,"agent_session":{"value":uuid}}]).to_string();
+    let session = if p.profile.runtime == "pi" {
+        use std::os::unix::fs::PermissionsExt;
+        let path = home.parent().unwrap().join("observed-pi.jsonl");
+        let header = json!({"type":"session","version":3,"id":uuid,"cwd":home});
+        std::fs::write(&path, format!("{header}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        json!({"kind":"path","value":path})
+    } else {
+        json!({"kind":"id","value":uuid})
+    };
+    *world.agents.borrow_mut()=json!([{"workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p1","terminal_id":terminal,"cwd":home,"agent":p.profile.runtime,"agent_session":session}]).to_string();
 }
 struct Mailer {
     lose_register: Arc<AtomicBool>,

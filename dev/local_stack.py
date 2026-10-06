@@ -155,6 +155,15 @@ def prepare(args):
         herdr_socket=str(root / "config/herdr/sessions/lab/herdr.sock"),
     )
     require(config["shell"], "bash is required")
+    if args.runtime != "codex":
+        selected = getattr(args, args.runtime)
+        require(selected, "provide the selected --pi or --claude executable explicitly")
+        selected = Path(selected).absolute()
+        require(
+            selected.is_file() and os.access(selected, os.X_OK),
+            "selected runtime is unavailable",
+        )
+        config[args.runtime] = str(selected)
     for name in (
         "home",
         "config",
@@ -179,6 +188,19 @@ def prepare(args):
         + ' "$@"\n',
     )
     wrapper.chmod(0o700)
+    if args.runtime == "pi":
+        (root / "bin/pi").symlink_to(config["pi"])
+    elif args.runtime == "claude":
+        claude_wrapper = root / "bin/claude"
+        write(
+            claude_wrapper,
+            "#!"
+            + config["shell"]
+            + "\nexec "
+            + shlex.join([sys.executable, str(REPO / "dev/claude_lab.py")])
+            + ' "$@"\n',
+        )
+        claude_wrapper.chmod(0o700)
     write(
         root / "gitconfig",
         "[user]\n name = Supervisor acceptance\n email = acceptance@example.invalid\n[commit]\n gpgsign = false\n",
@@ -204,6 +226,13 @@ def prepare(args):
         fd = os.open(auth[1], os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         with os.fdopen(fd, "wb") as out, open(auth[0], "rb") as source_stream:
             shutil.copyfileobj(source_stream, out)
+        if args.runtime == "claude" and (source / ".claude.json").is_file():
+            prior = read(source / ".claude.json")
+            if prior.get("hasCompletedOnboarding") is True:
+                write(
+                    root / "claude/.claude.json",
+                    {"hasCompletedOnboarding": True, "theme": "dark"},
+                )
     write(
         root / "codex/config.toml",
         'cli_auth_credentials_store = "file"\n[projects.'
@@ -312,6 +341,11 @@ def prepare(args):
         },
     )
     write(root / "lab.json", config)
+    call(root, config, [config["herdr"], "integration", "install", args.runtime])
+    if args.runtime == "codex":
+        from codex_lab import install_hook_trust
+
+        install_hook_trust(root, config, environment(root, config))
     print(
         json.dumps(
             {
@@ -421,6 +455,8 @@ def main():
     )
     prepare_parser.add_argument("--duration", type=int, default=600)
     prepare_parser.add_argument("--model")
+    prepare_parser.add_argument("--pi")
+    prepare_parser.add_argument("--claude")
     prepare_parser.add_argument("--use-local-auth", action="store_true")
     prepare_parser.add_argument("--auth-home", default=str(Path.home()))
     for name in ("up", "down", "status", "check", "test"):

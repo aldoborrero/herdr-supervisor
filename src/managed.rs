@@ -458,7 +458,7 @@ pub fn focus_coordinator(
     let agents = herdr.agent_list().map_err(|e| anyhow::anyhow!("{e}"))?;
     let matches = agents
         .iter()
-        .filter(|a| a.session_id() == uuid && a.agent == runtime)
+        .filter(|a| a.agent == runtime && a.native_session_id().as_deref().ok() == Some(uuid))
         .collect::<Vec<_>>();
     ensure!(
         matches.len() == 1,
@@ -496,7 +496,7 @@ pub fn project_for_workspace(ctx: &Ctx, workspace: &str, socket: &str) -> Option
         .filter(|a| a.workspace_id == workspace)
         .filter_map(|a| {
             let observation = crate::control::pagination::SessionObservation {
-                session: a.session_id().into(),
+                session: a.native_session_id().ok()?,
                 runtime: a.agent.clone(),
                 workspace: a.workspace_id.clone(),
                 pane: a.pane_id.clone(),

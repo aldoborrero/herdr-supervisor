@@ -448,15 +448,11 @@ pub fn advance(store: &mut Store, id: &str, runner: &dyn Runner) -> Result<Value
                 && (Path::new(&pane.cwd) == home || Path::new(&pane.foreground_cwd) == home)),
         "coordinator terminal identity changed"
     );
-    let session = agent.session_id();
-    ensure!(
-        uuid::Uuid::parse_str(session)?.to_string() == session,
-        "canonical native UUID required"
-    );
+    let session = agent.native_session_id()?;
     if let Some(expected) = &p.expected_session {
-        ensure!(expected == session, "coordinator native UUID changed");
+        ensure!(expected == &session, "coordinator native UUID changed");
     }
-    p.expected_session = Some(session.into());
+    p.expected_session = Some(session.clone());
     save(&store.connection, &p, "launching")?;
     registration(store, &mut p)?;
     let s = p
@@ -468,7 +464,7 @@ pub fn advance(store: &mut Store, id: &str, runner: &dyn Runner) -> Result<Value
         mailer_session: s["id"].as_str().context("session")?.into(),
         mailer_epoch: s["epoch"].as_u64().context("epoch")?,
         runtime: p.profile.runtime.clone(),
-        native_session: session.into(),
+        native_session: session,
     };
     let tx = store
         .connection

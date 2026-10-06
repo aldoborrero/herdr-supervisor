@@ -527,13 +527,21 @@ Low-level `prepare`, `launch`, `relay-node` and `serve-workers` commands expose 
 
 Profiles accept model selection and a limited set of runtime tuning flags. Session, root, config/profile switching and permission overrides are reserved to the launcher. Codex uses the installed CLI's `--approve-for-me`, which selects automatic approval review and workspace-write. Codex 0.158.0 rejects combining it with an explicit `--sandbox` flag. See [official CLI reference](https://learn.chatgpt.com/docs/developer-commands?surface=cli) and the local `codex --help` when updating supported versions.
 
-Codex receives a fixed initial prompt asking it to wait for bootstrap. Its TUI
-does not expose a thread UUID before the first prompt; without that initialization,
-the launcher cannot register an exact destination for mailer. This prompt contains
-no task or credentials. Assignment delivery and readiness still require the
-observed UUID, durable registration and scoped bootstrap. Workspace trust must be
-prepared by the operator; the [disposable local lab](local-lab.md) does this only
-in its private Codex configuration.
+Codex and Pi receive a fixed initial prompt asking them to wait for bootstrap.
+This initializes the native conversation without issuing a task or credentials.
+Assignment delivery and readiness still require exact identity, durable
+registration and scoped bootstrap. Workspace trust must be prepared by the
+operator; the [disposable local lab](local-lab.md) does this only in its private
+runtime configuration. Official Herdr integrations must be installed there too.
+
+Herdr's Pi integration reports a transcript path. On the execution host the
+supervisor reads only its bounded first session header, verifies its workspace
+and canonical UUID, and compares that UUID with the preselected session. Missing,
+symlinked, foreign, writable-by-others, oversized or incomplete files cannot bind
+a receiver. It never derives identity from the filename. Pi needs that header to
+be persisted; a runtime without a configured provider may not reach this point.
+Remote focus refuses Pi path references rather than reading a remote path on the
+local machine; remote path resolution remains unimplemented.
 
 ## Recover a lost registration
 

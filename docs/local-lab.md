@@ -3,12 +3,22 @@
 The repository's `process-compose.yaml` runs real NATS JetStream, herdr-mailer,
 Herdr, the supervisor controller and one execution node on this machine. No
 Docker daemon, NetBird or SSH is needed. Models are started only by the separate
-`test` command.
+`test` command. The [recorded local results](local-lab-evidence.md) cover complete
+Codex and Claude workflows; Pi model acceptance awaits `/login`.
 
 Use `nix develop` for Python, process-compose, NATS and the Git tools. Build the
 supervisor and select a protocol-2 mailer package with idempotent sends and exact
 recipient preconditions. Herdr and the native CLIs remain explicit local inputs.
-They are not downloaded or installed by this helper.
+Select the actual packaged executables, not personal wrappers that fetch updates
+or load host secrets. The helper does not install these tools. For `--runtime pi`,
+pass `--pi /absolute/package/bin/pi`; for Claude, pass `--claude /absolute/package/bin/claude`. These paths are fixed through private PATH entries.
+
+Preparation installs the selected runtime's built-in Herdr integration into the
+private lab home. That integration supplies the native session UUID; detecting a
+terminal as Codex/Claude/Pi is not enough to route messages. For Codex, the helper
+checks the reviewed version-8 script's SHA-256, asks the real app-server for its
+hook metadata/hash, persists that one hook's trust locally and verifies it. A
+changed script fails preparation for review. It never uses a hook-trust bypass.
 
 ```sh
 nix develop
@@ -34,7 +44,9 @@ For an authorized authenticated trial, add `--use-local-auth --auth-home /home/U
 when preparing. This copies only the selected runtime's authentication cache into
 private lab state: `.codex/auth.json`, `.claude/.credentials.json` or
 `.pi/agent/auth.json`. It does not copy transcripts, plugins or global settings,
-print credentials or write back to the original cache. Without this explicit
+print credentials or write back to the original cache. Claude also preserves the
+already-completed onboarding flag (when present) and uses a local dark theme; no
+other global preferences or project permissions are copied. Without this explicit
 option, authenticate the runtime in its isolated lab environment separately.
 An existing cache may have expired or may use an unsupported credential store;
 the actual runtime determines whether authentication succeeds. Treat the whole
@@ -61,6 +73,12 @@ that bootstrap succeeds. Restarting services reuses the existing identities,
 bundle and persisted broker state. It does not intentionally create a new run or
 rotate registrations. A failed bootstrap stays visibly failed; inspect the
 private `logs/` directory before retrying.
+
+The Claude lab wrapper selects Auto, persists trust for only its exact local
+workspace and retains the runtime's permission review. Claude 2.1.284 separately
+asks to confirm the local development channel for each new participant; accept
+that prompt only for this reviewed local mailer channel. The helper does not
+bypass it. See [Claude permission modes](https://code.claude.com/docs/en/permission-modes).
 
 All services receive isolated HOME/XDG/Codex/Claude/Pi directories. Parent thread
 IDs, mailer configuration and supervisor capabilities are not inherited. Herdr

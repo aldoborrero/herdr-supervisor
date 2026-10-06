@@ -1473,7 +1473,21 @@ fn native_launchers(recover_registration: bool) {
                 if self.session.borrow().is_empty() {
                     json!({"agents":[]})
                 } else {
-                    json!({"agents":[{"pane_id":"p","workspace_id":"w","tab_id":"t","terminal_id":"term","cwd":self.path,"agent":self.runtime,"agent_session":{"value":*self.session.borrow()}}]})
+                    let session = if self.runtime == "pi" {
+                        use std::os::unix::fs::PermissionsExt;
+                        let path = Path::new(&self.path)
+                            .parent()
+                            .unwrap()
+                            .join("observed-pi.jsonl");
+                        let header = json!({"type":"session","version":3,"id":*self.session.borrow(),"cwd":self.path});
+                        std::fs::write(&path, format!("{header}\n")).unwrap();
+                        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                            .unwrap();
+                        json!({"kind":"path","value":path})
+                    } else {
+                        json!({"kind":"id","value":*self.session.borrow()})
+                    };
+                    json!({"agents":[{"pane_id":"p","workspace_id":"w","tab_id":"t","terminal_id":"term","cwd":self.path,"agent":self.runtime,"agent_session":session}]})
                 }
             } else {
                 panic!("unexpected call {cmd:?}")

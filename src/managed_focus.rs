@@ -135,7 +135,12 @@ pub fn focus(ctx: &Ctx, project: &Project, attempt: &str, epoch: u64) -> Result<
     let agents = herdr.agent_list()?;
     let sessions: Vec<_> = agents
         .iter()
-        .filter(|a| a.session_id() == resource.session && a.agent == resource.runtime)
+        .filter(|a| {
+            a.agent == resource.runtime
+                && !(route.machine.is_some()
+                    && a.agent_session.as_ref().is_some_and(|s| s.kind == "path"))
+                && a.native_session_id().as_deref().ok() == Some(resource.session.as_str())
+        })
         .collect();
     ensure!(
         sessions.len() == 1,

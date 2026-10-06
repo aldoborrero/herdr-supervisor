@@ -1,8 +1,42 @@
 # Validation and completion status
 
-Reviewed 2026-10-05. This document separates implemented/tested behavior from the full delivery contract in [IMPLEMENTATION.md](../IMPLEMENTATION.md). Passing the current suite does not establish completion of the supervisor.
+Reviewed 2026-10-06. This document separates implemented/tested behavior from the full delivery contract in [IMPLEMENTATION.md](../IMPLEMENTATION.md). Passing the current suite does not establish completion of the supervisor.
 
-## Evidence collected
+## Current local native evidence, 2026-10-06
+
+The process-compose lab completed authenticated Codex and Claude runs with a
+real supervisor, author and independent reviewer. Both produced the exact
+candidate/check/review/integration evidence, resolved a scoped question,
+approved/read/acknowledged memory and recorded all native exits. The driver did
+not fabricate participant results. Services were stopped through the checked
+shutdown path; private logs, databases and worktrees are retained.
+
+[Local lab evidence](local-lab-evidence.md) records versions, run/candidate IDs,
+manual Claude development-channel confirmations and package/test boundaries.
+Pi's path-based native identity is now resolved from its bounded owned session
+header and covered by automated coordinator/worker tests. Its model acceptance
+is explicitly deferred by the user pending `/login`. Actual remote-host and
+model-bearing restart/recovery acceptance remain open. The user authorized fresh
+isolated participants on October 6; the earlier restriction described below is
+historical, and existing user sessions remain out of scope.
+
+### Follow-up regression gate
+
+The complete current local suite passes 639 unit tests (81.49 s) and 22 CLI tests
+(39.79 s), including seven Python acceptance-driver cases with six nested lab
+boundary checks. The Pi coordinator and worker launch fixtures now use real
+session-header files and Herdr's `kind: path` representation. The resolver test
+rejects missing, symlinked, wrong-workspace, publicly writable, incomplete and
+oversized headers; the filename supplies no identity. Log:
+`.direnv/local-lab-final-suite.log`. Strict all-target Clippy also passes in the
+same log (1m 09s), and `nix fmt` passes. The committed-source Nix package gate
+for these follow-up changes is recorded separately below when completed.
+
+## Historical evidence collected before local model acceptance
+
+The entries below retain their original validation boundaries. Statements that
+no authenticated model has run, and package gates called “latest,” describe
+those checkpoints; the current local evidence above supersedes them.
 
 ### Opt-in native acceptance driver (preparation only)
 

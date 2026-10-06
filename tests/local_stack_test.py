@@ -10,11 +10,40 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "dev"))
+import claude_lab
 import codex_lab
 import local_stack as stack
 
 
 class LocalStackTests(unittest.TestCase):
+    def test_claude_trust_preserves_ui_settings_and_refuses_foreign_workspace(self):
+        (self.root / "claude").mkdir()
+        path = self.root / "claude/.claude.json"
+        stack.write(path, {"theme": "dark", "hasCompletedOnboarding": True})
+        cwd = self.root / "workspace"
+        cwd.mkdir()
+        claude_lab.prepare_workspace(self.root, cwd)
+        self.assertEqual(
+            stack.read(path)["projects"], {str(cwd): {"hasTrustDialogAccepted": True}}
+        )
+        self.assertEqual(stack.read(path)["theme"], "dark")
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        with self.assertRaises(RuntimeError):
+            claude_lab.prepare_workspace(self.root, Path("/tmp"))
+
+    def test_changed_official_hook_is_not_trusted_or_executed(self):
+        (self.root / "codex").mkdir()
+        (self.root / "codex/herdr-agent-state.sh").write_text("unexpected hook")
+        with (
+            patch.object(
+                codex_lab.subprocess,
+                "Popen",
+                side_effect=AssertionError("must not execute"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "hook changed"),
+        ):
+            codex_lab.hook_state(self.root, {}, {})
+
     def test_codex_trust_is_persistent_and_confined_to_lab(self):
         cwd = self.root / 'owned "quoted"'
         cwd.mkdir()

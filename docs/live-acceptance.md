@@ -5,9 +5,12 @@ real services. Its default mode only prints a plan. Execution starts real model
 sessions and can incur provider charges; it is separate from offline package
 tests and from the model-free native resource test.
 
-**Current evidence:** local driver tests pass. No authenticated model run has
-been performed with this driver. A passing plan or dependency check does not
-establish authentication, native CLI compatibility or task completion.
+**Current evidence (2026-10-06):** complete local Codex and Claude model runs
+passed with real services, scoped model results and independent review. Pi model
+acceptance is deferred by the user pending `/login`. Claude required the local
+development-channel confirmation for each new participant. See the exact
+[evidence and limitations](local-lab-evidence.md); a plan or service health check
+alone does not establish model processing.
 
 ## Prepare and review
 

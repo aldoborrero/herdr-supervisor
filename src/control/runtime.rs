@@ -208,10 +208,9 @@ pub fn native_invocation(
         _ => bail!("unsupported runtime"),
     };
     argv.extend(profile.argv.clone());
-    if profile.runtime == "codex" {
-        // The interactive CLI has no thread UUID until its first prompt. Create
-        // that thread without issuing an assignment: only the observed exact
-        // UUID may be registered and receive the authoritative mailer bootstrap.
+    if profile.runtime == "codex" || profile.runtime == "pi" {
+        // Start a native conversation without issuing an assignment. Codex's
+        // thread and Pi's persisted session header precede exact-UUID bootstrap.
         argv.push("--".into());
         argv.push("You are a managed Herdr participant. Your assignment will arrive through herdr-mailer after this native session is registered. Do not start work, read credentials or call supervisor APIs before that bootstrap message arrives. For now, acknowledge that you are waiting for bootstrap and wait.".into());
     }
@@ -411,13 +410,7 @@ pub fn advance(
             && agent.agent == order.profile.runtime,
         "observed runtime resource identity differs"
     );
-    let session = agent
-        .agent_session
-        .as_ref()
-        .context("Herdr has not reported a native session")?
-        .value
-        .clone();
-    uuid::Uuid::parse_str(&session)?;
+    let session = agent.native_session_id()?;
     if let Some(expected) = &plan.expected_session {
         ensure!(&session == expected, "native UUID mismatch");
     }
