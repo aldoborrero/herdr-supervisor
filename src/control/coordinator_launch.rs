@@ -69,12 +69,22 @@ pub struct Plan {
     pub credential: String,
     pub deadline: i64,
     pub workspace_started: bool,
+    #[serde(default)]
+    pub workspace_result: Option<WorkspaceResult>,
     pub pane: Option<super::executor::PaneBinding>,
     pub launch_started: bool,
     pub wrapper_started: bool,
     pub expected_session: Option<String>,
     pub registration_started: bool,
     pub registration: Option<Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum WorkspaceResult {
+    Created { receipt: crate::herdr::Created },
+    NotStarted { error: String },
+    Uncertain { error: String },
 }
 
 pub fn fence(state: &Path, command: &Mutation) -> Result<Option<api::Lease>> {
@@ -150,6 +160,7 @@ pub(super) fn reserve(
         credential: bound["credential"].as_str().context("credential")?.into(),
         deadline: r.deadline,
         workspace_started: false,
+        workspace_result: None,
         pane: None,
         launch_started: false,
         wrapper_started: false,
@@ -215,7 +226,7 @@ pub fn summaries(c: &Connection, run: &str) -> Result<Value> {
             [&id],
             |r| r.get(0),
         )?;
-        result.push(json!({"id":id,"generation":generation,"state":state,"workspace_retirement":retirement,"profile":p.profile_name,"runtime":p.profile.runtime,"native_session":p.expected_session,"pane":p.pane,"last_error":error,"process_receipt":receipt.map(|s|serde_json::from_str::<Value>(&s)).transpose()?,"registration_recovery_count":recoveries,"registration_state":if p.registration.is_some(){"registered"}else if p.registration_started{"uncertain"}else if recoveries > 0{"retry_authorized"}else{"not_started"}}));
+        result.push(json!({"id":id,"generation":generation,"state":state,"workspace_retirement":retirement,"workspace_started":p.workspace_started,"workspace_result":p.workspace_result,"profile":p.profile_name,"runtime":p.profile.runtime,"native_session":p.expected_session,"pane":p.pane,"last_error":error,"process_receipt":receipt.map(|s|serde_json::from_str::<Value>(&s)).transpose()?,"registration_recovery_count":recoveries,"registration_state":if p.registration.is_some(){"registered"}else if p.registration_started{"uncertain"}else if recoveries > 0{"retry_authorized"}else{"not_started"}}));
     }
     Ok(json!(result))
 }
@@ -311,6 +322,14 @@ fn observe_shell(herdr: &Herdr, p: &Plan, home: &Path) -> Result<super::executor
         "coordinator workspace creation unresolved or ambiguous"
     );
     let pane = matches[0];
+    if let Some(WorkspaceResult::Created { receipt }) = &p.workspace_result {
+        ensure!(
+            pane.workspace_id == receipt.workspace_id
+                && pane.tab_id == receipt.tab_id
+                && pane.pane_id == receipt.pane_id,
+            "coordinator workspace differs from creation receipt"
+        );
+    }
     ensure!(
         !pane.workspace_id.is_empty() && !pane.pane_id.is_empty() && !pane.terminal_id.is_empty(),
         "Herdr omitted coordinator identity"
@@ -396,13 +415,43 @@ pub fn advance(store: &mut Store, id: &str, runner: &dyn Runner) -> Result<Value
             "unexpected pane already uses the reserved coordinator directory"
         );
         p.workspace_started = true;
+        // Clear an earlier proven pre-spawn failure before a new attempt. A
+        // crash after this save must be treated as an unknown outcome.
+        p.workspace_result = None;
         save(&store.connection, &p, "preparing")?;
         // A lost response remains an intent to inspect the unique cwd. Never
         // issue workspace.create a second time merely because no pane was seen.
-        let _outcome = herdr.workspace_create(&home, &format!("supervisor {}", p.run), false);
+        match herdr.workspace_create(&home, &format!("supervisor {}", p.run), false) {
+            Ok(receipt) => p.workspace_result = Some(WorkspaceResult::Created { receipt }),
+            Err(error) => {
+                let not_started = error.not_started();
+                let error = error.to_string().replace(&p.credential, "[redacted]");
+                // Bound public diagnostics without cutting a UTF-8 codepoint.
+                let error: String = error.chars().take(2048).collect();
+                p.workspace_result = Some(if not_started {
+                    p.workspace_started = false;
+                    WorkspaceResult::NotStarted { error }
+                } else {
+                    WorkspaceResult::Uncertain { error }
+                });
+            }
+        }
+        save(&store.connection, &p, "preparing")?;
+    }
+    if let Some(WorkspaceResult::NotStarted { error }) = &p.workspace_result {
+        bail!("coordinator workspace command did not start; retry is safe: {error}");
     }
     if !p.launch_started {
-        p.pane = Some(observe_shell(&herdr, &p, &home)?);
+        p.pane = Some(observe_shell(&herdr, &p, &home).map_err(|error| {
+            let cause = match &p.workspace_result {
+                Some(WorkspaceResult::Uncertain { error }) => error.as_str(),
+                Some(WorkspaceResult::Created { .. }) => "creation receipt saved",
+                _ => "no durable creation result (interrupted or legacy launch)",
+            };
+            anyhow::anyhow!(
+                "{error}; workspace create: {cause}; creation will not be repeated. To abandon this launch, the owner can bind_supervisor at the current run revision, wait for exited, then start a new coordinator"
+            )
+        })?);
         save(&store.connection, &p, "preparing")?;
         if p.profile.runtime != "codex" {
             registration(store, &mut p)?;

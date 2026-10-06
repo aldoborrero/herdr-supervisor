@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::runner::{Cmd, Runner};
 
@@ -129,6 +129,14 @@ impl<'a> Herdr<'a> {
 pub struct HerdrError {
     pub code: String,
     pub message: String,
+    // Set only from a local typed spawn failure, never from a server error code.
+    not_started: bool,
+}
+
+impl HerdrError {
+    pub fn not_started(&self) -> bool {
+        self.not_started
+    }
 }
 
 impl std::fmt::Display for HerdrError {
@@ -313,7 +321,7 @@ pub fn ready_state(state: &str) -> bool {
     matches!(state, "idle" | "done")
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Created {
     pub workspace_id: String,
     pub tab_id: String,
@@ -325,11 +333,13 @@ impl<'a> Herdr<'a> {
     pub fn call(&self, args: &[&str], timeout: Duration) -> Result<serde_json::Value, HerdrError> {
         let cmd = self.cmd(timeout).args(args.iter().copied());
         let out = self.runner.run(&cmd).map_err(|e| HerdrError {
+            not_started: e.downcast_ref::<crate::runner::SpawnFailure>().is_some(),
             code: "unreachable".into(),
             message: format!("{e:#}"),
         })?;
         if out.timed_out {
             return Err(HerdrError {
+                not_started: false,
                 code: "timeout".into(),
                 message: format!("`herdr {}` timed out", args.join(" ")),
             });
@@ -342,6 +352,7 @@ impl<'a> Herdr<'a> {
         if let Some(reply) = reply {
             if let Some(error) = reply.get("error") {
                 return Err(HerdrError {
+                    not_started: false,
                     code: error["code"].as_str().unwrap_or("failed").to_string(),
                     message: error["message"].as_str().unwrap_or("").to_string(),
                 });
@@ -357,6 +368,7 @@ impl<'a> Herdr<'a> {
             return Ok(serde_json::Value::Null);
         }
         Err(HerdrError {
+            not_started: false,
             code: "failed".into(),
             message: format!("`herdr {}`: {}", args.join(" "), out.error_text()),
         })
@@ -369,6 +381,7 @@ impl<'a> Herdr<'a> {
     ) -> Result<T, HerdrError> {
         let result = self.call(args, CALL_TIMEOUT)?;
         serde_json::from_value(result[field].clone()).map_err(|e| HerdrError {
+            not_started: false,
             code: "failed".into(),
             message: format!("`herdr {}` reply changed: {e}", args.join(" ")),
         })
@@ -418,6 +431,7 @@ impl<'a> Herdr<'a> {
                 pane_id: p.into(),
             }),
             _ => Err(HerdrError {
+                not_started: false,
                 code: "failed".into(),
                 message: "herdr's create reply has no root_pane ids".into(),
             }),
@@ -540,6 +554,7 @@ impl<'a> Herdr<'a> {
             .to_string();
         if path.is_empty() {
             return Err(HerdrError {
+                not_started: false,
                 code: "failed".into(),
                 message: "herdr's worktree reply has no path".into(),
             });
@@ -608,6 +623,7 @@ impl<'a> Herdr<'a> {
         // herdr enforces the timeout itself; the outer deadline only guards a hang.
         let result = self.call(&args, AGENT_START_TIMEOUT + Duration::from_secs(5))?;
         serde_json::from_value(result["agent"].clone()).map_err(|e| HerdrError {
+            not_started: false,
             code: "failed".into(),
             message: format!("`herdr agent start` reply changed: {e}"),
         })
@@ -643,6 +659,7 @@ impl<'a> Herdr<'a> {
         ];
         match self.call(&args, PROMPT_WAIT + Duration::from_secs(5))? {
             serde_json::Value::Null => Err(HerdrError {
+                not_started: false,
                 code: "no_reply".into(),
                 message: "`herdr agent prompt --wait` answered without a result".into(),
             }),
@@ -671,11 +688,13 @@ impl<'a> Herdr<'a> {
         }
         let cmd = self.cmd(CALL_TIMEOUT).args(args.iter().copied());
         let out = self.runner.run(&cmd).map_err(|e| HerdrError {
+            not_started: e.downcast_ref::<crate::runner::SpawnFailure>().is_some(),
             code: "unreachable".into(),
             message: format!("{e:#}"),
         })?;
         if out.timed_out {
             return Err(HerdrError {
+                not_started: false,
                 code: "timeout".into(),
                 message: format!("`herdr {}` timed out", args.join(" ")),
             });
@@ -688,10 +707,12 @@ impl<'a> Herdr<'a> {
             .find_map(|text| serde_json::from_str::<serde_json::Value>(text.trim()).ok());
         Err(match reply.as_ref().and_then(|r| r.get("error")) {
             Some(error) => HerdrError {
+                not_started: false,
                 code: error["code"].as_str().unwrap_or("failed").to_string(),
                 message: error["message"].as_str().unwrap_or("").to_string(),
             },
             None => HerdrError {
+                not_started: false,
                 code: "failed".into(),
                 message: format!("`herdr {}`: {}", args.join(" "), out.error_text()),
             },
@@ -756,16 +777,19 @@ impl<'a> Herdr<'a> {
             .runner
             .socket_request(&self.socket, &line, CALL_TIMEOUT)
             .map_err(|e| HerdrError {
+                not_started: false,
                 code: "unreachable".into(),
                 message: format!("{e:#}"),
             })?;
         let reply: serde_json::Value =
             serde_json::from_str(reply.trim()).map_err(|e| HerdrError {
+                not_started: false,
                 code: "failed".into(),
                 message: format!("herdr's reply to {method} did not parse: {e}"),
             })?;
         match reply.get("error") {
             Some(error) => Err(HerdrError {
+                not_started: false,
                 code: error["code"].as_str().unwrap_or("failed").to_string(),
                 message: error["message"].as_str().unwrap_or("").to_string(),
             }),

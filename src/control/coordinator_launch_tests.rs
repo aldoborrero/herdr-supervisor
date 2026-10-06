@@ -220,6 +220,235 @@ fn coordinator_reservation_is_owner_only_replayed_and_rejects_unresolved_replace
 }
 
 #[test]
+fn coordinator_workspace_spawn_failure_retries_after_restart() {
+    use crate::runner::{Cmd, RealRunner, Runner};
+    let mut f = Fixture::new();
+    let cfg = config(&f);
+    let id = start(&mut f, cfg);
+    let world = World::new();
+    let missing = f.dir.path().join("missing-herdr");
+    // A real OS spawn failure after the successful pane-list preflight.
+    world.runner.on_fn(
+        |c| c.display().contains("workspace create"),
+        move |_| RealRunner.run(&Cmd::new(missing.to_str().unwrap(), Duration::from_secs(1))),
+    );
+    let error = launch::advance(&mut f.store, &id, &world.runner).unwrap_err();
+    assert!(error.to_string().contains("retry is safe"));
+    assert!(!plan(&f, &id).workspace_started);
+    let summary = launch::summaries(&f.store.connection, &f.run).unwrap();
+    assert_eq!(summary[0]["workspace_result"]["status"], "not_started");
+    assert_eq!(world.runner.count("pane run"), 0);
+    assert_eq!(world.runner.count("workspace create"), 1);
+
+    f.store = Store::open(&f.store.dir).unwrap();
+    let world = World::new();
+    let home = launch::files(&f.store.dir, &plan(&f, &id)).join("home");
+    shell(&world, &home, false);
+    assert_eq!(
+        launch::advance(&mut f.store, &id, &world.runner).unwrap()["state"],
+        "launching"
+    );
+    assert_eq!(world.runner.count("workspace create"), 1);
+    assert_eq!(world.runner.count("pane run"), 1);
+    assert_eq!(
+        launch::summaries(&f.store.connection, &f.run).unwrap()[0]["workspace_result"]["status"],
+        "created"
+    );
+}
+
+#[test]
+fn coordinator_workspace_unknown_failure_preserves_cause_and_never_retries() {
+    use crate::runner::fake::fail;
+    for mode in ["timeout", "nonzero", "server_not_started", "runner_error"] {
+        let mut f = Fixture::new();
+        let cfg = config(&f);
+        let id = start(&mut f, cfg);
+        let world = World::new();
+        let p = plan(&f, &id);
+        let message = format!("failure-{mode} {}", p.credential);
+        let original = message.clone();
+        world.runner.on_fn(
+            |c| c.display().contains("workspace create"),
+            move |_| match mode {
+                "timeout" => Ok(timeout()),
+                "nonzero" => Ok(fail(1, &message)),
+                "server_not_started" => Ok(fail(
+                    1,
+                    &json!({"error":{"code":"not_started","message":message}}).to_string(),
+                )),
+                _ => Err(anyhow::anyhow!(message.clone())),
+            },
+        );
+        for _ in 0..2 {
+            f.store = Store::open(&f.store.dir).unwrap();
+            let error = launch::advance(&mut f.store, &id, &world.runner)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("bind_supervisor"));
+            assert!(error.contains(if mode == "timeout" { "timed out" } else { mode }));
+            assert!(!error.contains(&p.credential));
+            let summary = launch::summaries(&f.store.connection, &f.run).unwrap();
+            assert_eq!(summary[0]["workspace_result"]["status"], "uncertain");
+            assert!(!summary.to_string().contains(&original));
+            let page = crate::control::pagination::page(
+                &f.store,
+                &f.owner,
+                &f.run,
+                crate::control::pagination::Collection::CoordinatorLaunches,
+                None,
+                1,
+            )
+            .unwrap();
+            assert_eq!(
+                page["items"][0]["value"]["workspace_result"],
+                summary[0]["workspace_result"]
+            );
+            assert_eq!(page["items"][0]["value"]["workspace_started"], true);
+            assert!(!page.to_string().contains(&p.credential));
+        }
+        assert!(plan(&f, &id).workspace_started);
+        assert_eq!(world.runner.count("workspace create"), 1);
+        assert_eq!(world.runner.count("pane run"), 0);
+        // Even an error response can precede a late, observable side effect.
+        let home = launch::files(&f.store.dir, &p).join("home");
+        shell(&world, &home, false);
+        *world.panes.borrow_mut() = json!([{"workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p1","terminal_id":"t1","cwd":home}]).to_string();
+        assert_eq!(
+            launch::advance(&mut f.store, &id, &world.runner).unwrap()["state"],
+            "launching"
+        );
+        assert_eq!(world.runner.count("workspace create"), 1);
+        assert_eq!(world.runner.count("pane run"), 1);
+    }
+}
+
+#[test]
+fn coordinator_workspace_receipt_fences_a_different_pane_after_restart() {
+    let mut f = Fixture::new();
+    let cfg = config(&f);
+    let id = start(&mut f, cfg);
+    let world = World::new();
+    let home = launch::files(&f.store.dir, &plan(&f, &id)).join("home");
+    // Herdr accepts creation; its pane snapshot is not ready yet.
+    world.runner.on(
+        "workspace create",
+        ok(r#"{"result":{"root_pane":{"workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p1"}}}"#),
+    );
+    shell(&world, &home, false);
+    assert!(launch::advance(&mut f.store, &id, &world.runner).is_err());
+    f.store = Store::open(&f.store.dir).unwrap();
+    for (workspace, tab, pane) in [
+        ("other", "w1:t1", "w1:p1"),
+        ("w1", "other", "w1:p1"),
+        ("w1", "w1:t1", "other"),
+    ] {
+        *world.panes.borrow_mut() = json!([{"workspace_id":workspace,"tab_id":tab,"pane_id":pane,"terminal_id":"t1","cwd":home}]).to_string();
+        assert!(
+            launch::advance(&mut f.store, &id, &world.runner)
+                .unwrap_err()
+                .to_string()
+                .contains("differs from creation receipt")
+        );
+    }
+    assert_eq!(world.runner.count("pane run"), 0);
+    *world.panes.borrow_mut() = json!([{"workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p1","terminal_id":"t1","cwd":home}]).to_string();
+    assert_eq!(
+        launch::advance(&mut f.store, &id, &world.runner).unwrap()["state"],
+        "launching"
+    );
+    assert_eq!(world.runner.count("workspace create"), 1);
+}
+
+#[test]
+fn coordinator_workspace_failed_result_commit_keeps_uncertain_intent() {
+    use crate::runner::{Cmd, RealRunner, Runner};
+    for spawn_failure in [false, true] {
+        let mut f = Fixture::new();
+        let cfg = config(&f);
+        let id = start(&mut f, cfg);
+        let world = World::new();
+        if spawn_failure {
+            let missing = f.dir.path().join("missing-herdr");
+            world.runner.on_fn(
+                |c| c.display().contains("workspace create"),
+                move |_| {
+                    RealRunner.run(&Cmd::new(missing.to_str().unwrap(), Duration::from_secs(1)))
+                },
+            );
+        } else {
+            world.runner.on("workspace create", ok(r#"{"result":{"root_pane":{"workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p1"}}}"#));
+        }
+        f.store.connection.execute_batch("CREATE TRIGGER fail_workspace_result BEFORE UPDATE ON coordinator_launches WHEN json_extract(NEW.doc,'$.workspace_result.status') IS NOT NULL BEGIN SELECT RAISE(ABORT,'result write failed'); END;").unwrap();
+        assert!(
+            launch::advance(&mut f.store, &id, &world.runner)
+                .unwrap_err()
+                .to_string()
+                .contains("result write failed")
+        );
+        f.store
+            .connection
+            .execute_batch("DROP TRIGGER fail_workspace_result")
+            .unwrap();
+        f.store = Store::open(&f.store.dir).unwrap();
+        assert!(plan(&f, &id).workspace_started);
+        assert!(plan(&f, &id).workspace_result.is_none());
+        assert!(
+            launch::advance(&mut f.store, &id, &world.runner)
+                .unwrap_err()
+                .to_string()
+                .contains("no durable creation result")
+        );
+        assert_eq!(world.runner.count("workspace create"), 1);
+        assert_eq!(world.runner.count("pane run"), 0);
+    }
+}
+
+#[test]
+fn coordinator_workspace_interrupted_or_legacy_intent_can_be_fenced_and_replaced() {
+    let mut f = Fixture::new();
+    let cfg = config(&f);
+    let id = start(&mut f, cfg);
+    // The intent committed but no result did: also the old document format.
+    f.store.connection.execute("UPDATE coordinator_launches SET state='preparing',doc=json_remove(json_set(doc,'$.workspace_started',json('true')),'$.workspace_result') WHERE id=?1", [&id]).unwrap();
+    f.store = Store::open(&f.store.dir).unwrap();
+    let world = World::new();
+    assert!(
+        launch::advance(&mut f.store, &id, &world.runner)
+            .unwrap_err()
+            .to_string()
+            .contains("no durable creation result")
+    );
+    assert_eq!(world.runner.count("workspace create"), 0);
+    let p = plan(&f, &id);
+    let run: Run = document(&f.store.connection, "runs", &f.run).unwrap();
+    call(
+        &mut f.store,
+        &f.owner,
+        Mutation::BindSupervisor {
+            run: f.run.clone(),
+            expected_revision: run.revision,
+        },
+    );
+    assert_eq!(
+        launch::advance(&mut f.store, &id, &world.runner).unwrap()["state"],
+        "exited"
+    );
+    assert!(launch::run_owned(&f.store.dir, &id).is_err());
+    assert!(f.store.snapshot(&p.credential, &f.run).is_err());
+    let cfg = config(&f);
+    let next = start(&mut f, cfg);
+    assert_ne!(next, id);
+    let next_home = launch::files(&f.store.dir, &plan(&f, &next)).join("home");
+    assert_ne!(next_home, launch::files(&f.store.dir, &p).join("home"));
+    shell(&world, &next_home, false);
+    assert_eq!(
+        launch::advance(&mut f.store, &next, &world.runner).unwrap()["state"],
+        "launching"
+    );
+    assert_eq!(world.runner.count("workspace create"), 1);
+}
+
+#[test]
 fn coordinator_lost_create_and_launch_replies_never_duplicate_effects() {
     let mut f = Fixture::new();
     let cfg = config(&f);
@@ -669,7 +898,7 @@ async fn controller_service_pumps_coordinator_intents_and_reconciles_after_resta
     let mut cfg = config(&f);
     let script = f.dir.path().join("herdr-stub");
     let marker = f.dir.path().join("creates");
-    std::fs::write(&script,format!("#!/bin/sh\ncase \"$*\" in\n*'pane list'*) printf '%s\\n' '{{\"result\":{{\"panes\":[]}}}}';;\n*'workspace create'*) printf 'create\\n' >> {}; exit 1;;\n*) exit 2;;\nesac\n",crate::remote::quote(marker.to_str().unwrap()))).unwrap();
+    std::fs::write(&script,format!("#!/bin/sh\ncase \"$*\" in\n*'pane list'*) printf '%s\\n' '{{\"result\":{{\"panes\":[]}}}}';;\n*'workspace create'*) printf 'create\\n' >> {}; printf 'workspace transport rejected\\n' >&2; exit 1;;\n*) exit 2;;\nesac\n",crate::remote::quote(marker.to_str().unwrap()))).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
     cfg.herdr_binary = script;
     let notification = coordinator::Config {
@@ -718,6 +947,13 @@ async fn controller_service_pumps_coordinator_intents_and_reconciles_after_resta
             .unwrap()
             .contains("unresolved")
     );
+    assert!(
+        summary[0]["last_error"]
+            .as_str()
+            .unwrap()
+            .contains("workspace transport rejected")
+    );
+    assert_eq!(summary[0]["workspace_result"]["status"], "uncertain");
     assert!(plan(&f, &launch).workspace_started);
     assert!(!plan(&f, &launch).launch_started);
 }

@@ -178,6 +178,27 @@ SQLite reserves one generation before external effects. An owner mutation that r
 
 Run cancellation, deadline expiry or generation retirement stop a process still owned by its wrapper. To replace an owned coordinator without cancelling the run, the owner can submit `bind_supervisor` for the current run revision; this retires the old generation. Wait until its launch state is `exited`, then open again. `--new` cannot override an active or unresolved coordinator. Existing manually attached sessions are not process-owned by this launcher. An exited owned coordinator workspace can be retired with `cleanup-coordinator` below; stopping a still-live orphan remains pending.
 
+### Recover workspace creation
+
+Launch summaries and `control page --collection coordinator_launches` include
+`workspace_started` (an intent, not proof of creation) and `workspace_result`:
+
+| Result status | Meaning and recovery |
+| --- | --- |
+| `not_started` | The local OS could not spawn the Herdr command. The intent is reset only after saving that proof; the controller can retry on its next pass. Fix the binary/path or permissions if the failure persists. |
+| `created` | Herdr returned workspace, tab and pane IDs. These are saved and checked against the observed idle shell before launch. A missing or different pane never causes another create. |
+| `uncertain` | Timeout, nonzero exit, server error, invalid reply or an unclassified runner error. The original bounded, redacted diagnostic is retained. The controller inspects for the workspace without reissuing creation. |
+| `null` with `workspace_started: true` | An interrupted call, failed result persistence or a launch from an older version. Treat it as uncertain; absence of a panel is not proof that creation had no effect. |
+
+If an uncertain workspace never appears, the owner can use `bind_supervisor`
+with the current run revision, wait for the old launch to report `exited`, then
+submit a new `start_coordinator`. An unclaimed wrapper is fenced before this
+transition; a claimed wrapper must first produce its exit evidence. The new
+generation uses a different private directory. Late panels from the old intent
+are not adopted by the replacement, and its old wrapper cannot start. This
+recovery does not automatically close an unidentified old workspace. Do not
+reset `workspace_started` manually: an outstanding create could still arrive.
+
 ## Create a managed project and view
 
 `managed create --spec FILE` (or `--spec-json JSON`) records an immutable creation intent, submits an owner-authorized `create_run`, and publishes an already-bound Projects view. The popup's **N** form submits the same specification. See [getting started](getting-started.md) for fields and examples. Neither path starts a coordinator or workers.

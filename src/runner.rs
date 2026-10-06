@@ -114,8 +114,9 @@ impl Output {
 }
 
 pub trait Runner {
-    /// `Err` means the command could not be spawned at all (for example the
-    /// program is missing). A non-zero exit or a timeout is an `Ok(Output)`.
+    /// Only an error containing `SpawnFailure` proves the program did not run.
+    /// Other errors can happen after spawning. Non-zero exits and timeouts are
+    /// `Ok(Output)` and do not prove absence of external effects.
     fn run(&self, cmd: &Cmd) -> Result<Output>;
 
     /// One JSON line to a herdr socket, one line back. The single exception to
@@ -131,6 +132,22 @@ pub trait Runner {
 }
 
 pub struct RealRunner;
+
+#[derive(Debug)]
+pub struct SpawnFailure {
+    program: String,
+    source: std::io::Error,
+}
+impl std::fmt::Display for SpawnFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "could not run `{}`: {}", self.program, self.source)
+    }
+}
+impl std::error::Error for SpawnFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
 
 const POLL: Duration = Duration::from_millis(20);
 
@@ -161,9 +178,10 @@ impl Runner for RealRunner {
             command.process_group(0);
         }
 
-        let mut child = command
-            .spawn()
-            .with_context(|| format!("could not run `{}`", cmd.program))?;
+        let mut child = command.spawn().map_err(|source| SpawnFailure {
+            program: cmd.program.clone(),
+            source,
+        })?;
 
         // Readers and the writer run on their own threads so a full pipe in
         // either direction cannot deadlock against the deadline loop below.
@@ -471,7 +489,9 @@ mod tests {
         assert!(
             RealRunner
                 .run(&Cmd::new("hp-no-such-program", Duration::from_secs(1)))
-                .is_err()
+                .unwrap_err()
+                .downcast_ref::<SpawnFailure>()
+                .is_some()
         );
     }
 
