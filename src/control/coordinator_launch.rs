@@ -71,6 +71,9 @@ pub struct Plan {
     pub workspace_started: bool,
     #[serde(default)]
     pub workspace_result: Option<WorkspaceResult>,
+    // Omit absent additions so older durable retirement scope hashes stay stable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_result: Option<LaunchResult>,
     pub pane: Option<super::executor::PaneBinding>,
     pub launch_started: bool,
     pub wrapper_started: bool,
@@ -85,6 +88,23 @@ pub enum WorkspaceResult {
     Created { receipt: crate::herdr::Created },
     NotStarted { error: String },
     Uncertain { error: String },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum LaunchResult {
+    Submitted,
+    NotStarted { error: String },
+    Uncertain { error: String },
+}
+
+fn diagnostic(p: &Plan, error: &crate::herdr::HerdrError) -> String {
+    error
+        .to_string()
+        .replace(&p.credential, "[redacted]")
+        .chars()
+        .take(2048)
+        .collect()
 }
 
 pub fn fence(state: &Path, command: &Mutation) -> Result<Option<api::Lease>> {
@@ -161,6 +181,7 @@ pub(super) fn reserve(
         deadline: r.deadline,
         workspace_started: false,
         workspace_result: None,
+        launch_result: None,
         pane: None,
         launch_started: false,
         wrapper_started: false,
@@ -226,7 +247,7 @@ pub fn summaries(c: &Connection, run: &str) -> Result<Value> {
             [&id],
             |r| r.get(0),
         )?;
-        result.push(json!({"id":id,"generation":generation,"state":state,"workspace_retirement":retirement,"workspace_started":p.workspace_started,"workspace_result":p.workspace_result,"profile":p.profile_name,"runtime":p.profile.runtime,"native_session":p.expected_session,"pane":p.pane,"last_error":error,"process_receipt":receipt.map(|s|serde_json::from_str::<Value>(&s)).transpose()?,"registration_recovery_count":recoveries,"registration_state":if p.registration.is_some(){"registered"}else if p.registration_started{"uncertain"}else if recoveries > 0{"retry_authorized"}else{"not_started"}}));
+        result.push(json!({"id":id,"generation":generation,"state":state,"workspace_retirement":retirement,"workspace_started":p.workspace_started,"workspace_result":p.workspace_result,"launch_result":p.launch_result,"profile":p.profile_name,"runtime":p.profile.runtime,"native_session":p.expected_session,"pane":p.pane,"last_error":error,"process_receipt":receipt.map(|s|serde_json::from_str::<Value>(&s)).transpose()?,"registration_recovery_count":recoveries,"registration_state":if p.registration.is_some(){"registered"}else if p.registration_started{"uncertain"}else if recoveries > 0{"retry_authorized"}else{"not_started"}}));
     }
     Ok(json!(result))
 }
@@ -425,9 +446,7 @@ pub fn advance(store: &mut Store, id: &str, runner: &dyn Runner) -> Result<Value
             Ok(receipt) => p.workspace_result = Some(WorkspaceResult::Created { receipt }),
             Err(error) => {
                 let not_started = error.not_started();
-                let error = error.to_string().replace(&p.credential, "[redacted]");
-                // Bound public diagnostics without cutting a UTF-8 codepoint.
-                let error: String = error.chars().take(2048).collect();
+                let error = diagnostic(&p, &error);
                 p.workspace_result = Some(if not_started {
                     p.workspace_started = false;
                     WorkspaceResult::NotStarted { error }
@@ -464,9 +483,29 @@ pub fn advance(store: &mut Store, id: &str, runner: &dyn Runner) -> Result<Value
             quote(&p.id)
         );
         p.launch_started = true;
+        p.launch_result = None;
         save(&store.connection, &p, "launching")?;
-        let _outcome = herdr.call(&["pane", "run", &pane, &command], Duration::from_secs(10));
-        return Ok(json!({"id":id,"state":"launching","model_ready":false}));
+        p.launch_result = Some(
+            match herdr.call(&["pane", "run", &pane, &command], Duration::from_secs(10)) {
+                Ok(_) => LaunchResult::Submitted,
+                Err(error) if error.not_started() => {
+                    p.launch_started = false;
+                    LaunchResult::NotStarted {
+                        error: diagnostic(&p, &error),
+                    }
+                }
+                Err(error) => LaunchResult::Uncertain {
+                    error: diagnostic(&p, &error),
+                },
+            },
+        );
+        save(&store.connection, &p, "launching")?;
+        if let Some(LaunchResult::NotStarted { error }) = &p.launch_result {
+            bail!("coordinator pane run command did not start; retry is safe: {error}");
+        }
+        return Ok(
+            json!({"id":id,"state":"launching","launch_result":p.launch_result,"model_ready":false}),
+        );
     }
     let binding = p.pane.as_ref().context("pane binding")?;
     let agents = herdr.agent_list()?;
@@ -474,10 +513,16 @@ pub fn advance(store: &mut Store, id: &str, runner: &dyn Runner) -> Result<Value
         .iter()
         .filter(|a| a.pane_id == binding.pane)
         .collect::<Vec<_>>();
-    ensure!(
-        matches.len() == 1,
-        "coordinator launch unresolved; no second launch"
-    );
+    if matches.len() != 1 {
+        let cause = match &p.launch_result {
+            Some(LaunchResult::Uncertain { error }) => error.as_str(),
+            Some(LaunchResult::Submitted) => {
+                "command acknowledged, native wrapper not yet observed"
+            }
+            _ => "no durable pane run result",
+        };
+        bail!("coordinator launch unresolved; no second launch; pane run: {cause}");
+    }
     let agent = matches[0];
     ensure!(
         p.wrapper_started
@@ -612,7 +657,7 @@ pub fn invocation(state: &Path, p: &Plan) -> Result<runtime::Invocation> {
 pub fn run_owned(state: &Path, id: &str) -> Result<()> {
     let lease = api::lock_wait(state, "coordinator-launch.lock")?;
     let store = Store::open(state)?;
-    let (status, mut p) = plan(&store.connection, id)?;
+    let (status, p) = plan(&store.connection, id)?;
     ensure!(
         status == "launching"
             && p.launch_started
@@ -621,8 +666,6 @@ pub fn run_owned(state: &Path, id: &str) -> Result<()> {
         "coordinator wrapper fenced or already claimed"
     );
     let invocation = invocation(state, &p)?;
-    p.wrapper_started = true;
-    save(&store.connection, &p, "launching")?;
     super::process::run_coordinator(
         store.connection,
         lease,
@@ -631,4 +674,20 @@ pub fn run_owned(state: &Path, id: &str) -> Result<()> {
         p.deadline,
         runtime::command(invocation),
     )
+}
+
+/// The process layer calls this in the transaction that inserts spawn intent.
+/// A failed insert/commit must leave neither record claimed, before any spawn.
+pub(super) fn claim_wrapper(tx: &Transaction<'_>, id: &str, generation: u64) -> Result<()> {
+    let (state, mut p) = plan(tx, id)?;
+    ensure!(
+        state == "launching"
+            && p.generation == generation
+            && p.launch_started
+            && !p.wrapper_started
+            && current(tx, &p)?,
+        "coordinator wrapper fenced or already claimed"
+    );
+    p.wrapper_started = true;
+    save(tx, &p, "launching")
 }

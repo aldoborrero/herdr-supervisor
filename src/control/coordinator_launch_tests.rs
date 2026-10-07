@@ -1337,3 +1337,6 @@ fn coordinator_recovers_crashed_wrapper_only_after_native_exit_and_retries_retir
     assert_eq!(world.runner.count("pane run"), 1);
     assert_eq!(mailer.count("register"), 1);
 }
+
+#[path = "coordinator_launch_fault_tests.rs"]
+mod fault_tests;

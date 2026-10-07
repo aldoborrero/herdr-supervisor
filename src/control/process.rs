@@ -155,10 +155,15 @@ fn run_owned(
         receipt["launch"] = json!(attempt);
         receipt["generation"] = json!(epoch);
     }
-    c.execute(
+    let tx = c.unchecked_transaction()?;
+    if coordinator {
+        super::coordinator_launch::claim_wrapper(&tx, attempt, epoch)?;
+    }
+    tx.execute(
         &format!("INSERT INTO {table} VALUES (?1,?2,'spawn_started',?3)"),
         params![attempt, epoch, serde_json::to_string(&receipt)?],
     )?;
+    tx.commit()?;
     command.process_group(0);
     let _terminal = Terminal::new(&mut command);
     let mut child = match command.spawn() {

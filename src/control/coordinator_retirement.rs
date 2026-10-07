@@ -105,6 +105,54 @@ fn hash(s: &Scope) -> Result<String> {
     Ok(digest(&serde_json::to_vec(s)?))
 }
 
+/// Pre-workspace-receipt plans omitted the field, rather than writing null.
+/// Keep their exact struct field order: serializing via Value would sort keys
+/// and produce a digest that was never stored by the previous release.
+fn matches_saved_hash(s: &Scope, saved: &str) -> Result<bool> {
+    if hash(s)? == saved {
+        return Ok(true);
+    }
+    if s.plan.workspace_result.is_some() || s.plan.launch_result.is_some() {
+        return Ok(false);
+    }
+    struct LegacyPlan<'a>(&'a Plan);
+    impl Serialize for LegacyPlan<'_> {
+        fn serialize<S: serde::Serializer>(
+            &self,
+            serializer: S,
+        ) -> std::result::Result<S::Ok, S::Error> {
+            use serde::ser::SerializeStruct;
+            let p = self.0;
+            let mut out = serializer.serialize_struct("Plan", 15)?;
+            out.serialize_field("id", &p.id)?;
+            out.serialize_field("run", &p.run)?;
+            out.serialize_field("generation", &p.generation)?;
+            out.serialize_field("profile_name", &p.profile_name)?;
+            out.serialize_field("profile", &p.profile)?;
+            out.serialize_field("config", &p.config)?;
+            out.serialize_field("credential", &p.credential)?;
+            out.serialize_field("deadline", &p.deadline)?;
+            out.serialize_field("workspace_started", &p.workspace_started)?;
+            out.serialize_field("pane", &p.pane)?;
+            out.serialize_field("launch_started", &p.launch_started)?;
+            out.serialize_field("wrapper_started", &p.wrapper_started)?;
+            out.serialize_field("expected_session", &p.expected_session)?;
+            out.serialize_field("registration_started", &p.registration_started)?;
+            out.serialize_field("registration", &p.registration)?;
+            out.end()
+        }
+    }
+    #[derive(Serialize)]
+    struct LegacyScope<'a> {
+        plan: LegacyPlan<'a>,
+        process: &'a Option<(u64, String, String)>,
+    }
+    Ok(digest(&serde_json::to_vec(&LegacyScope {
+        plan: LegacyPlan(&s.plan),
+        process: &s.process,
+    })?) == saved)
+}
+
 fn retained_home(root: &Path, s: &Scope) -> Result<std::path::PathBuf> {
     let path = coordinator_launch::files(root, &s.plan).join("home");
     let expected = std::fs::canonicalize(root)?
@@ -237,7 +285,7 @@ pub(super) fn retire_with(
     let scope_hash = hash(&s)?;
     if let Some((_, saved, _, _)) = &prior {
         ensure!(
-            saved == &scope_hash,
+            matches_saved_hash(&s, saved)?,
             "coordinator retirement authority changed"
         );
     }

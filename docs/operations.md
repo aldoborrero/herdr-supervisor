@@ -199,6 +199,25 @@ are not adopted by the replacement, and its old wrapper cannot start. This
 recovery does not automatically close an unidentified old workspace. Do not
 reset `workspace_started` manually: an outstanding create could still arrive.
 
+Launch summaries also expose `launch_result` for `pane run`: `submitted` means
+the command returned successfully, `not_started` is a proven local spawn failure
+that permits retry, and `uncertain` retains the original bounded diagnostic.
+`submitted` does not mean the native wrapper or model started. Only a committed
+`not_started` result resets `launch_started`; timeout, response loss and failed
+result persistence continue through observation without another pane command.
+
+The coordinator wrapper claim and initial process receipt commit in one SQLite
+transaction before spawning the native process. Failure of either write or the
+commit leaves the wrapper unclaimed, allowing owner-authorized replacement.
+An interrupted spawn after that transaction still needs process evidence; the
+claim alone never proves native exit.
+
+External command deadlines cover stdin and both output pipes as well as child
+execution. Pipes inherited by descendants cannot keep the launcher lease held
+after the deadline. Output may be partial on timeout. Once the direct child has
+been reaped, retaining a pipe does not authorize signalling its former PID or
+process group; this is not automatic containment of detached descendants.
+
 ## Create a managed project and view
 
 `managed create --spec FILE` (or `--spec-json JSON`) records an immutable creation intent, submits an owner-authorized `create_run`, and publishes an already-bound Projects view. The popup's **N** form submits the same specification. See [getting started](getting-started.md) for fields and examples. Neither path starts a coordinator or workers.
@@ -785,6 +804,13 @@ herdr-supervisor control --state CONTROLLER cleanup-coordinator \
 The launcher lease serializes this decision with generation changes and launch effects. SQLite records the exact decision and audit before a non-force `workspace close`. Extra panes, worktree-linked workspaces, changed directories/identifiers, active native agents and unknown foreground state are refused. No filesystem contents, credentials, model transcripts or mailer sessions are deleted; the coordinator home and evidence remain available for later retention policy. The CLI is not exposed as an agent API/MCP action.
 
 `state: closing` and `workspace_closed: null` mean the outcome is unresolved. Repeat exactly the same decision to observe the original effect; it never issues a second close after that intent. Missing workspace, pane, terminal and agents together permit the final audit receipt. A resource recreated under the original IDs is retained. `state: closed` is a historical receipt, not a current health claim. Changing the decision or using a non-owner capability is refused even on replay. Unattended containment and automatic orphan termination remain separate work.
+
+Pending coordinator retirements written before workspace-result receipts remain
+replayable. The compatibility check verifies the exact previous plan projection
+and field order, and only when the new receipt fields are absent. It also accepts
+the subsequent format with `workspace_result: null`. Stored hashes and operator
+decisions are preserved; altered credentials, bindings or new evidence cannot
+use an old hash to bypass validation.
 
 ### Passive recovery after wrapper loss
 

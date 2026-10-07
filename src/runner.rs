@@ -183,50 +183,14 @@ impl Runner for RealRunner {
             source,
         })?;
 
-        // Readers and the writer run on their own threads so a full pipe in
-        // either direction cannot deadlock against the deadline loop below.
-        let stdin_thread = child
-            .stdin
-            .take()
-            .zip(cmd.stdin.clone())
-            .map(|(mut pipe, text)| {
-                std::thread::spawn(move || {
-                    let _ = pipe.write_all(text.as_bytes());
-                })
-            });
-        let stdout_thread = child.stdout.take().map(read_all);
-        let stderr_thread = child.stderr.take().map(read_all);
-
-        let deadline = Instant::now() + cmd.timeout;
-        let mut timed_out = false;
-        let status = loop {
-            if let Some(status) = child.try_wait()? {
-                break Some(status);
-            }
-            if Instant::now() >= deadline {
-                timed_out = true;
-                kill(&mut child, cmd.own_group);
-                break child.wait().ok();
-            }
-            std::thread::sleep(POLL);
-        };
-
-        if let Some(thread) = stdin_thread {
-            let _ = thread.join();
+        let result = collect_output(&mut child, cmd, Instant::now() + cmd.timeout);
+        if result.is_err() && matches!(child.try_wait(), Ok(None)) {
+            // A setup/I/O failure happened after spawn. Reap only our still-owned
+            // child; the error deliberately carries no SpawnFailure marker.
+            kill(&mut child, cmd.own_group);
+            let _ = child.wait();
         }
-        let stdout = stdout_thread.map(join_text).unwrap_or_default();
-        let stderr = stderr_thread.map(join_text).unwrap_or_default();
-
-        Ok(Output {
-            code: if timed_out {
-                None
-            } else {
-                status.and_then(|s| s.code())
-            },
-            stdout,
-            stderr,
-            timed_out,
-        })
+        result
     }
 
     fn socket_request(&self, socket: &Path, line: &str, timeout: Duration) -> Result<String> {
@@ -313,16 +277,127 @@ fn socket_round_trip(socket: &Path, line: &str, timeout: Duration) -> Result<Str
     Ok(reply)
 }
 
-fn read_all<R: Read + Send + 'static>(mut pipe: R) -> std::thread::JoinHandle<Vec<u8>> {
-    std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = pipe.read_to_end(&mut buf);
-        buf
+/// Pipe completion is part of the same deadline as child execution. There are
+/// no detached reader/writer threads waiting on inherited descriptors after it.
+fn collect_output(child: &mut std::process::Child, cmd: &Cmd, deadline: Instant) -> Result<Output> {
+    let mut input = child.stdin.take();
+    let mut output = child.stdout.take();
+    let mut error = child.stderr.take();
+    if let Some(pipe) = &input {
+        nonblocking(pipe)?;
+    }
+    if let Some(pipe) = &output {
+        nonblocking(pipe)?;
+    }
+    if let Some(pipe) = &error {
+        nonblocking(pipe)?;
+    }
+    let mut remaining = cmd.stdin.as_deref().unwrap_or("").as_bytes();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut status = None;
+    let timed_out = loop {
+        if status.is_none() {
+            status = child.try_wait()?;
+        }
+        if status.is_some() && input.is_none() && output.is_none() && error.is_none() {
+            break false;
+        }
+        if Instant::now() >= deadline {
+            // Never signal a numeric PID/group after reaping its leader: a
+            // descendant retaining a pipe does not restore ownership of that PID.
+            if status.is_none() {
+                kill(child, cmd.own_group);
+                let _ = child.wait();
+            }
+            break true;
+        }
+        let mut progress = drain(&mut output, &mut stdout);
+        progress |= drain(&mut error, &mut stderr);
+        if remaining.is_empty() {
+            progress |= input.take().is_some();
+        } else if let Some(pipe) = input.as_mut() {
+            match pipe.write(&remaining[..remaining.len().min(65536)]) {
+                Ok(0) => {
+                    input = None;
+                    progress = true;
+                }
+                Ok(n) => {
+                    remaining = &remaining[n..];
+                    progress = true;
+                }
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                    ) => {}
+                Err(_) => {
+                    input = None;
+                    progress = true;
+                }
+            }
+        }
+        if !progress {
+            std::thread::sleep(POLL.min(deadline.saturating_duration_since(Instant::now())));
+        }
+    };
+    Ok(Output {
+        code: if timed_out {
+            None
+        } else {
+            status.and_then(|s| s.code())
+        },
+        stdout: String::from_utf8_lossy(&stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&stderr).into_owned(),
+        timed_out,
     })
 }
 
-fn join_text(thread: std::thread::JoinHandle<Vec<u8>>) -> String {
-    String::from_utf8_lossy(&thread.join().unwrap_or_default()).into_owned()
+fn nonblocking(pipe: &impl std::os::fd::AsRawFd) -> std::io::Result<()> {
+    // SAFETY: the pipe owns this live descriptor throughout both fcntl calls.
+    unsafe {
+        let fd = pipe.as_raw_fd();
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        if flags < 0 || libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+fn drain<R: Read>(pipe: &mut Option<R>, bytes: &mut Vec<u8>) -> bool {
+    let Some(reader) = pipe.as_mut() else {
+        return false;
+    };
+    let mut progress = false;
+    let mut buffer = [0; 65536];
+    // Bound each batch so a continuously chatty stream cannot starve the other
+    // stream, stdin, process observation or the deadline check.
+    for _ in 0..16 {
+        match reader.read(&mut buffer) {
+            Ok(0) => {
+                *pipe = None;
+                return true;
+            }
+            Ok(n) => {
+                bytes.extend_from_slice(&buffer[..n]);
+                progress = true;
+            }
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                ) =>
+            {
+                break;
+            }
+            Err(_) => {
+                *pipe = None;
+                return true;
+            }
+        }
+    }
+    progress
 }
 
 fn kill(child: &mut std::process::Child, own_group: bool) {
@@ -482,6 +557,56 @@ mod tests {
             .run(&Cmd::new("cat", Duration::from_secs(5)).stdin("hello"))
             .unwrap();
         assert_eq!(out.stdout, "hello");
+    }
+
+    #[test]
+    fn deadline_covers_inherited_pipes_after_parent_timeout_or_exit() {
+        for script in ["sleep 2 & wait", "sleep 2 & exit 0"] {
+            let at = Instant::now();
+            let out = RealRunner
+                .run(&Cmd::new("sh", Duration::from_millis(50)).args(["-c", script]))
+                .unwrap();
+            assert!(
+                at.elapsed() < Duration::from_secs(1),
+                "inherited pipe exceeded deadline"
+            );
+            assert!(out.timed_out);
+            assert!(!out.success());
+            assert_eq!(out.code, None);
+        }
+    }
+
+    #[test]
+    fn deadline_covers_blocked_stdin_inherited_by_descendant() {
+        let at = Instant::now();
+        let out = RealRunner
+            .run(
+                &Cmd::new("sh", Duration::from_millis(50))
+                    .args(["-c", "exec 3<&0; sleep 2 <&3 >/dev/null 2>&1 & exit 0"])
+                    .stdin("x".repeat(2 * 1024 * 1024)),
+            )
+            .unwrap();
+        assert!(
+            at.elapsed() < Duration::from_secs(1),
+            "stdin writer exceeded deadline"
+        );
+        assert!(out.timed_out);
+        assert!(!out.success());
+    }
+
+    #[test]
+    fn nonblocking_pipes_preserve_large_utf8_duplex_output() {
+        let body = "mensaje 🦀\n".repeat(200_000);
+        let out = RealRunner
+            .run(
+                &Cmd::new("sh", Duration::from_secs(10))
+                    .args(["-c", "printf 'diagnostic\\n' >&2; cat"])
+                    .stdin(&body),
+            )
+            .unwrap();
+        assert!(out.success());
+        assert_eq!(out.stdout, body);
+        assert_eq!(out.stderr, "diagnostic\n");
     }
 
     #[test]
