@@ -2,6 +2,36 @@
 
 Reviewed 2026-10-07. This document separates implemented/tested behavior from the full delivery contract in [IMPLEMENTATION.md](../IMPLEMENTATION.md). Passing the current suite does not establish completion of the supervisor.
 
+## Adversarial review fixes, 2026-10-07
+
+Commit `a3b42f887b16b2cb5a85314327a13c343b995530` fixes the four findings
+reproduced against `0e2ab48`. The review's four failing reproductions and two
+passing controls remain in `/tmp/herdr-supervisor-adversarial.QARn0b/` as
+historical evidence; permanent regressions now live in
+`src/control/coordinator_launch_fault_tests.rs` and `src/runner.rs`.
+
+| Finding | Fix and evidence |
+| --- | --- |
+| Wrapper claim survives a failed process insert | Claim and spawn-intent receipt commit in one transaction before native spawn. `wrapper_claim_and_initial_process_receipt_roll_back_together` injects failure in the claim update, process insert and deferred-FK commit; each leaves no claimed wrapper or native child and permits fenced replacement after reopening SQLite. |
+| Pipe descendants outlive the command timeout | Nonblocking stdin/stdout/stderr share the command deadline. `deadline_covers_inherited_pipes_after_parent_timeout_or_exit` covers a live and already-exited parent; `deadline_covers_blocked_stdin_inherited_by_descendant` covers a full input pipe. `nonblocking_pipes_preserve_large_utf8_duplex_output` verifies complete output, while `pipe_timeout_releases_launch_fence_for_owner_retirement` proves the owner can retire the launch after timeout. Existing chatty-child and process-group tests also pass. |
+| New plan fields invalidate old retirement hashes | `legacy_retirement_hash_survives_new_optional_plan_fields` covers both absent and null workspace results, both prepared and closing decisions, restart/replay and unchanged stored hashes. Changed credentials or new workspace/launch evidence remain rejected. |
+| `pane run` discards its result | `pane_run_proven_spawn_failure_retries_after_restart` permits retry only after durable local no-spawn evidence. `pane_run_uncertain_outcomes_keep_diagnostics_and_never_retry` covers timeout, nonzero exit, unclassified runner errors, misleading server error codes, redaction and public pagination. `pane_run_failed_result_commit_keeps_the_intent_uncertain` verifies failed receipt writes never authorize another command. |
+
+Local validation passes **653 unit tests** (19.68 s), **22 CLI tests** (34.40 s),
+strict all-target Clippy (50.96 s) and `nix fmt`. Log:
+`.direnv/adversarial-fixes-suite.log`. The x86_64-linux Nix build passes its
+offline **653-unit** (16.68 s) and **22-CLI** (30.32 s) suites; `nix flake check`
+also passes, including formatting. Other systems were not built. Logs:
+`.direnv/adversarial-fixes-nix-build.log` and
+`.direnv/adversarial-fixes-nix-check.log`.
+
+Package: `/nix/store/8w73mfkcp8wsmj068q67pghywb87l94q-herdr-supervisor-0.1.0`.
+Result link: `.direnv/adversarial-fixes-result`. All new process/SQLite/pipe
+fixtures are isolated; no model sessions or host deployment were used.
+Command submission still does not establish model processing. A crash during
+native spawn after its committed intent still requires process evidence, and
+bounded pipe collection is not containment of detached descendants.
+
 ## Workspace creation recovery, 2026-10-07
 
 Commit `d71052b3dc70190e297f4c4a81a194febd2424e6` fixes discarded coordinator
